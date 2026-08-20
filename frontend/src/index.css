@@ -1,0 +1,254 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --bg: #FAFAFA;
+    --surface: #FFFFFF;
+    --ink: #0A0A0A;
+    --ink-2: #525252;
+    --primary: #002FA7;
+    --primary-hover: #00207A;
+    --red: #E63946;
+    --yellow: #FFC300;
+    --border-subtle: #E5E5E5;
+    --success: #10B981;
+}
+
+html,
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+code,
+.mono,
+.font-mono {
+    font-family: "JetBrains Mono", monospace;
+}
+
+.font-display {
+    font-family: "Cabinet Grotesk", sans-serif;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+}
+
+.brand-mark {
+    font-family: "Cabinet Grotesk", sans-serif;
+    font-weight: 900;
+    letter-spacing: -0.005em;
+    font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
+}
+
+.brand-mark .accent {
+    color: #002fa7;
+    margin-left: 0.06em;
+}
+
+.font-heading {
+    font-family: "Cabinet Grotesk", sans-serif;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+}
+
+.overline {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    font-weight: 700;
+}
+
+/* Hard offset shadow interactions */
+.hard-shadow {
+    transition:
+        transform 0.15s ease,
+        box-shadow 0.15s ease,
+        background-color 0.15s ease;
+}
+.hard-shadow:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 0 #0a0a0a;
+}
+.hard-shadow:active {
+    transform: translate(0, 0);
+    box-shadow: 0 0 0 0 #0a0a0a;
+}
+
+.hard-shadow-static {
+    box-shadow: 4px 4px 0 0 #0a0a0a;
+}
+.hard-shadow-static-lg {
+    box-shadow: 8px 8px 0 0 rgba(10, 10, 10, 0.15);
+}
+
+/* Input + card resets */
+.qp-input {
+    @apply w-full border-2 border-black bg-white px-3 py-2 rounded-none focus:outline-none focus:ring-0;
+    font-family: "IBM Plex Sans", sans-serif;
+}
+.qp-input:focus {
+    border-color: var(--primary);
+}
+
+.qp-label {
+    @apply overline block mb-2;
+}
+
+.qp-card {
+    @apply bg-white border-2 border-black rounded-none p-6;
+}
+
+/* Buttons */
+.qp-btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 border-2 border-black font-bold uppercase tracking-wider text-sm rounded-none select-none;
+    font-family: "IBM Plex Sans", sans-serif;
+    transition:
+        transform 0.15s ease,
+        box-shadow 0.15s ease,
+        background-color 0.15s ease;
+}
+.qp-btn-primary {
+    background: var(--primary);
+    color: white;
+}
+.qp-btn-primary:hover:not(:disabled) {
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 0 #0a0a0a;
+}
+.qp-btn-primary:active:not(:disabled) {
+    transform: translate(0, 0);
+    box-shadow: none;
+}
+.qp-btn-secondary {
+    background: white;
+    color: var(--ink);
+}
+.qp-btn-secondary:hover:not(:disabled) {
+    background: #f2f2f2;
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 0 #0a0a0a;
+}
+.qp-btn-ghost {
+    @apply px-3 py-2 font-medium text-sm;
+    border: none;
+    background: transparent;
+    color: var(--ink);
+    text-transform: none;
+    letter-spacing: normal;
+}
+.qp-btn-ghost:hover {
+    background: #f2f2f2;
+}
+.qp-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Badge */
+.qp-badge {
+    @apply inline-flex items-center gap-1 border border-black px-2 py-0.5 text-xs uppercase bg-white;
+    font-family: "JetBrains Mono", monospace;
+    letter-spacing: 0.05em;
+}
+.qp-badge-blue {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+}
+.qp-badge-yellow {
+    background: var(--yellow);
+    color: var(--ink);
+    border-color: var(--ink);
+}
+.qp-badge-red {
+    background: var(--red);
+    color: white;
+    border-color: var(--ink);
+}
+.qp-badge-success {
+    background: var(--success);
+    color: white;
+    border-color: var(--ink);
+}
+
+/* Upload zone */
+.qp-drop {
+    @apply border-2 border-dashed border-black bg-neutral-50 p-12 text-center cursor-pointer flex flex-col items-center justify-center transition-colors;
+}
+.qp-drop:hover {
+    background: #f2f2f2;
+}
+.qp-drop.active {
+    background: #eef2ff;
+    border-color: var(--primary);
+}
+
+/* Table-like rows */
+.qp-row-border {
+    @apply border-b border-black;
+}
+
+/* Selection */
+::selection {
+    background: var(--yellow);
+    color: var(--ink);
+}
+
+/* Shadcn variables (keep light for components we use) */
+@layer base {
+    :root {
+        --background: 0 0% 98%;
+        --foreground: 0 0% 4%;
+        --card: 0 0% 100%;
+        --card-foreground: 0 0% 4%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 0 0% 4%;
+        --primary: 223 100% 33%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 0 0% 96%;
+        --secondary-foreground: 0 0% 9%;
+        --muted: 0 0% 96%;
+        --muted-foreground: 0 0% 32%;
+        --accent: 0 0% 96%;
+        --accent-foreground: 0 0% 4%;
+        --destructive: 356 78% 56%;
+        --destructive-foreground: 0 0% 98%;
+        --border: 0 0% 4%;
+        --input: 0 0% 4%;
+        --ring: 223 100% 33%;
+        --radius: 0px;
+    }
+}
+
+@layer base {
+    body {
+        @apply bg-background text-foreground;
+    }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+::-webkit-scrollbar-track {
+    background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+    background: var(--ink);
+}
+
+/* Print (for printing the paper preview directly) */
+@media print {
+    .no-print {
+        display: none !important;
+    }
+    body {
+        background: white;
+    }
+}
