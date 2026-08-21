@@ -6,6 +6,7 @@ from deps import api_router, app, client, db, logger, utcnow_iso  # noqa: I001
 import asyncio
 import os
 import uuid
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
@@ -54,6 +55,7 @@ from workers import (
     generate_paper_background,
     generate_solution_background,
     load_paper_feedback_hints,
+    reconcile_solution_shell,
 )
 import student_routes  # noqa: F401  registers /api/student/* endpoints
 import competitive_routes  # noqa: F401  registers /api/competitive-exams/* endpoints
@@ -64,6 +66,25 @@ import competitive_routes  # noqa: F401  registers /api/competitive-exams/* endp
 # parked on the network rather than burning CPU — so this can safely be far
 # larger than Python's CPU-oriented default of min(32, cpu_count + 4).
 THREAD_POOL_MAX_WORKERS = int(os.environ.get("THREAD_POOL_MAX_WORKERS", "64"))
+
+# asyncio keeps only a weak reference to a running task, so a bare
+# create_task() can be collected mid-flight — which looks exactly like the
+# model silently failing. Hold a strong reference until the task finishes.
+_BG_TASKS: set = set()
+
+
+def _spawn(coro):
+    """Fire a background coroutine and keep it alive until it completes."""
+    task = asyncio.create_task(coro)
+    _BG_TASKS.add(task)
+    task.add_done_callback(_BG_TASKS.discard)
+    return task
+
+
+# How long a solution job may claim to be 'generating' before we stop
+# believing it. Background tasks are in-process and do not survive a restart,
+# so past this window the job is assumed dead and the paper is unlocked.
+GENERATING_LOCK_SECONDS = 15 * 60
 
 # How many chunks of a book we persist. Everything downstream (topic
 # extraction, paper generation, solutions) reads from this stored subset, so
@@ -208,6 +229,11 @@ class SolutionPatch(BaseModel):
     sections: List[SolutionSectionUpdate]
 
 
+class MissingSolutionRequest(BaseModel):
+    # None / omitted = every answer that is currently blank.
+    question_ids: Optional[List[str]] = None
+
+
 # =========================================================
 # Helpers
 # =========================================================
@@ -311,16 +337,27 @@ async def startup():
             logger.warning(
                 f"Recovered {paper_res.modified_count} orphaned 'pending' paper(s) at startup"
             )
+        # The worker only ever writes "generating" — matching "pending" alone
+        # meant an interrupted solution job stayed stuck on "generating" forever
+        # and the frontend polled it indefinitely.
+        interrupted = {"solution.status": {"$in": ["pending", "generating"]}}
+        # Anything with answers already on the page is partial, not failed: the
+        # user wants the "fill in the missing ones" affordance, not a red error.
+        sol_partial = await db.papers.update_many(
+            {**interrupted, "solution.completed": {"$gt": 0}},
+            {"$set": {"solution.status": "partial"}},
+        )
         sol_res = await db.papers.update_many(
-            {"solution.status": "pending"},
+            interrupted,
             {"$set": {
                 "solution.status": "failed",
                 "solution.error": orphan_msg,
             }},
         )
-        if sol_res.modified_count:
+        if sol_partial.modified_count or sol_res.modified_count:
             logger.warning(
-                f"Recovered {sol_res.modified_count} orphaned 'pending' solution(s) at startup"
+                f"Recovered orphaned solution(s) at startup: "
+                f"{sol_partial.modified_count} partial, {sol_res.modified_count} failed"
             )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Orphan recovery failed: {e}")
@@ -1128,6 +1165,7 @@ async def generate_solution(paper_id: str, user: dict = Depends(get_current_user
 
     pending_solution = {
         "generated_at": utcnow_iso(),
+        "started_at": utcnow_iso(),
         "is_stale": False,
         "status": "generating",
         "completed": 0,
@@ -1138,12 +1176,100 @@ async def generate_solution(paper_id: str, user: dict = Depends(get_current_user
         {"id": paper_id}, {"$set": {"solution": pending_solution}}
     )
 
-    import asyncio as _asyncio
-
-    _asyncio.create_task(
-        generate_solution_background(paper_id, user["id"])
-    )
+    _spawn(generate_solution_background(paper_id, user["id"]))
     return pending_solution
+
+
+def _generation_is_live(sol: dict) -> bool:
+    """True if a solution job says it is running and started recently enough to
+    be believed. Past GENERATING_LOCK_SECONDS the process is assumed gone."""
+    if sol.get("status") != "generating":
+        return False
+    stamp = sol.get("started_at") or sol.get("generated_at")
+    try:
+        started = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - started).total_seconds()
+    return age < GENERATING_LOCK_SECONDS
+
+
+@api_router.post("/papers/{paper_id}/solution/generate-missing")
+async def generate_missing_solution(
+    paper_id: str,
+    req: Optional[MissingSolutionRequest] = None,
+    user: dict = Depends(get_current_user),
+):
+    """Fill in only the answers that came back blank.
+
+    A batch that fails during generation leaves its questions with an empty
+    answer. The full-regenerate endpoint throws the whole answer key away and
+    re-runs every batch to recover those; this one re-runs just the gaps and
+    leaves every existing answer — including manual edits — untouched.
+    """
+    p = await db.papers.find_one(
+        {"id": paper_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if p["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    existing = p.get("solution")
+    if not existing or not existing.get("sections"):
+        raise HTTPException(
+            status_code=400,
+            detail="No solution yet. Generate the full solution first.",
+        )
+    if _generation_is_live(existing):
+        raise HTTPException(
+            status_code=409, detail="Generation already in progress."
+        )
+
+    # Recomputes total/completed and finds the blanks. Works regardless of which
+    # of the stored solution shapes this paper happens to have.
+    shell, missing = reconcile_solution_shell(p, existing)
+
+    requested = req.question_ids if req else None
+    if requested is None:
+        targets = missing
+    else:
+        paper_qids = {
+            q.get("id")
+            for s in p.get("sections", [])
+            for q in s.get("questions", [])
+        }
+        if not any(qid in paper_qids for qid in requested):
+            raise HTTPException(
+                status_code=400, detail="No such question on this paper"
+            )
+        wanted = set(requested)
+        targets = [qid for qid in missing if qid in wanted]
+
+    shell.pop("error", None)
+    if targets:
+        shell["status"] = "generating"
+        shell["started_at"] = utcnow_iso()
+    else:
+        shell["status"] = (
+            "ready"
+            if shell["total"] and shell["completed"] == shell["total"]
+            else "partial"
+        )
+    await db.papers.update_one(
+        {"id": paper_id}, {"$set": {"solution": shell}}
+    )
+
+    if targets:
+        _spawn(
+            generate_solution_background(paper_id, user["id"], only_qids=targets)
+        )
+        logger.info(
+            f"Queued {len(targets)} missing answer(s) for paper {paper_id}"
+        )
+    return {**shell, "queued": len(targets)}
 
 
 @api_router.post("/papers/solutions/bulk-generate")
@@ -1246,12 +1372,27 @@ async def update_solution(
             )
         new_sections.append({"title": s.title, "answers": new_answers})
 
+    # Carry the generation bookkeeping forward. Rebuilding this dict from
+    # scratch used to drop status/total/completed, so the "N answers missing"
+    # banner vanished the moment a teacher edited anything.
     updated_solution = {
+        **{k: v for k, v in current.items() if k != "sections"},
         "generated_at": current.get("generated_at"),
         "edited_at": utcnow_iso(),
         "is_stale": False,
         "sections": new_sections,
     }
+    updated_solution["total"] = sum(len(s["answers"]) for s in new_sections)
+    updated_solution["completed"] = sum(
+        1 for s in new_sections for a in s["answers"] if a.get("answer")
+    )
+    if updated_solution.get("status") != "generating":
+        updated_solution["status"] = (
+            "ready"
+            if updated_solution["total"]
+            and updated_solution["completed"] == updated_solution["total"]
+            else "partial"
+        )
     await db.papers.update_one(
         {"id": paper_id}, {"$set": {"solution": updated_solution}}
     )

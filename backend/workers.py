@@ -253,28 +253,34 @@ async def generate_paper_background(
 # ---------------------------------------------------------------------------
 # Solution generation (synchronous build + async batched background)
 # ---------------------------------------------------------------------------
-async def build_solution_for_paper(paper: dict, user_id: str) -> dict:
-    """Generate a solution for a single paper. Returns the solution dict.
-    Raises HTTPException on failure. Does not persist.
-    Questions are processed in batches of 5 so long/hard papers don't blow
-    past LLM token limits or trigger gateway timeouts."""
-    tag("solution", paper.get("id", ""))
-    BATCH_SIZE = 5
+# Questions go to the LLM in batches so a long paper doesn't blow past token
+# limits or trigger a gateway timeout. The sweep pass that retries whatever
+# came back blank uses a smaller batch on purpose: the dominant failure mode is
+# the model truncating its JSON mid-answer, and asking for less output is the
+# direct counter-measure.
+BATCH_SIZE = 5
+SWEEP_BATCH_SIZE = 2
 
-    questions_payload = []
+
+def _questions_payload(paper: dict) -> list[dict]:
+    """Flatten a paper's sections into the shape solution_prompt() expects."""
+    out: list[dict] = []
     for s in paper.get("sections", []):
         for q in s.get("questions", []):
             if not q.get("question"):
                 continue
-            questions_payload.append({
+            out.append({
                 "id": q["id"],
                 "question": q["question"],
                 "type": q.get("type", "concept"),
                 "marks": q.get("marks", 2),
             })
-    if not questions_payload:
-        raise HTTPException(status_code=400, detail="Paper has no questions to solve")
+    return out
 
+
+async def _solution_context(paper: dict, user_id: str) -> tuple[str, str]:
+    """(context_excerpt, feedback_hints) — the two prompt inputs that are the
+    same for every batch, so they get loaded once per job."""
     tb_ids = paper.get("textbook_ids") or (
         [paper["textbook_id"]] if paper.get("textbook_id") else []
     )
@@ -291,15 +297,86 @@ async def build_solution_for_paper(paper: dict, user_id: str) -> dict:
     feedback_hints = await load_solution_feedback(
         user_id, paper.get("subject", ""), paper.get("class_name", "")
     )
+    return context_excerpt, feedback_hints
 
-    answers: dict[str, str] = {}
-    last_err: Exception | None = None
-    n_batches = (len(questions_payload) + BATCH_SIZE - 1) // BATCH_SIZE
+
+def reconcile_solution_shell(
+    paper: dict, existing: Optional[dict]
+) -> tuple[dict, list[str]]:
+    """Return (solution_shell, missing_question_ids).
+
+    Mirrors paper["sections"], carrying any existing answer across by
+    question_id. A question added to the paper after the solution was generated
+    gains a blank entry; an answer whose question no longer exists is dropped.
+
+    Three shapes of stored solution have to survive this: the full shell written
+    by POST /solution/generate, the three-key dict returned by
+    build_solution_for_paper(), and the four-key dict left behind by older
+    PATCH /solution writes. That is why "missing" is derived from blank answers
+    rather than from the completed/total counters — those are absent on two of
+    the three.
+    """
+    prev: dict[str, str] = {}
+    for sec in (existing or {}).get("sections") or []:
+        for a in sec.get("answers") or []:
+            qid = a.get("question_id")
+            if qid:
+                prev[qid] = a.get("answer") or ""
+
+    sections: list = []
+    missing: list[str] = []
+    total = 0
+    completed = 0
+    for s in paper.get("sections", []):
+        answers = []
+        for q in s.get("questions", []):
+            qid = q.get("id")
+            if not qid:
+                continue
+            text = prev.get(qid, "")
+            answers.append({"question_id": qid, "answer": text})
+            total += 1
+            if text:
+                completed += 1
+            elif q.get("question"):
+                # Only worth retrying where there is a question to answer.
+                missing.append(qid)
+        sections.append({"title": s.get("title", "Section"), "answers": answers})
+
+    shell = dict(existing or {})
+    shell["sections"] = sections
+    shell["total"] = total
+    shell["completed"] = completed
+    shell.setdefault("generated_at", utcnow_iso())
+    shell.setdefault("is_stale", False)
+    return shell, missing
+
+
+async def _run_solution_batches(
+    subject: str,
+    klass: str,
+    payload: list[dict],
+    context_excerpt: str,
+    feedback_hints: str,
+    batch_size: int,
+    answers: dict[str, str],
+    label: str = "batch",
+    on_batch=None,
+) -> Optional[Exception]:
+    """Answer `payload` in batches, writing results into `answers` in place.
+
+    Returns the last exception seen, or None if every batch succeeded. A batch
+    that fails both attempts is logged and skipped — its questions simply stay
+    blank, which is what the sweep pass and the partial-retry endpoint exist to
+    clean up.
+    """
+    last_err: Optional[Exception] = None
+    n_batches = (len(payload) + batch_size - 1) // batch_size
     for bi in range(n_batches):
-        batch = questions_payload[bi * BATCH_SIZE : (bi + 1) * BATCH_SIZE]
+        batch = payload[bi * batch_size : (bi + 1) * batch_size]
         prompt = solution_prompt(
-            subject=paper.get("subject", ""),
-            klass=paper.get("class_name", ""),
+            subject=subject,
+            klass=klass,
             context_excerpt=context_excerpt,
             questions_payload=batch,
             feedback_hints=feedback_hints,
@@ -315,41 +392,90 @@ async def build_solution_for_paper(paper: dict, user_id: str) -> dict:
                     text = (a.get("answer") or "").strip()
                     if qid and text:
                         answers[qid] = text
-                last_err = None
                 break
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 logger.warning(
-                    f"Solution batch {bi + 1}/{n_batches} attempt {attempt + 1} failed: {e}"
+                    f"Solution {label} {bi + 1}/{n_batches} attempt {attempt + 1} failed: {e}"
                 )
+        if on_batch is not None:
+            await on_batch()
+    return last_err
+
+
+def _blank_of(payload: list[dict], answers: dict[str, str]) -> list[dict]:
+    """The subset of `payload` that still has no answer."""
+    return [q for q in payload if not answers.get(q["id"])]
+
+
+async def build_solution_for_paper(paper: dict, user_id: str) -> dict:
+    """Generate a solution for a single paper. Returns the solution dict.
+    Raises HTTPException on failure. Does not persist."""
+    tag("solution", paper.get("id", ""))
+
+    payload = _questions_payload(paper)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Paper has no questions to solve")
+
+    context_excerpt, feedback_hints = await _solution_context(paper, user_id)
+    subject = paper.get("subject", "")
+    klass = paper.get("class_name", "")
+
+    answers: dict[str, str] = {}
+    last_err = await _run_solution_batches(
+        subject, klass, payload, context_excerpt, feedback_hints,
+        BATCH_SIZE, answers,
+    )
+
+    blank = _blank_of(payload, answers)
+    if blank:
+        last_err = await _run_solution_batches(
+            subject, klass, blank, context_excerpt, feedback_hints,
+            SWEEP_BATCH_SIZE, answers, label="sweep",
+        ) or last_err
 
     if not answers and last_err:
         raise HTTPException(
             status_code=502, detail=f"Solution failed: {last_err}"
         )
 
-    solution_sections = []
-    for s in paper.get("sections", []):
-        ans_list = []
-        for q in s.get("questions", []):
-            ans_list.append(
-                {"question_id": q["id"], "answer": answers.get(q["id"], "")}
-            )
-        solution_sections.append(
-            {"title": s.get("title", "Section"), "answers": ans_list}
-        )
-    return {
-        "generated_at": utcnow_iso(),
-        "is_stale": False,
-        "sections": solution_sections,
-    }
+    # reconcile_solution_shell only reads a flat question_id -> answer map out of
+    # `existing`, so the section title here is irrelevant — it rebuilds the
+    # section structure from the paper.
+    shell, _missing = reconcile_solution_shell(
+        paper,
+        {
+            "generated_at": utcnow_iso(),
+            "is_stale": False,
+            "sections": [{
+                "title": "",
+                "answers": [
+                    {"question_id": qid, "answer": text}
+                    for qid, text in answers.items()
+                ],
+            }],
+        },
+    )
+    shell["status"] = (
+        "ready" if shell["total"] and shell["completed"] == shell["total"] else "partial"
+    )
+    shell["finished_at"] = utcnow_iso()
+    return shell
 
 
-async def generate_solution_background(paper_id: str, user_id: str) -> None:
+async def generate_solution_background(
+    paper_id: str, user_id: str, only_qids: Optional[list[str]] = None
+) -> None:
     """Run batched solution generation, updating the paper doc as each batch
-    completes so the frontend can show progress."""
+    completes so the frontend can show progress.
+
+    `only_qids` restricts the job to a subset of questions — the partial-retry
+    path behind POST /solution/generate-missing. In that mode an answer that
+    already has content is never overwritten, so retrying one failed question
+    cannot clobber the other answers or a teacher's manual edit.
+    """
     tag("solution", paper_id)
-    BATCH_SIZE = 5
+    fill_only = only_qids is not None
     try:
         p = await db.papers.find_one(
             {"id": paper_id, "is_deleted": False}, {"_id": 0}
@@ -357,64 +483,17 @@ async def generate_solution_background(paper_id: str, user_id: str) -> None:
         if not p:
             return
 
-        questions_payload: list = []
-        for s in p.get("sections", []):
-            for q in s.get("questions", []):
-                if not q.get("question"):
-                    continue
-                questions_payload.append({
-                    "id": q["id"],
-                    "question": q["question"],
-                    "type": q.get("type", "concept"),
-                    "marks": q.get("marks", 2),
-                })
-
-        tb_ids = p.get("textbook_ids") or (
-            [p["textbook_id"]] if p.get("textbook_id") else []
-        )
-        merged_chunks: list = []
-        max_per = max(2, 5 // max(1, len(tb_ids)))
-        for tid in tb_ids:
-            tb = await db.textbooks.find_one(
-                {"id": tid, "is_deleted": False}, {"_id": 0}
-            )
-            if tb:
-                merged_chunks.extend((tb.get("chunks") or [])[:max_per])
-        context_excerpt = "\n\n".join(merged_chunks)[:8000]
-
-        feedback_hints = await load_solution_feedback(
-            user_id, p.get("subject", ""), p.get("class_name", "")
-        )
+        payload = _questions_payload(p)
+        if fill_only:
+            wanted = set(only_qids or [])
+            payload = [q for q in payload if q["id"] in wanted]
 
         answers: dict[str, str] = {}
-        n_batches = (len(questions_payload) + BATCH_SIZE - 1) // BATCH_SIZE
-        for bi in range(n_batches):
-            batch = questions_payload[bi * BATCH_SIZE : (bi + 1) * BATCH_SIZE]
-            prompt = solution_prompt(
-                subject=p.get("subject", ""),
-                klass=p.get("class_name", ""),
-                context_excerpt=context_excerpt,
-                questions_payload=batch,
-                feedback_hints=feedback_hints,
-            )
-            for attempt in range(2):
-                try:
-                    raw = await chat_complete(
-                        system_message=SOLUTION_SYSTEM, user_text=prompt
-                    )
-                    data = parse_json_response(raw)
-                    for a in data.get("answers") or []:
-                        qid = a.get("question_id")
-                        text = (a.get("answer") or "").strip()
-                        if qid and text:
-                            answers[qid] = text
-                    break
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        f"Solution batch {bi + 1}/{n_batches} attempt {attempt + 1} failed: {e}"
-                    )
 
-            # After each batch, persist progress so the UI can show it
+        async def _persist() -> None:
+            """Merge what we have so far into the stored doc. Re-read every time
+            rather than holding the document — a teacher may be editing other
+            answers while this runs."""
             current = await db.papers.find_one(
                 {"id": paper_id}, {"_id": 0, "solution": 1}
             )
@@ -422,8 +501,11 @@ async def generate_solution_background(paper_id: str, user_id: str) -> None:
             for sec in sol.get("sections", []):
                 for ans in sec.get("answers", []):
                     qid = ans.get("question_id")
-                    if qid in answers:
-                        ans["answer"] = answers[qid]
+                    if qid not in answers:
+                        continue
+                    if fill_only and ans.get("answer"):
+                        continue  # never overwrite on a targeted retry
+                    ans["answer"] = answers[qid]
             sol["completed"] = sum(
                 1
                 for sec in sol.get("sections", [])
@@ -435,19 +517,44 @@ async def generate_solution_background(paper_id: str, user_id: str) -> None:
                 {"id": paper_id}, {"$set": {"solution": sol}}
             )
 
+        if payload:
+            context_excerpt, feedback_hints = await _solution_context(p, user_id)
+            subject = p.get("subject", "")
+            klass = p.get("class_name", "")
+
+            await _run_solution_batches(
+                subject, klass, payload, context_excerpt, feedback_hints,
+                BATCH_SIZE, answers, on_batch=_persist,
+            )
+
+            # One automatic sweep at a smaller batch size before giving up. Most
+            # truncation failures clear here, so the user never has to click.
+            blank = _blank_of(payload, answers)
+            if blank:
+                logger.info(
+                    f"Solution sweep for {paper_id}: retrying "
+                    f"{len(blank)} unanswered question(s)"
+                )
+                await _run_solution_batches(
+                    subject, klass, blank, context_excerpt, feedback_hints,
+                    SWEEP_BATCH_SIZE, answers, label="sweep", on_batch=_persist,
+                )
+
         # Mark complete (or partial)
         current = await db.papers.find_one(
             {"id": paper_id}, {"_id": 0, "solution": 1}
         )
         sol = (current or {}).get("solution") or {}
         completed = sol.get("completed", 0)
-        sol["status"] = "ready" if completed == sol.get("total", 0) else "partial"
+        total = sol.get("total", 0)
+        sol["status"] = "ready" if total and completed == total else "partial"
         sol["finished_at"] = utcnow_iso()
+        sol.pop("error", None)
         await db.papers.update_one(
             {"id": paper_id}, {"$set": {"solution": sol}}
         )
         logger.info(
-            f"Solution background job finished for {paper_id}: {completed}/{sol.get('total', 0)}"
+            f"Solution background job finished for {paper_id}: {completed}/{total}"
         )
     except Exception as e:  # noqa: BLE001
         logger.exception(f"Solution background job crashed: {e}")

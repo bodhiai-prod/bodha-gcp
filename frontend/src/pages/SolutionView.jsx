@@ -28,6 +28,8 @@ export default function SolutionView() {
   const [draft, setDraft] = useState(null); // { sections: [ {title, answers: [{question_id, answer}]} ] }
   const [saving, setSaving] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  // null | "all" | a question_id — which retry button is mid-request.
+  const [filling, setFilling] = useState(null);
 
   const load = async () => {
     const { data } = await api.get(`/papers/${id}`);
@@ -68,10 +70,52 @@ export default function SolutionView() {
     }
   };
 
+  // Fill in only the blank answers. Unlike regenerate() this cannot destroy
+  // anything — the backend refuses to overwrite an answer that already has
+  // content — so there is no confirm dialog.
+  const generateMissing = async (qids) => {
+    setFilling(qids ? qids[0] : "all");
+    try {
+      const { data } = await api.post(`/papers/${id}/solution/generate-missing`, {
+        question_ids: qids || null,
+      });
+      if (data.queued === 0) {
+        toast.info("Nothing missing — every question already has an answer");
+      } else {
+        toast.success(
+          `Generating ${data.queued} missing answer${data.queued === 1 ? "" : "s"}...`
+        );
+      }
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed");
+    } finally {
+      setFilling(null);
+    }
+  };
+
   const enterEdit = () => {
     const sol = paper?.solution;
     if (!sol) return;
-    setDraft(JSON.parse(JSON.stringify(sol)));
+    // Mirror the paper rather than copying the stored solution verbatim, so a
+    // question added after generation still gets a textarea instead of being
+    // stuck on "(no answer)". The backend reconciles the same way.
+    const prev = {};
+    (sol.sections || []).forEach((s) =>
+      (s.answers || []).forEach((a) => {
+        prev[a.question_id] = a.answer || "";
+      })
+    );
+    setDraft({
+      ...sol,
+      sections: (paper.sections || []).map((s) => ({
+        title: s.title || "Section",
+        answers: (s.questions || []).map((q) => ({
+          question_id: q.id,
+          answer: prev[q.id] || "",
+        })),
+      })),
+    });
     setEditing(true);
   };
 
@@ -163,6 +207,22 @@ export default function SolutionView() {
       answerByQid[a.question_id] = a.answer;
     })
   );
+
+  // Derived from blank answers rather than solution.completed/total: those
+  // counters are absent on solutions written before this existed, and on any
+  // solution created by bulk-generate.
+  const savedAnswers = {};
+  (paper.solution?.sections || []).forEach((s) =>
+    (s.answers || []).forEach((a) => {
+      savedAnswers[a.question_id] = a.answer;
+    })
+  );
+  const allQuestions = (paper.sections || []).flatMap((s) => s.questions || []);
+  const missingQids = allQuestions
+    .filter((q) => q.question && !savedAnswers[q.id])
+    .map((q) => q.id);
+  const isGenerating = paper.solution?.status === "generating";
+  const busy = regenerating || filling !== null || isGenerating;
 
   let counter = 1;
 
@@ -308,7 +368,7 @@ export default function SolutionView() {
               </div>
             )}
 
-            {solution.status === "partial" && (
+            {missingQids.length > 0 && !isGenerating && (
               <div
                 className="mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4 flex items-start gap-3"
                 data-testid="partial-banner"
@@ -321,21 +381,35 @@ export default function SolutionView() {
                 />
                 <div className="flex-1">
                   <div className="font-bold uppercase tracking-wider text-sm">
-                    Partial solution
+                    {missingQids.length} answer
+                    {missingQids.length === 1 ? "" : "s"} missing
                   </div>
                   <div className="text-sm text-neutral-700 mt-1 font-mono">
-                    {solution.completed} of {solution.total} answered. Click
-                    Regenerate to retry the missing ones.
+                    {allQuestions.length - missingQids.length} of{" "}
+                    {allQuestions.length} answered. Fill in the gaps without
+                    touching the answers you already have.
                   </div>
                 </div>
-                <button
-                  onClick={regenerate}
-                  disabled={regenerating}
-                  className="qp-btn qp-btn-primary text-xs"
-                  data-testid="partial-regenerate-button"
-                >
-                  Regenerate
-                </button>
+                <div className="flex flex-col gap-2 shrink-0">
+                  <button
+                    onClick={() => generateMissing(null)}
+                    disabled={busy}
+                    className="qp-btn qp-btn-primary text-xs"
+                    data-testid="generate-missing-button"
+                  >
+                    {filling === "all"
+                      ? "Starting..."
+                      : `Generate ${missingQids.length} missing`}
+                  </button>
+                  <button
+                    onClick={regenerate}
+                    disabled={busy}
+                    className="qp-btn qp-btn-secondary text-xs"
+                    data-testid="partial-regenerate-button"
+                  >
+                    Regenerate all
+                  </button>
+                </div>
               </div>
             )}
 
@@ -448,9 +522,23 @@ export default function SolutionView() {
                               {answerByQid[q.id] ? (
                                 <MathText text={answerByQid[q.id]} />
                               ) : (
-                                <span className="text-neutral-400 italic">
-                                  (no answer)
-                                </span>
+                                <div className="flex items-center justify-between gap-3 flex-wrap">
+                                  <span className="text-neutral-400 italic">
+                                    {isGenerating ? "(generating...)" : "(no answer)"}
+                                  </span>
+                                  {paper.solution && (
+                                    <button
+                                      onClick={() => generateMissing([q.id])}
+                                      disabled={busy}
+                                      className="qp-btn qp-btn-secondary text-xs no-print"
+                                      data-testid={`retry-answer-${q.id}`}
+                                    >
+                                      {filling === q.id
+                                        ? "Starting..."
+                                        : "Generate this answer"}
+                                    </button>
+                                  )}
+                                </div>
                               )}
                             </div>
                           )}
