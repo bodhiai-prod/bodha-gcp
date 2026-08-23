@@ -35,15 +35,24 @@ def _require_student(user: dict) -> None:
         raise HTTPException(status_code=403, detail="Student access required")
 
 
+_SECRET_FIELDS = (
+    "correct_option",
+    # Both describe the figure in words, and both name what the student is meant
+    # to find — diagram_spec does so explicitly in its `unknowns` list.
+    "diagram_description",
+    "diagram_spec",
+)
+
+
 def _strip_secrets(paper: dict) -> dict:
-    """Hide correct_option + diagram_description (sometimes leaks the answer)
-    while a mock test is in progress."""
+    """Hide the answer key and the figure's written spec (which names the
+    unknowns) while a mock test is in progress."""
     out = {**paper}
     sections = []
     for s in paper.get("sections") or []:
         qs = []
         for q in s.get("questions") or []:
-            sq = {k: v for k, v in q.items() if k not in ("correct_option", "diagram_description")}
+            sq = {k: v for k, v in q.items() if k not in _SECRET_FIELDS}
             qs.append(sq)
         sections.append({**s, "questions": qs})
     out["sections"] = sections
@@ -153,6 +162,9 @@ async def create_mock_test(req: MockTestCreate, user: dict = Depends(get_current
         "format_distribution": {"mcq": 100},
         "custom_instructions": "",
         "section_blueprint": "",
+        # Explicit here rather than derived from total_marks: the student asked
+        # for exactly this many questions.
+        "target_question_count": req.question_count,
         "instructions": "",
         "sections": [],
         "diagrams_pending": 0,

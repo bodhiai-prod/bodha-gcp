@@ -43,6 +43,7 @@ from pdf_utils import (
     shutdown_pdf_pool,
 )
 from prompts import (
+    derive_target_question_count,
     qpaper_extract_prompt,
     topic_extract_prompt,
     QPAPER_EXTRACT_SYSTEM,
@@ -51,11 +52,15 @@ from storage import APP_NAME, get_object, init_storage, put_object
 from token_usage import install as install_token_usage, tag
 from workers import (
     build_solution_for_paper,
+    count_questions,
     generate_diagrams_background,
+    generate_missing_questions_background,
     generate_paper_background,
     generate_solution_background,
     load_paper_feedback_hints,
+    paper_target_count,
     reconcile_solution_shell,
+    TOPUP_MAX,
 )
 import student_routes  # noqa: F401  registers /api/student/* endpoints
 import competitive_routes  # noqa: F401  registers /api/competitive-exams/* endpoints
@@ -232,6 +237,13 @@ class SolutionPatch(BaseModel):
 class MissingSolutionRequest(BaseModel):
     # None / omitted = every answer that is currently blank.
     question_ids: Optional[List[str]] = None
+
+
+class MissingQuestionsRequest(BaseModel):
+    # None / omitted = the paper's shortfall against its target count. Given
+    # explicitly when the teacher overrides it in the partial banner, which they
+    # need to do for blueprint papers whose real target lives in free text.
+    count: Optional[int] = None
 
 
 # =========================================================
@@ -708,6 +720,33 @@ async def _load_feedback_hints(user_id: str, subject: str, class_name: str) -> s
     return await load_paper_feedback_hints(user_id, subject, class_name)
 
 
+async def _paper_generation_inputs(paper: dict) -> tuple:
+    """(context_excerpt, feedback_hints) for an existing paper.
+
+    The two prompt inputs that have to be rebuilt from storage whenever a
+    paper is generated again - a full regenerate or a top-up. Chunks are
+    interleaved across the paper's textbooks so the context spans the whole
+    book list rather than exhausting the budget on the first one.
+    """
+    tb_ids = paper.get("textbook_ids") or (
+        [paper["textbook_id"]] if paper.get("textbook_id") else []
+    )
+    merged_chunks: list = []
+    max_per = max(2, 8 // max(1, len(tb_ids)))
+    for tid in tb_ids:
+        tb = await db.textbooks.find_one(
+            {"id": tid, "is_deleted": False}, {"_id": 0}
+        )
+        if tb:
+            merged_chunks.extend((tb.get("chunks") or [])[:max_per])
+    context_excerpt = "\n\n".join(merged_chunks)[:10000]
+
+    feedback_hints = await load_paper_feedback_hints(
+        paper["owner_id"], paper.get("subject", ""), paper.get("class_name", "")
+    )
+    return context_excerpt, feedback_hints
+
+
 @api_router.post("/papers/generate")
 async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_user)):
     dist = req.distribution or {}
@@ -791,6 +830,14 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "format_distribution": fmt_dist,
         "custom_instructions": custom_instructions,
         "section_blueprint": section_blueprint,
+        # Only meaningful when the slider settings are actually in
+        # charge. See workers.paper_target_count for why an override
+        # paper stores no target rather than a guessed one.
+        "target_question_count": (
+            0
+            if (custom_instructions or section_blueprint)
+            else derive_target_question_count(req.total_marks)
+        ),
         "instructions": "",
         "sections": [],
         "diagrams_pending": 0,
@@ -993,22 +1040,7 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
     if p.get("generation_status") == "pending":
         raise HTTPException(status_code=409, detail="Generation already in progress")
 
-    tb_ids = p.get("textbook_ids") or (
-        [p["textbook_id"]] if p.get("textbook_id") else []
-    )
-    merged_chunks: list = []
-    max_per = max(2, 8 // max(1, len(tb_ids)))
-    for tid in tb_ids:
-        tb = await db.textbooks.find_one(
-            {"id": tid, "is_deleted": False}, {"_id": 0}
-        )
-        if tb:
-            merged_chunks.extend((tb.get("chunks") or [])[:max_per])
-    context_excerpt = "\n\n".join(merged_chunks)[:10000]
-
-    feedback_hints = await load_paper_feedback_hints(
-        user["id"], p.get("subject", ""), p.get("class_name", "")
-    )
+    context_excerpt, feedback_hints = await _paper_generation_inputs(p)
 
     # Reset status so the UI shows "Generating…" again
     await db.papers.update_one(
@@ -1018,6 +1050,11 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
             "generation_error": None,
             "sections": [],
             "diagrams_pending": 0,
+            "question_count": 0,
+            # A fresh full attempt: the partial-recovery banner and any
+            # previous top-up job describe a draft that no longer exists.
+            "recovered_from_truncation": False,
+            "topup": None,
         }},
     )
 
@@ -1180,12 +1217,16 @@ async def generate_solution(paper_id: str, user: dict = Depends(get_current_user
     return pending_solution
 
 
-def _generation_is_live(sol: dict) -> bool:
-    """True if a solution job says it is running and started recently enough to
-    be believed. Past GENERATING_LOCK_SECONDS the process is assumed gone."""
-    if sol.get("status") != "generating":
+def _generation_is_live(job: dict, running: str = "generating") -> bool:
+    """True if a background job sub-document says it is running and started
+    recently enough to be believed. Past GENERATING_LOCK_SECONDS the process is
+    assumed gone — in-process tasks do not survive a restart.
+
+    Shared by the solution job (`paper.solution`) and the question top-up job
+    (`paper.topup`), which have the same status/started_at shape."""
+    if not job or job.get("status") != running:
         return False
-    stamp = sol.get("started_at") or sol.get("generated_at")
+    stamp = job.get("started_at") or job.get("generated_at")
     try:
         started = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
     except (TypeError, ValueError):
@@ -1270,6 +1311,89 @@ async def generate_missing_solution(
             f"Queued {len(targets)} missing answer(s) for paper {paper_id}"
         )
     return {**shell, "queued": len(targets)}
+
+
+@api_router.post("/papers/{paper_id}/generate-missing")
+async def generate_missing_questions(
+    paper_id: str,
+    req: Optional[MissingQuestionsRequest] = None,
+    user: dict = Depends(get_current_user),
+):
+    """Generate only the questions a partial generation never produced.
+
+    A truncated LLM response (school papers) or a lost batch (competitive
+    papers) still saves as "ready", just short. The full-regenerate endpoint
+    throws that draft away and starts over; this one asks for the shortfall and
+    appends it, leaving every existing question — including manual edits —
+    untouched.
+
+    Progress is tracked in a `topup` sub-document rather than by moving
+    `generation_status` back to "pending", because that would make the paper
+    view hide the recovered questions behind its generating spinner.
+    """
+    p = await db.papers.find_one(
+        {"id": paper_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if p["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if p.get("generation_status") != "ready":
+        raise HTTPException(
+            status_code=400,
+            detail="Paper is not ready. Use 'Retry generation' instead.",
+        )
+    existing = count_questions(p.get("sections") or [])
+    if not existing:
+        raise HTTPException(
+            status_code=400,
+            detail="This paper has no questions to add to. "
+                   "Use 'Retry generation' instead.",
+        )
+    if _generation_is_live(p.get("topup") or {}):
+        raise HTTPException(
+            status_code=409, detail="Generation already in progress."
+        )
+
+    target = paper_target_count(p)
+    requested = req.count if req else None
+    if requested is None:
+        count = max(0, target - existing)
+    else:
+        try:
+            count = int(requested)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="count must be a number")
+        if count < 1:
+            raise HTTPException(status_code=400, detail="count must be at least 1")
+        count = min(count, TOPUP_MAX)
+
+    if count == 0:
+        # Nothing to do. Report it the way the solution endpoint does rather
+        # than erroring, so the UI can show an informational toast.
+        return {"status": "ready", "added": 0, "queued": 0}
+
+    topup = {
+        "status": "generating",
+        "started_at": utcnow_iso(),
+        "requested": count,
+        "added": 0,
+    }
+    await db.papers.update_one({"id": paper_id}, {"$set": {"topup": topup}})
+
+    context_excerpt, feedback_hints = await _paper_generation_inputs(p)
+    _spawn(
+        generate_missing_questions_background(
+            paper_id=paper_id,
+            owner_id=p["owner_id"],
+            count=count,
+            context_excerpt=context_excerpt,
+            feedback_hints=feedback_hints,
+        )
+    )
+    logger.info(f"Queued top-up of {count} question(s) for paper {paper_id}")
+    return {**topup, "queued": count}
 
 
 @api_router.post("/papers/solutions/bulk-generate")

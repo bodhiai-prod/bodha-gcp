@@ -22,7 +22,9 @@ from pydantic import BaseModel, Field
 
 from auth import get_current_user
 from deps import api_router, db, logger, utcnow_iso
+from diagram_policy import apply_diagram_policy
 from exam_formats import EXAM_FORMATS, get_format
+from latex_repair import repair_sections
 from llm_adapter import chain_for_exam, chat_complete, parse_json_response
 from pdf_utils import chunk_text, extract_text
 from prompts import (
@@ -34,6 +36,14 @@ from prompts import (
 from rag import top_k_similar, difficulty_distribution
 from storage import APP_NAME, put_object
 from token_usage import tag
+from workers import (
+    count_questions,
+    generate_diagrams_background,
+    merge_topup_sections,
+    paper_target_count,
+    _fail_topup,
+    _finish_topup,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +405,144 @@ async def _generate_one_batch(
     return parse_json_response(raw)
 
 
+async def generate_missing_competitive_questions(paper_id: str, count: int) -> None:
+    """Top up a competitive paper that came back short.
+
+    Called by `workers.generate_missing_questions_background` when the paper is
+    flagged `is_competitive`. Lives here so the RAG anchor retrieval stays with
+    the rest of the competitive path.
+
+    The batch plan is rebuilt for the shortfall only, and the existing questions
+    are passed to the model as "already asked" so a top-up doesn't hand back
+    what the paper already has. Existing questions are never modified.
+    """
+    try:
+        p = await db.papers.find_one(
+            {"id": paper_id, "is_deleted": False}, {"_id": 0}
+        )
+        if not p:
+            return
+        exam = await db.competitive_exams.find_one(
+            {"id": p.get("competitive_exam_id")}, {"_id": 0}
+        )
+        if not exam:
+            raise RuntimeError("The exam this paper belongs to no longer exists.")
+
+        exam_type = (exam.get("exam_type") or "GENERIC").upper()
+        spec = get_format(exam_type)
+        topics = [
+            t.get("name") if isinstance(t, dict) else str(t)
+            for t in (p.get("topics") or [])
+        ]
+        topics = [t for t in topics if t]
+        difficulty = p.get("difficulty", "medium")
+        duration = int(p.get("duration_minutes") or 0)
+        fmt_dist = p.get("format_distribution") or {}
+        batch_size = spec["batch_size"] if spec else max(count, 30)
+
+        anchors = await _retrieve_anchors(p.get("competitive_exam_id"), topics)
+        rag_dist = difficulty_distribution(anchors)
+
+        existing_sections = p.get("sections") or []
+        already_asked = [
+            q.get("question", "")
+            for s in existing_sections
+            for q in (s.get("questions") or [])
+            if q.get("question")
+        ]
+        avoid = ""
+        if already_asked:
+            stems = "\n".join(f"- {' '.join(a.split())[:200]}" for a in already_asked[:60])
+            avoid = (
+                "\n\nThese questions are ALREADY on this paper. Do NOT repeat or "
+                "paraphrase any of them:\n" + stems
+            )
+
+        num_batches = max(1, (count + batch_size - 1) // batch_size)
+        sizes = [count // num_batches] * num_batches
+        for i in range(count - sum(sizes)):
+            sizes[i] += 1
+
+        # Same concurrency cap as first-pass generation.
+        semaphore = _asyncio.Semaphore(3)
+
+        async def _run(idx: int, n: int):
+            async with semaphore:
+                return await _generate_one_batch(
+                    exam=exam,
+                    exam_type=exam_type,
+                    batch_topics=topics,
+                    batch_count=n,
+                    batch_difficulty=difficulty,
+                    batch_duration=duration,
+                    anchors=anchors,
+                    rag_dist=rag_dist,
+                    format_distribution=fmt_dist,
+                    custom_instructions=(p.get("custom_instructions") or "") + avoid,
+                    batch_index=idx,
+                    batch_total=num_batches,
+                )
+
+        results = await _asyncio.gather(
+            *[_run(i, n) for i, n in enumerate(sizes)],
+            return_exceptions=True,
+        )
+
+        new_questions: list = []
+        for r in results:
+            if isinstance(r, Exception):
+                logger.warning(f"Top-up batch failed: {r}")
+                continue
+            for sec in r.get("sections") or []:
+                new_questions.extend(sec.get("questions") or [])
+
+        if not new_questions:
+            raise RuntimeError(
+                "Every top-up batch failed - the upstream gateway is slow right "
+                "now. Try again in a few minutes."
+            )
+
+        # Merge into the paper's existing single section so the top-up doesn't
+        # create a second heading on an exam-format paper.
+        title = (
+            existing_sections[0].get("title")
+            if existing_sections
+            else (spec["label"] if spec else exam.get("name", "Practice Paper"))
+        )
+        new_sections = [{"title": title, "questions": new_questions}]
+
+        strict_mcq = (
+            isinstance(fmt_dist, dict)
+            and len(fmt_dist) == 1
+            and (fmt_dist.get("mcq") or 0) >= 100
+        )
+        _normalise_questions(new_sections, difficulty, strict_mcq=strict_mcq)
+        if not count_questions(new_sections):
+            raise RuntimeError("The model returned no usable questions.")
+
+        await repair_sections(new_sections, ref=paper_id)
+        pending_count = apply_diagram_policy(new_sections, ref=paper_id)
+        for s in new_sections:
+            for q in s.get("questions", []):
+                q["diagram_status"] = "pending" if q.get("needs_diagram") else "none"
+
+        target = paper_target_count(p)
+        before = count_questions(existing_sections)
+        merged = merge_topup_sections(existing_sections, new_sections, limit=target)
+        added = count_questions(merged) - before
+
+        await _finish_topup(paper_id, merged, added, pending_count, target)
+        logger.info(
+            f"Top-up added {added} question(s) to competitive paper {paper_id}"
+        )
+
+        if pending_count > 0:
+            await generate_diagrams_background(paper_id, p["owner_id"])
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Competitive question top-up failed")
+        await _fail_topup(paper_id, str(e))
+
+
 async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperRequest, user_id: str) -> None:
     """Background task that builds + writes a competitive paper using RAG.
 
@@ -520,19 +668,39 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
         )
         return
 
+    # Same LaTeX gate as the school path, in the same position: before the
+    # diagram policy flattens anything and before generation_status goes ready.
+    latex_stats = await repair_sections(sections, ref=paper_id)
+
+    # Figures were never generated for competitive papers even though the model
+    # was already flagging them — NEET biology and JEE circuit / organic items
+    # genuinely need one. Same gate as the school path: the policy decides what
+    # survives, and only what survives is marked pending.
+    pending_count = apply_diagram_policy(sections, ref=paper_id)
+    for s in sections:
+        for q in s.get("questions", []):
+            q["diagram_status"] = "pending" if q.get("needs_diagram") else "none"
+
     spec = get_format(exam_type)
     await db.papers.update_one(
         {"id": paper_id},
         {"$set": {
             "instructions": instructions,
             "sections": sections,
-            "diagrams_pending": 0,
+            "question_count": count_questions(sections),
+            "target_question_count": total_q,
+            # Previously counted and dropped. A paper that lost batches is short
+            # without being truncated, which is the other way a partial paper
+            # happens - the top-up banner needs to see it.
+            "failed_batches": failed_batches,
+            "diagrams_pending": pending_count,
             "generation_status": "ready",
             "generation_error": None,
             "rag_anchors_used": len(anchors),
             "rag_difficulty_distribution": rag_dist,
             "exam_type": exam_type,
             "recovered_from_truncation": recovered,
+            "latex_check": latex_stats,
             "duration_minutes": spec["duration_minutes"] if spec else req.duration_minutes,
             "total_marks": spec["total_marks"] if spec else req.question_count,
             "format_distribution": (
@@ -540,6 +708,11 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             ),
         }},
     )
+
+    # After the paper is marked ready, so the teacher sees questions immediately
+    # and the figures fill in behind them — same ordering as the school path.
+    if pending_count > 0:
+        await generate_diagrams_background(paper_id, user_id)
 
 
 @api_router.post("/competitive-exams/{exam_id}/generate-paper")
@@ -585,6 +758,12 @@ async def generate_competitive_paper(
         "format_distribution": locked_fmt,
         "custom_instructions": req.custom_instructions,
         "section_blueprint": "",
+        # The prescribed count for a preset exam, else what was asked for. Same
+        # value _generate_competitive_paper batches against, stored so a short
+        # paper can tell how short it is.
+        "target_question_count": (
+            spec["question_count"] if spec else req.question_count
+        ),
         "instructions": "",
         "sections": [],
         "diagrams_pending": 0,

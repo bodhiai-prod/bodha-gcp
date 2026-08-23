@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { api, API } from "@/lib/api";
+import { api } from "@/lib/api";
 import Header from "@/components/Header";
 import { toast } from "sonner";
 import {
@@ -14,6 +14,8 @@ import {
   Image as ImageIcon,
 } from "@phosphor-icons/react";
 import MathText from "@/components/MathText";
+import QuestionDiagram from "@/components/QuestionDiagram";
+import { printDocument, diagramsReady } from "@/lib/print";
 
 const typeBadge = (t) => {
   if (t === "information") return "qp-badge qp-badge-blue";
@@ -156,35 +158,14 @@ export default function SolutionView() {
     }
   };
 
-  const download = async () => {
-    try {
-      const token = localStorage.getItem("qp_token");
-      const resp = await fetch(`${API}/papers/${id}/solution/pdf`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const ab = await resp.arrayBuffer();
-      const blob = new Blob([ab], { type: "application/pdf" });
-      const blobUrl = URL.createObjectURL(blob);
-      const safeTitle =
-        (paper.title || "paper").replace(/[^a-zA-Z0-9_\- ]/g, "").trim() ||
-        "paper";
-      const a = document.createElement("a");
-      a.style.display = "none";
-      a.href = blobUrl;
-      a.download = `${safeTitle} - Solution.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        try {
-          document.body.removeChild(a);
-          URL.revokeObjectURL(blobUrl);
-        } catch {}
-      }, 3000);
-      toast.success("Download started");
-    } catch (err) {
-      toast.error(`Download failed: ${err.message || err}`);
+  // Saved via the browser's print engine rather than the backend renderer, so
+  // the PDF keeps the fonts, KaTeX math and badges shown on screen.
+  const download = () => {
+    if (!diagramsReady()) {
+      toast.error("Diagrams are still loading — try again in a moment");
+      return;
     }
+    printDocument(`${paper.title} - Solution`);
   };
 
   if (!paper) {
@@ -450,7 +431,7 @@ export default function SolutionView() {
                 <button
                   onClick={regenerate}
                   disabled={regenerating}
-                  className="qp-btn qp-btn-primary text-xs"
+                  className="qp-btn qp-btn-primary text-xs no-print"
                   data-testid="stale-regenerate-button"
                 >
                   {regenerating ? "..." : "Regenerate"}
@@ -494,6 +475,8 @@ export default function SolutionView() {
                             </span>
                           )}
                         </div>
+
+                        <QuestionDiagram paperId={id} question={q} />
 
                         <div className="mt-4 pl-6">
                           <div className="overline text-neutral-500 mb-2">

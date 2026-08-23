@@ -243,12 +243,138 @@ code,
     background: var(--ink);
 }
 
-/* Print (for printing the paper preview directly) */
+/* ---------------------------------------------------------------------------
+   Math fallback
+   ---------------------------------------------------------------------------
+   MathText renders this instead of KaTeX's red error markup when an expression
+   still will not parse (see components/MathText.jsx). It has to stay legible
+   rather than shout: by the time a teacher sees it the backend repair pass has
+   already tried and failed, so the useful thing is to show the source cleanly.
+   --------------------------------------------------------------------------- */
+.math-fallback {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    padding: 0 0.15em;
+    border-bottom: 1px dotted currentColor;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+pre.math-fallback {
+    display: block;
+    margin: 0.4em 0;
+    padding: 0.3em 0.5em;
+    border-bottom: none;
+    border-left: 2px solid currentColor;
+    overflow-x: auto;
+}
+
+/* ---------------------------------------------------------------------------
+   Print
+   ---------------------------------------------------------------------------
+   The question paper and answer key are saved as PDF by printing the live DOM
+   rather than by the backend ReportLab renderer, so the output keeps the app's
+   fonts, KaTeX math (as vector, not raster) and badge colours. See lib/print.js.
+
+   Note: the print layout viewport is the page content box (~182mm ≈ 690px),
+   which is below Tailwind's `md` breakpoint (768px) — `md:` variants therefore
+   do not apply here. The padding resets below make that mostly moot.
+   --------------------------------------------------------------------------- */
 @media print {
+    @page {
+        size: A4 portrait;
+        margin: 14mm;
+    }
+
+    /* --- Strip the application chrome --- */
     .no-print {
         display: none !important;
     }
+    /* Header.jsx renders a <header>; without this the logo, nav and Logout
+       button print above the paper. */
+    header,
+    [data-sonner-toaster] {
+        display: none !important;
+    }
+
+    /* --- Reset the page shell so the document owns the sheet --- */
+    html,
     body {
-        background: white;
+        background: #fff !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    .App > div,
+    .min-h-screen {
+        min-height: 0 !important;
+        background: #fff !important;
+    }
+    main {
+        max-width: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    /* --- The paper / answer key becomes the page itself --- */
+    [data-testid="paper-preview"],
+    [data-testid="solution-body"] {
+        max-width: none !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        /* Inherited, so this one declaration keeps the fills on badges, the
+           instructions box and the answer boxes. Without it browsers drop
+           background colours and the blue/red badges — white text on a
+           coloured fill — print white-on-white, i.e. invisible. */
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    /* --- Never reveal the correct answer on the question paper --- */
+    /* The correct option's row carries `text-green-800`. The adjacent "Correct"
+       chip is .no-print, but a text colour is not a background, so it survives
+       printing and tints the answer green on the student's copy. */
+    [data-testid="paper-preview"] [data-testid^="mcq-option-"] {
+        color: inherit !important;
+    }
+
+    /* --- Pagination --- */
+    li[data-testid^="question-item-"],
+    li[data-testid^="solution-item-"] {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+    /* Don't orphan a section heading at the foot of a page. */
+    section > h2 {
+        break-after: avoid;
+        page-break-after: avoid;
+    }
+    img[data-testid^="diagram-"] {
+        break-inside: avoid;
+        page-break-inside: avoid;
+        max-height: 90mm;
+    }
+
+    /* An unrenderable expression prints as its source rather than as a red
+       error. Black on white, no dotted rule — on paper the underline reads as
+       part of the maths. */
+    .math-fallback {
+        color: #000 !important;
+        border-bottom: none !important;
+        border-left: none !important;
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
+    /* --- Hide transient state that must not reach paper --- */
+    /* Empty dashed boxes for diagrams that are still generating or loading. */
+    [data-testid^="diagram-pending-"],
+    [data-testid="diagram-loading"],
+    /* SolutionView progress / error banners. The stale-banner is deliberately
+       kept, matching the note the backend answer-key PDF prints. */
+    [data-testid="generating-banner"],
+    [data-testid="partial-banner"],
+    [data-testid="failed-banner"] {
+        display: none !important;
     }
 }

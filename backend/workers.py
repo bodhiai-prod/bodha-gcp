@@ -13,8 +13,15 @@ from typing import Optional
 from fastapi import HTTPException
 
 from deps import db, logger, utcnow_iso
+from diagram_policy import apply_diagram_policy, normalise_spec
+from latex_repair import repair_answers, repair_sections, repair_text
 from llm_adapter import chat_complete, generate_diagram, parse_json_response
-from prompts import qgen_prompt, solution_prompt, SOLUTION_SYSTEM
+from prompts import (
+    derive_target_question_count,
+    qgen_prompt,
+    solution_prompt,
+    SOLUTION_SYSTEM,
+)
 from storage import APP_NAME, put_object
 from token_usage import tag
 
@@ -86,19 +93,31 @@ async def generate_diagrams_for_paper(paper_id: str, owner_id: str, sections: li
     """Generate diagrams (in parallel) for questions with needs_diagram=true.
     Saves PNGs to object storage and attaches `diagram_path` to each question.
     Best-effort: a failed diagram leaves the question without an image.
+
+    The policy gate runs again here rather than relying on the caller's pass:
+    this is the last point before an image is actually paid for, and the
+    paper may have been edited between generation and this call.
     """
+    apply_diagram_policy(sections, ref=paper_id)
+
     jobs = []
     targets = []
     for s in sections:
         for q in s.get("questions", []):
-            if q.get("needs_diagram") and q.get("diagram_description"):
-                targets.append(q)
-                jobs.append(generate_diagram(q["diagram_description"]))
+            if not q.get("needs_diagram"):
+                continue
+            # Already has an image. Re-running this job (a top-up appends new
+            # questions and re-enters here) must not re-bill every existing
+            # figure.
+            if q.get("diagram_path"):
+                continue
+            spec = normalise_spec(q)
+            if spec is None:
+                continue
+            targets.append(q)
+            jobs.append(generate_diagram(spec))
     if not jobs:
         return sections
-    # Cap concurrency at 5 diagrams to avoid stalls
-    jobs = jobs[:5]
-    targets = targets[:5]
     results = await _asyncio.gather(*jobs, return_exceptions=True)
     for q, img_bytes in zip(targets, results):
         if isinstance(img_bytes, Exception) or not img_bytes:
@@ -136,6 +155,40 @@ async def generate_diagrams_background(paper_id: str, owner_id: str) -> None:
         logger.info(f"Diagram background job finished for {paper_id}")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Diagram background job failed: {e}")
+
+
+def _normalise_paper_questions(sections: list, difficulty: str) -> None:
+    """Stamp ids and fill in the defaults every question is expected to have.
+
+    Shared by first-pass generation and the top-up worker so the two cannot
+    drift apart on MCQ handling or default marks. Mutates in place.
+    """
+    for s in sections:
+        for q in s.get("questions", []):
+            q["id"] = str(uuid.uuid4())
+            q.setdefault("important", False)
+            q.setdefault("marks", 2)
+            q.setdefault("type", "concept")
+            q.setdefault("difficulty", difficulty)
+            q.setdefault("needs_diagram", False)
+            q.setdefault("format", "")
+            # MCQ structured fields — keep options as a 4-string list and
+            # correct_option as a 0-3 int. Drop them for non-MCQ items.
+            if (q.get("format") or "").lower() == "mcq":
+                opts = q.get("options") or []
+                if isinstance(opts, list):
+                    opts = [str(o).strip() for o in opts][:4]
+                else:
+                    opts = []
+                q["options"] = opts
+                try:
+                    co = int(q.get("correct_option", 0))
+                except (TypeError, ValueError):
+                    co = 0
+                q["correct_option"] = co if 0 <= co < len(opts) else 0
+            else:
+                q.pop("options", None)
+                q.pop("correct_option", None)
 
 
 # ---------------------------------------------------------------------------
@@ -196,58 +249,257 @@ async def generate_paper_background(
         return
 
     sections = data.get("sections") or []
-    for s in sections:
-        for q in s.get("questions", []):
-            q["id"] = str(uuid.uuid4())
-            q.setdefault("important", False)
-            q.setdefault("marks", 2)
-            q.setdefault("type", "concept")
-            q.setdefault("difficulty", difficulty)
-            q.setdefault("needs_diagram", False)
-            q.setdefault("format", "")
-            # MCQ structured fields — keep options as a 4-string list and
-            # correct_option as a 0-3 int. Drop them for non-MCQ items.
-            if (q.get("format") or "").lower() == "mcq":
-                opts = q.get("options") or []
-                if isinstance(opts, list):
-                    opts = [str(o).strip() for o in opts][:4]
-                else:
-                    opts = []
-                q["options"] = opts
-                try:
-                    co = int(q.get("correct_option", 0))
-                except (TypeError, ValueError):
-                    co = 0
-                q["correct_option"] = co if 0 <= co < len(opts) else 0
-            else:
-                q.pop("options", None)
-                q.pop("correct_option", None)
+    _normalise_paper_questions(sections, difficulty)
 
-    # Mark diagram jobs pending so the UI can show "generating" placeholders.
-    pending_count = 0
+    # Check and repair the LaTeX before anything downstream reads it. Runs
+    # ahead of apply_diagram_policy so diagram_policy.plain_text() flattens
+    # already-clean markup, and ahead of the $set below so generation_status
+    # only reaches "ready" once the questions actually render.
+    latex_stats = await repair_sections(sections, ref=paper_id)
+
+    # Drop figures the model asked for but the question must not have — the
+    # student's own drawing task, a decorative illustration, or a spec carrying
+    # the answer — then mark what survives pending so the UI can show
+    # "generating" placeholders.
+    pending_count = apply_diagram_policy(sections, ref=paper_id)
     for s in sections:
         for q in s.get("questions", []):
-            if q.get("needs_diagram") and q.get("diagram_description"):
-                q["diagram_status"] = "pending"
-                pending_count += 1
-            else:
-                q["diagram_status"] = "none"
+            q["diagram_status"] = "pending" if q.get("needs_diagram") else "none"
 
     await db.papers.update_one(
         {"id": paper_id},
         {"$set": {
             "instructions": data.get("instructions", ""),
             "sections": sections,
+            "question_count": count_questions(sections),
             "diagrams_pending": pending_count,
             "generation_status": "ready",
             "generation_error": None,
             "recovered_from_truncation": bool(data.get("_recovered_from_truncation")),
+            "latex_check": latex_stats,
         }},
     )
 
     # Kick off diagram generation asynchronously.
     if pending_count > 0:
         await generate_diagrams_background(paper_id, owner_id)
+
+
+# ---------------------------------------------------------------------------
+# Top-up generation — fill in the questions a partial generation never produced
+# ---------------------------------------------------------------------------
+# A paper can end up short in two ways: the single school-path LLM call gets
+# truncated and `parse_json_response` salvages whatever questions were complete,
+# or a competitive paper loses whole batches. Both still save as "ready". The
+# full `regenerate` endpoint throws the survivors away to try again; this path
+# keeps them and asks only for the shortfall.
+#
+# The hard rule for everything below: an existing question object is never
+# mutated and never dropped. A failed top-up must leave the paper exactly as it
+# was found.
+# Ceiling on a teacher-supplied top-up count. Matches the largest paper the
+# app will generate (CompetitivePaperRequest caps question_count at 200), so
+# it guards against absurd input without ever clamping a real shortfall.
+TOPUP_MAX = 200
+
+
+def count_questions(sections: list) -> int:
+    """Total questions across all sections."""
+    return sum(len(s.get("questions") or []) for s in sections or [])
+
+
+def flatten_question_texts(sections: list) -> list:
+    """Question stems, in order — the 'do not repeat these' list for a top-up."""
+    return [
+        q.get("question", "")
+        for s in sections or []
+        for q in (s.get("questions") or [])
+        if q.get("question")
+    ]
+
+
+def paper_target_count(paper: dict) -> int:
+    """How many questions this paper was supposed to have.
+
+    Prefers the value stored at creation time. Papers created before that field
+    existed fall back to the same formula the prompt builder uses, so an older
+    paper still gets a usable target instead of no top-up button at all.
+    """
+    stored = paper.get("target_question_count")
+    try:
+        stored = int(stored)
+    except (TypeError, ValueError):
+        stored = 0
+    if stored > 0:
+        return stored
+    # A blueprint or a free-form teacher prompt overrides the slider settings,
+    # and states the real question count in prose the app never parses. Deriving
+    # one from total_marks would be a guess, and a wrong guess here shows a
+    # "12 questions missing" banner on a paper that is perfectly complete. Better
+    # to admit we do not know: 0 means the banner falls back to the truncation
+    # flag and the teacher supplies the count.
+    if paper.get("section_blueprint") or paper.get("custom_instructions"):
+        return 0
+    return derive_target_question_count(int(paper.get("total_marks") or 0))
+
+
+def merge_topup_sections(existing: list, new: list, limit: int = 0) -> list:
+    """Fold freshly generated sections into the paper's existing ones.
+
+    Questions land in the existing section whose title matches (case- and
+    whitespace-insensitively); anything else is appended as its own section.
+    That keeps a blueprint paper's structure when the model reproduces the
+    section titles, and degrades to a clean extra section when it doesn't —
+    which is the common case, since the truncation salvage path collapses
+    everything into a single "Recovered Questions" section anyway.
+
+    `limit` caps the merged total, mirroring the competitive path's truncation
+    of over-produced batches. Existing questions are never dropped to make room.
+    """
+    merged = [dict(s, questions=list(s.get("questions") or [])) for s in existing or []]
+    by_title = {}
+    for s in merged:
+        by_title.setdefault((s.get("title") or "").strip().lower(), s)
+
+    room = max(0, limit - count_questions(merged)) if limit else None
+    for sec in new or []:
+        incoming = list(sec.get("questions") or [])
+        if room is not None:
+            if room <= 0:
+                break
+            incoming = incoming[:room]
+            room -= len(incoming)
+        if not incoming:
+            continue
+        key = (sec.get("title") or "").strip().lower()
+        target = by_title.get(key)
+        if target is not None:
+            target["questions"].extend(incoming)
+        else:
+            fresh = {
+                "title": sec.get("title") or "Additional Questions",
+                "questions": incoming,
+            }
+            merged.append(fresh)
+            by_title.setdefault(key, fresh)
+    return merged
+
+
+async def _finish_topup(
+    paper_id: str, sections: list, added: int, pending_count: int, target: int
+) -> None:
+    """Write a successful top-up back to the paper."""
+    total = count_questions(sections)
+    existing = await db.papers.find_one(
+        {"id": paper_id}, {"_id": 0, "diagrams_pending": 1}
+    )
+    already_pending = int((existing or {}).get("diagrams_pending") or 0)
+    update = {
+        "sections": sections,
+        "question_count": total,
+        "diagrams_pending": already_pending + pending_count,
+        "topup": {
+            "status": "ready",
+            "added": added,
+            "finished_at": utcnow_iso(),
+        },
+    }
+    # The partial-recovery banner has served its purpose once the paper is whole.
+    if target and total >= target:
+        update["recovered_from_truncation"] = False
+    await db.papers.update_one({"id": paper_id}, {"$set": update})
+
+
+async def _fail_topup(paper_id: str, err: str) -> None:
+    """Record a failed top-up. Deliberately touches nothing but `topup`."""
+    await db.papers.update_one(
+        {"id": paper_id},
+        {"$set": {"topup": {
+            "status": "failed",
+            "error": str(err)[:500],
+            "finished_at": utcnow_iso(),
+        }}},
+    )
+
+
+async def generate_missing_questions_background(
+    paper_id: str,
+    owner_id: str,
+    count: int,
+    context_excerpt: str = "",
+    feedback_hints: str = "",
+) -> None:
+    """Generate `count` extra questions and append them to an existing paper."""
+    tag("paper_topup", paper_id)
+    try:
+        p = await db.papers.find_one(
+            {"id": paper_id, "is_deleted": False}, {"_id": 0}
+        )
+        if not p:
+            return
+        if p.get("is_competitive"):
+            # Lives in competitive_routes so the RAG anchor logic stays with the
+            # rest of the competitive path. Imported here rather than at module
+            # scope because competitive_routes imports this module.
+            from competitive_routes import generate_missing_competitive_questions
+
+            await generate_missing_competitive_questions(paper_id, count)
+            return
+
+        existing_sections = p.get("sections") or []
+        difficulty = p.get("difficulty", "medium")
+        prompt = qgen_prompt(
+            subject=p.get("subject", ""),
+            klass=p.get("class_name", ""),
+            topics_weighted=p.get("topics") or [],
+            difficulty=difficulty,
+            distribution=p.get("distribution") or {},
+            total_marks=int(p.get("total_marks") or 0),
+            duration=int(p.get("duration_minutes") or 0),
+            context_excerpt=context_excerpt,
+            feedback_hints=feedback_hints,
+            format_distribution=p.get("format_distribution") or {},
+            custom_instructions=p.get("custom_instructions") or "",
+            section_blueprint=p.get("section_blueprint") or "",
+            topup_count=count,
+            existing_questions=flatten_question_texts(existing_sections),
+        )
+        raw = await chat_complete(
+            system_message=(
+                "You create original, high-quality exam questions in strict JSON. "
+                "Never copy textbook content."
+            ),
+            user_text=prompt,
+        )
+        data = parse_json_response(raw)
+
+        new_sections = data.get("sections") or []
+        _normalise_paper_questions(new_sections, difficulty)
+        if not count_questions(new_sections):
+            raise RuntimeError("The model returned no usable questions.")
+
+        # Same order as first-pass generation: repair the LaTeX, then let the
+        # diagram policy decide what keeps a figure. Both run on the new
+        # questions only — the existing ones have already been through this.
+        await repair_sections(new_sections, ref=paper_id)
+        pending_count = apply_diagram_policy(new_sections, ref=paper_id)
+        for s in new_sections:
+            for q in s.get("questions", []):
+                q["diagram_status"] = "pending" if q.get("needs_diagram") else "none"
+
+        target = paper_target_count(p)
+        before = count_questions(existing_sections)
+        merged = merge_topup_sections(existing_sections, new_sections, limit=target)
+        added = count_questions(merged) - before
+
+        await _finish_topup(paper_id, merged, added, pending_count, target)
+        logger.info(f"Top-up added {added} question(s) to paper {paper_id}")
+
+        if pending_count > 0:
+            await generate_diagrams_background(paper_id, owner_id)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Question top-up failed")
+        await _fail_topup(paper_id, str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -269,12 +521,23 @@ def _questions_payload(paper: dict) -> list[dict]:
         for q in s.get("questions", []):
             if not q.get("question"):
                 continue
-            out.append({
+            item = {
                 "id": q["id"],
                 "question": q["question"],
                 "type": q.get("type", "concept"),
                 "marks": q.get("marks", 2),
-            })
+                "format": q.get("format", ""),
+            }
+            # MCQ choices live outside the question text, so the solver only
+            # sees the distractors if we pass them. The stored key rides along
+            # because it is what the mock-test grader marks against — a worked
+            # solution that quietly lands on a different option would contradict
+            # the student's score. Already normalised to a 4-string list and a
+            # valid index by _normalise_paper_questions().
+            if (item["format"] or "").lower() == "mcq" and q.get("options"):
+                item["options"] = q["options"]
+                item["correct_option"] = q.get("correct_option", 0)
+            out.append(item)
     return out
 
 
@@ -391,7 +654,11 @@ async def _run_solution_batches(
                     qid = a.get("question_id")
                     text = (a.get("answer") or "").strip()
                     if qid and text:
-                        answers[qid] = text
+                        # Deterministic LaTeX fixes only — free, and they land
+                        # before _persist() shows the answer to the user. The
+                        # model-backed repair for whatever this cannot fix runs
+                        # once per solution, after the sweep.
+                        answers[qid] = repair_text(text)[0]
                 break
             except Exception as e:  # noqa: BLE001
                 last_err = e
@@ -439,6 +706,10 @@ async def build_solution_for_paper(paper: dict, user_id: str) -> dict:
             status_code=502, detail=f"Solution failed: {last_err}"
         )
 
+    # Whatever the deterministic pass inside _run_solution_batches could not fix
+    # goes to the repair model here — one batched call for the whole answer key.
+    latex_stats = await repair_answers(answers, ref=paper.get("id", ""))
+
     # reconcile_solution_shell only reads a flat question_id -> answer map out of
     # `existing`, so the section title here is irrelevant — it rebuilds the
     # section structure from the paper.
@@ -460,6 +731,7 @@ async def build_solution_for_paper(paper: dict, user_id: str) -> dict:
         "ready" if shell["total"] and shell["completed"] == shell["total"] else "partial"
     )
     shell["finished_at"] = utcnow_iso()
+    shell["latex_check"] = latex_stats
     return shell
 
 
@@ -490,10 +762,22 @@ async def generate_solution_background(
 
         answers: dict[str, str] = {}
 
-        async def _persist() -> None:
+        # The questions THIS job was asked to answer. A model that volunteers an
+        # answer for anything outside this set must never reach the document —
+        # that is what protects a teacher's manual edits on a targeted retry.
+        owned = {q["id"] for q in payload}
+
+        async def _persist(force: bool = False) -> None:
             """Merge what we have so far into the stored doc. Re-read every time
             rather than holding the document — a teacher may be editing other
-            answers while this runs."""
+            answers while this runs.
+
+            `force` exists for exactly one caller: the LaTeX repair pass below.
+            Those answers were written by an earlier _persist in this same job,
+            so the fill_only guard would otherwise read them as pre-existing
+            content and silently drop the repair. It is scoped to `owned` so it
+            re-opens only the answers this job wrote itself.
+            """
             current = await db.papers.find_one(
                 {"id": paper_id}, {"_id": 0, "solution": 1}
             )
@@ -503,7 +787,9 @@ async def generate_solution_background(
                     qid = ans.get("question_id")
                     if qid not in answers:
                         continue
-                    if fill_only and ans.get("answer"):
+                    if fill_only and ans.get("answer") and not (
+                        force and qid in owned
+                    ):
                         continue  # never overwrite on a targeted retry
                     ans["answer"] = answers[qid]
             sol["completed"] = sum(
@@ -540,6 +826,12 @@ async def generate_solution_background(
                     SWEEP_BATCH_SIZE, answers, label="sweep", on_batch=_persist,
                 )
 
+            # Whatever the deterministic pass in _run_solution_batches could not
+            # fix goes to the repair model here — one batched call covering the
+            # whole answer key, before the status flips off "generating".
+            latex_stats = await repair_answers(answers, ref=paper_id)
+            await _persist(force=True)
+
         # Mark complete (or partial)
         current = await db.papers.find_one(
             {"id": paper_id}, {"_id": 0, "solution": 1}
@@ -549,6 +841,8 @@ async def generate_solution_background(
         total = sol.get("total", 0)
         sol["status"] = "ready" if total and completed == total else "partial"
         sol["finished_at"] = utcnow_iso()
+        if payload:
+            sol["latex_check"] = latex_stats
         sol.pop("error", None)
         await db.papers.update_one(
             {"id": paper_id}, {"$set": {"solution": sol}}

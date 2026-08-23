@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { BLUEPRINT_PRESETS, fillBlueprint } from "@/lib/blueprints";
 import Header from "@/components/Header";
 import { toast } from "sonner";
 import {
@@ -20,26 +21,6 @@ const DEFAULT_FORMATS = [
   { key: "fill_blank", label: "Fill in the Blanks", default: 10 },
   { key: "true_false", label: "True / False", default: 10 },
 ];
-
-const ICSE_CLASS_10_BLUEPRINT = `Section A (40 marks, compulsory — answer ALL)
-- Q1: 15 multiple-choice questions, 1 mark each. Each MCQ must have 4 options labelled (a)-(d). Cover the full topic list.
-- Q2: 6 fill-in-the-blank questions, 1 mark each. Provide a short word-bank in brackets where useful.
-- Q3: 4-5 short-answer parts (i)-(v), totalling 19 marks. Mix of definitions, reasoning, simple numerical, and graph/figure interpretation.
-
-Section B (40 marks) — Attempt any FOUR out of the following SIX questions
-- Q4 to Q9: 10 marks each, every question subdivided into (a) 3 marks + (b) 3 marks + (c) 4 marks.
-- Each question covers ONE main topic in depth and mixes conceptual, derivation, and numerical parts.
-- Section title MUST literally read: "Section B (40 Marks) — Attempt any FOUR of the following SIX questions".
-
-Total: 80 marks, 2 hours. Print "[15 minutes reading time, no writing allowed]" in the instructions line.`;
-
-const CBSE_CLASS_10_BLUEPRINT = `Section A (16 marks) — 16 MCQs of 1 mark each (4 options).
-Section B (10 marks) — 5 Very Short Answer questions of 2 marks each.
-Section C (21 marks) — 7 Short Answer questions of 3 marks each.
-Section D (20 marks) — 4 Long Answer questions of 5 marks each (internal choice in 2 of them).
-Section E (12 marks) — 3 Case-Study/Source-Based questions of 4 marks each, each with sub-parts (a) 1m + (b) 1m + (c) 2m.
-
-Total: 80 marks, 3 hours.`;
 
 export default function NewPaper() {
   const navigate = useNavigate();
@@ -232,6 +213,17 @@ export default function NewPaper() {
     } finally {
       setGenerating(false);
     }
+  };
+
+  // Preset buttons drop a board blueprint into the textarea, with {SUBJECT}
+  // resolved from the same "first selected textbook" the generate call uses.
+  const applyPreset = (template) => {
+    const first = tbDetails[selectedTbIds[0]] || {};
+    setSectionBlueprint(fillBlueprint(template, { subject: first.subject }));
+    if (!first.subject)
+      toast.message(
+        "Pick a textbook first to auto-fill the subject, or replace {SUBJECT} by hand."
+      );
   };
 
   const anyTopics = selectedTbIds.some(
@@ -540,25 +532,21 @@ export default function NewPaper() {
                 Paste your board&rsquo;s exact section pattern. When set, this
                 <b> overrides </b> the Question Distribution and Question Format
                 Mix above &mdash; the AI follows the blueprint verbatim. Useful
-                for ICSE / CBSE / IGCSE / state-board templates.
+                for ICSE / CBSE / ISC / IGCSE / state-board templates. The
+                presets fill in the subject of the first selected textbook.
               </p>
               <div className="flex flex-wrap gap-2 mb-3">
-                <button
-                  type="button"
-                  onClick={() => setSectionBlueprint(ICSE_CLASS_10_BLUEPRINT)}
-                  className="qp-btn qp-btn-secondary text-xs"
-                  data-testid="blueprint-preset-icse"
-                >
-                  Use ICSE Class 10 (80m / 2h)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSectionBlueprint(CBSE_CLASS_10_BLUEPRINT)}
-                  className="qp-btn qp-btn-secondary text-xs"
-                  data-testid="blueprint-preset-cbse"
-                >
-                  Use CBSE Class 10 (80m / 3h)
-                </button>
+                {BLUEPRINT_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => applyPreset(preset.template)}
+                    className="qp-btn qp-btn-secondary text-xs"
+                    data-testid={preset.testId}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
                 {sectionBlueprint && (
                   <button
                     type="button"

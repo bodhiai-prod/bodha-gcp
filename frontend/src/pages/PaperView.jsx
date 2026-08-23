@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { api, API } from "@/lib/api";
+import { api } from "@/lib/api";
 import Header from "@/components/Header";
 import { toast } from "sonner";
 import {
   Star,
   ArrowLeft,
   Download,
-  Printer,
   BookmarkSimple,
   PencilSimple,
   FloppyDisk,
@@ -17,8 +16,11 @@ import {
   Image as ImageIcon,
   CheckCircle,
   ArrowClockwise,
+  WarningCircle,
 } from "@phosphor-icons/react";
 import MathText from "@/components/MathText";
+import QuestionDiagram from "@/components/QuestionDiagram";
+import { printDocument, diagramsReady } from "@/lib/print";
 
 const typeBadge = (t) => {
   if (t === "information") return "qp-badge qp-badge-blue";
@@ -35,6 +37,8 @@ export default function PaperView() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [topupCount, setTopupCount] = useState(0);
+  const [queuing, setQueuing] = useState(false);
 
   const load = async () => {
     const { data } = await api.get(`/papers/${id}`);
@@ -60,6 +64,52 @@ export default function PaperView() {
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, [paper, editing]); // eslint-disable-line
+
+  // Poll while a top-up is filling in the missing questions. Deliberately does
+  // not gate on generation_status: the paper stays "ready" throughout so the
+  // recovered questions remain on screen while the rest arrive.
+  useEffect(() => {
+    if (!paper || editing) return;
+    if (paper.topup?.status !== "generating") return;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [paper, editing]); // eslint-disable-line
+
+  // Full restart. Destructive once a partial paper exists, so the caller that
+  // can reach it from the partial banner confirms first.
+  const regenerateAll = async () => {
+    try {
+      await api.post(`/papers/${id}/regenerate`);
+      toast.success("Retrying — the AI is drafting questions again");
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not retry");
+    }
+  };
+
+  // Fill in only the questions that never arrived. Unlike regenerateAll this
+  // cannot destroy anything — the backend appends and never rewrites an
+  // existing question — so there is no confirm dialog.
+  const generateMissing = async (count) => {
+    setQueuing(true);
+    try {
+      const { data } = await api.post(`/papers/${id}/generate-missing`, {
+        count: count || null,
+      });
+      if (data.queued === 0) {
+        toast.info("Nothing missing — this paper already has every question");
+      } else {
+        toast.success(
+          `Generating ${data.queued} more question${data.queued === 1 ? "" : "s"}...`
+        );
+      }
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed");
+    } finally {
+      setQueuing(false);
+    }
+  };
 
   const enterEdit = () => {
     setDraft(JSON.parse(JSON.stringify(paper)));
@@ -165,35 +215,14 @@ export default function PaperView() {
     }
   };
 
-  const download = async () => {
-    try {
-      const token = localStorage.getItem("qp_token");
-      const resp = await fetch(`${API}/papers/${id}/pdf`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const ab = await resp.arrayBuffer();
-      const blob = new Blob([ab], { type: "application/pdf" });
-      const blobUrl = URL.createObjectURL(blob);
-      const safeTitle =
-        (paper.title || "paper").replace(/[^a-zA-Z0-9_\- ]/g, "").trim() ||
-        "paper";
-      const a = document.createElement("a");
-      a.style.display = "none";
-      a.href = blobUrl;
-      a.download = `${safeTitle}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        try {
-          document.body.removeChild(a);
-          URL.revokeObjectURL(blobUrl);
-        } catch {}
-      }, 3000);
-      toast.success("Download started");
-    } catch (err) {
-      toast.error(`Download failed: ${err.message || err}`);
+  // Saved via the browser's print engine rather than the backend renderer, so
+  // the PDF keeps the fonts, KaTeX math and badges shown on screen.
+  const download = () => {
+    if (!diagramsReady()) {
+      toast.error("Diagrams are still loading — try again in a moment");
+      return;
     }
+    printDocument(paper.title);
   };
 
   if (!paper) {
@@ -251,15 +280,6 @@ export default function PaperView() {
     const looksTransient = /502|503|504|gateway|timeout|connection|overloaded/i.test(
       errMsg
     );
-    const retry = async () => {
-      try {
-        await api.post(`/papers/${id}/regenerate`);
-        toast.success("Retrying — the AI is drafting questions again");
-        await load();
-      } catch (err) {
-        toast.error(err?.response?.data?.detail || "Could not retry");
-      }
-    };
     return (
       <div className="min-h-screen bg-[#FAFAFA]">
         <Header />
@@ -294,7 +314,7 @@ export default function PaperView() {
             )}
             <div className="flex gap-2 flex-wrap">
               <button
-                onClick={retry}
+                onClick={regenerateAll}
                 className="qp-btn qp-btn-primary"
                 data-testid="paper-retry-btn"
               >
@@ -314,6 +334,20 @@ export default function PaperView() {
     );
   }
 
+  // Counts are derived from what is actually on the page rather than read
+  // from a server counter: papers generated before target_question_count
+  // existed have no counter, and the backend falls back to the same formula.
+  const allQuestions = (paper.sections || []).flatMap((s) => s.questions || []);
+  const have = allQuestions.length;
+  const target = paper.target_question_count || 0;
+  const missingCount = Math.max(0, target - have);
+  const topup = paper.topup;
+  const isPartial = paper.recovered_from_truncation || missingCount > 0;
+  const busy = queuing || topup?.status === "generating";
+  // What the input shows, what the button says, and what gets sent — one
+  // value, so a paper with no reliable target still asks for something.
+  const topupValue = topupCount || missingCount || 1;
+
   const view = editing ? draft : paper;
   let counter = 1;
 
@@ -321,19 +355,107 @@ export default function PaperView() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-5xl mx-auto p-6 md:p-12" data-testid="paper-view-page">
-        {paper.recovered_from_truncation && (
+        {topup?.status === "generating" && (
           <div
-            className="no-print mb-6 border-2 border-yellow-400 bg-yellow-50 p-4"
-            data-testid="recovered-banner"
+            className="no-print mb-6 border-2 border-black bg-blue-50 p-4 flex items-center gap-3"
+            data-testid="topup-generating-banner"
           >
-            <div className="font-bold text-sm mb-1 text-yellow-900">
-              Partial recovery
+            <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin shrink-0" />
+            <div className="text-sm">
+              <span className="font-bold uppercase tracking-wider">
+                Adding {topup.requested} question
+                {topup.requested === 1 ? "" : "s"}
+              </span>
+              <span className="text-neutral-700 font-mono ml-2">
+                your existing questions stay exactly as they are.
+              </span>
             </div>
-            <p className="text-xs text-yellow-900 leading-relaxed">
-              The AI's response was cut off before completing this paper. We recovered the
-              questions that were finished — review them and use "Retry generation" if
-              you'd like a fresh, full attempt.
+          </div>
+        )}
+
+        {topup?.status === "failed" && (
+          <div
+            className="no-print mb-6 border-2 border-[#E63946] bg-red-50 p-4"
+            data-testid="topup-failed-banner"
+          >
+            <div className="font-bold uppercase tracking-wider text-sm text-red-900">
+              Could not add the missing questions
+            </div>
+            <p className="text-sm text-red-800 mt-1 font-mono break-words">
+              {topup.error || "The AI provider did not respond."}
             </p>
+            <p className="text-xs text-red-700 mt-2">
+              Nothing was lost — every question below is still here. Try again
+              when the provider settles.
+            </p>
+          </div>
+        )}
+
+        {isPartial && topup?.status !== "generating" && (
+          <div
+            className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4 flex items-start gap-3"
+            data-testid="partial-banner"
+          >
+            <WarningCircle
+              size={24}
+              weight="fill"
+              color="#FFC300"
+              className="shrink-0"
+            />
+            <div className="flex-1">
+              <div className="font-bold uppercase tracking-wider text-sm">
+                {missingCount > 0
+                  ? `${missingCount} question${missingCount === 1 ? "" : "s"} missing`
+                  : "Partial recovery"}
+              </div>
+              <div className="text-sm text-neutral-700 mt-1 font-mono">
+                {target > 0
+                  ? `${have} of ${target} generated. `
+                  : "The AI's response was cut off before this paper was finished. "}
+                Add the rest without touching the questions you already have.
+              </div>
+              <label className="flex items-center gap-2 mt-3 text-xs font-bold uppercase tracking-wider">
+                How many to add
+                <input
+                  type="number"
+                  min="1"
+                  max="200"
+                  value={topupValue}
+                  onChange={(e) => setTopupCount(Number(e.target.value))}
+                  className="qp-input w-20 py-1"
+                  disabled={busy}
+                  data-testid="topup-count-input"
+                />
+              </label>
+            </div>
+            <div className="flex flex-col gap-2 shrink-0">
+              <button
+                onClick={() => generateMissing(topupValue)}
+                disabled={busy}
+                className="qp-btn qp-btn-primary text-xs"
+                data-testid="generate-missing-questions-button"
+              >
+                {queuing
+                  ? "Starting..."
+                  : `Generate ${topupValue} more`}
+              </button>
+              <button
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Regenerate the whole paper? The questions you already have — and any edits — will be discarded."
+                    )
+                  ) {
+                    regenerateAll();
+                  }
+                }}
+                disabled={busy}
+                className="qp-btn qp-btn-secondary text-xs"
+                data-testid="paper-partial-regenerate-button"
+              >
+                Regenerate all
+              </button>
+            </div>
           </div>
         )}
         {/* Toolbar */}
@@ -381,13 +503,6 @@ export default function PaperView() {
                 >
                   <CheckCircle size={16} weight="bold" /> Solution
                 </Link>
-                <button
-                  onClick={() => window.print()}
-                  className="qp-btn qp-btn-secondary"
-                  data-testid="print-button"
-                >
-                  <Printer size={16} weight="bold" /> Print
-                </button>
                 <button
                   onClick={download}
                   className="qp-btn qp-btn-primary"
@@ -609,11 +724,7 @@ export default function PaperView() {
                               })}
                             </div>
                           )}
-                        {q.diagram_path && (
-                          <div className="mt-3 pl-6">
-                            <DiagramImage paperId={id} questionId={q.id} />
-                          </div>
-                        )}
+                        <QuestionDiagram paperId={id} question={q} />
                       </li>
                     );
                   }
@@ -693,20 +804,7 @@ export default function PaperView() {
                             </span>
                           )}
                         </div>
-                        {q.diagram_path ? (
-                          <div className="mt-3 pl-6">
-                            <DiagramImage paperId={id} questionId={q.id} />
-                          </div>
-                        ) : q.diagram_status === "pending" ? (
-                          <div className="mt-3 pl-6">
-                            <div
-                              className="w-48 h-32 border-2 border-dashed border-neutral-300 flex items-center justify-center text-neutral-500 text-xs bg-neutral-50"
-                              data-testid={`diagram-pending-${q.id}`}
-                            >
-                              <ImageIcon size={18} /> &nbsp; generating diagram...
-                            </div>
-                          </div>
-                        ) : null}
+                        <QuestionDiagram paperId={id} question={q} />
                       </div>
                       <div className="no-print flex gap-1 pl-6 md:pl-0">
                         <button
@@ -755,42 +853,3 @@ export default function PaperView() {
     </div>
   );
 }
-
-// Fetches the diagram as a blob URL so the auth token can be sent via header.
-const DiagramImage = ({ paperId, questionId }) => {
-  const [src, setSrc] = useState(null);
-  useEffect(() => {
-    let revoked = false;
-    let currentUrl = null;
-    const token = localStorage.getItem("qp_token");
-    fetch(`${API}/papers/${paperId}/diagrams/${questionId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => (r.ok ? r.blob() : null))
-      .then((blob) => {
-        if (!blob || revoked) return;
-        currentUrl = URL.createObjectURL(blob);
-        setSrc(currentUrl);
-      })
-      .catch(() => {});
-    return () => {
-      revoked = true;
-      if (currentUrl) URL.revokeObjectURL(currentUrl);
-    };
-  }, [paperId, questionId]);
-  if (!src) {
-    return (
-      <div className="w-48 h-48 border-2 border-dashed border-neutral-300 flex items-center justify-center text-neutral-400 text-xs">
-        <ImageIcon size={18} /> &nbsp; diagram loading...
-      </div>
-    );
-  }
-  return (
-    <img
-      src={src}
-      alt="diagram"
-      className="max-w-xs border border-neutral-300 bg-white"
-      data-testid={`diagram-${questionId}`}
-    />
-  );
-};

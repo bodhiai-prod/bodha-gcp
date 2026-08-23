@@ -1,4 +1,4 @@
-"""LLM adapter backed by AWS Bedrock (Claude via the Converse API).
+"""LLM adapter for text and diagram generation, backed by Bedrock or OpenRouter.
 
 Replaces the original Emergent universal-key adapter. The public surface is
 unchanged — `chat_complete`, `chain_for_exam`, `generate_diagram`, and
@@ -13,8 +13,11 @@ Configuration (all via environment / backend/.env):
     BEDROCK_MAX_TOKENS         max output tokens per call
     BEDROCK_TEMPERATURE        sampling temperature
     ENABLE_DIAGRAMS            "false" disables diagram generation entirely
+    TEXT_PROVIDER              bedrock | openrouter (text only)
     IMAGE_PROVIDER             bedrock | huggingface | openrouter (images only)
-    OPENROUTER_API_KEY         key for the OpenRouter image provider
+    OPENROUTER_API_KEY         key for both OpenRouter providers
+    OPENROUTER_TEXT_MODEL_DEFAULT   e.g. openai/gpt-5.6
+    OPENROUTER_TEXT_MODEL_FALLBACK  e.g. anthropic/claude-opus-5
     OPENROUTER_IMAGE_MODEL     e.g. google/gemini-2.5-flash-image
     DIAGRAM_MAX_CONCURRENCY    process-wide ceiling on diagrams in flight
 
@@ -60,9 +63,16 @@ ENABLE_DIAGRAMS = os.environ.get("ENABLE_DIAGRAMS", "true").lower() not in (
     "no",
 )
 
-# --- diagram provider --------------------------------------------------------
-# Text generation is always Bedrock; only images are switchable. Defaults to
-# bedrock so an un-updated .env keeps working exactly as before.
+# --- providers ---------------------------------------------------------------
+# Text and images switch independently: the two workloads have different model
+# requirements and different billing, and in practice we have run a Bedrock text
+# model alongside an OpenRouter image model. Both default to bedrock so an
+# un-updated .env keeps working exactly as before.
+#
+# The model ids per provider live further down (BEDROCK_MODEL_* above,
+# OPENROUTER_TEXT_MODEL_* below); the active pair is resolved once into
+# TEXT_MODEL_DEFAULT / TEXT_MODEL_FALLBACK where PROVIDER_CHAIN is built.
+TEXT_PROVIDER = os.environ.get("TEXT_PROVIDER", "bedrock").strip().lower()
 IMAGE_PROVIDER = os.environ.get("IMAGE_PROVIDER", "bedrock").strip().lower()
 
 # Hugging Face dedicated Inference Endpoint. The text-to-image task schema is
@@ -92,6 +102,30 @@ OPENROUTER_BASE_URL = os.environ.get(
     "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
 ).rstrip("/")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+
+# Text models, read only when TEXT_PROVIDER is openrouter. Two genuinely
+# different vendors on purpose: the Bedrock pair currently has the same id in
+# both slots, which makes its fallback a no-op retry rather than a real one.
+OPENROUTER_TEXT_MODEL_DEFAULT = os.environ.get(
+    "OPENROUTER_TEXT_MODEL_DEFAULT", "openai/gpt-5.6"
+)
+OPENROUTER_TEXT_MODEL_FALLBACK = os.environ.get(
+    "OPENROUTER_TEXT_MODEL_FALLBACK", "anthropic/claude-opus-5"
+)
+# Deliberately BELOW chat_complete's per-call budget (see _text_timeout): we
+# want a slow call to surface as a real HTTP error — recorded, attributed to a
+# model — rather than be abandoned anonymously by asyncio.wait_for.
+OPENROUTER_TEXT_TIMEOUT = float(os.environ.get("OPENROUTER_TEXT_TIMEOUT", "150"))
+# Default to the Bedrock values so neither has to be set; separate vars because
+# a per-provider ceiling is the first thing you reach for when one model
+# truncates papers and the other does not.
+OPENROUTER_TEXT_MAX_TOKENS = int(
+    os.environ.get("OPENROUTER_TEXT_MAX_TOKENS", str(MAX_TOKENS))
+)
+OPENROUTER_TEXT_TEMPERATURE = float(
+    os.environ.get("OPENROUTER_TEXT_TEMPERATURE", str(TEMPERATURE))
+)
+
 OPENROUTER_IMAGE_MODEL = os.environ.get(
     "OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image"
 )
@@ -122,7 +156,8 @@ DIAGRAM_MAX_CONCURRENCY = int(os.environ.get("DIAGRAM_MAX_CONCURRENCY", "12"))
 # no negative prompt, and Gemini can spell.
 _NEGATIVE_PROMPT = (
     "color, shading, gradients, 3d, render, photo, realistic, texture, "
-    "watermark, text, words, letters, labels, captions"
+    "watermark, text, words, letters, labels, captions, "
+    "solution, answer, calculation, working, measurements, numbers"
 )
 
 # --- load-testing stubs ------------------------------------------------------
@@ -216,20 +251,31 @@ _STUB_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
 
+# The active text pair. Every chain below is built from these two names rather
+# than from the provider-specific ids, so switching TEXT_PROVIDER re-points all
+# routing at once and chat_complete never has to know which provider it is on.
+if TEXT_PROVIDER == "openrouter":
+    TEXT_MODEL_DEFAULT = OPENROUTER_TEXT_MODEL_DEFAULT
+    TEXT_MODEL_FALLBACK = OPENROUTER_TEXT_MODEL_FALLBACK
+else:
+    TEXT_MODEL_DEFAULT = MODEL_DEFAULT
+    TEXT_MODEL_FALLBACK = MODEL_FALLBACK
+
 # Default chain: try the fast/cheap model first, fall through to the stronger
-# one. Both ids come from the environment so they can be swapped without code
-# changes (model availability differs per AWS account and region).
-PROVIDER_CHAIN: list[str] = [MODEL_DEFAULT, MODEL_FALLBACK]
+# one. Every id comes from the environment so they can be swapped without code
+# changes (model availability differs per AWS account and region, and per
+# OpenRouter account for the hosted models).
+PROVIDER_CHAIN: list[str] = [TEXT_MODEL_DEFAULT, TEXT_MODEL_FALLBACK]
 
 # Per-task model routing for competitive-exam papers. The first model is tried
 # first; the rest are fallbacks with the same retry behaviour as the default
 # chain. Exams that reward deeper reasoning lead with the stronger model.
 EXAM_PROVIDER_CHAINS: dict[str, list[str]] = {
-    "JEE_MAINS": [MODEL_DEFAULT, MODEL_FALLBACK],
-    "JEE_ADV": [MODEL_FALLBACK, MODEL_DEFAULT],
-    "UPSC": [MODEL_FALLBACK, MODEL_DEFAULT],
-    "CAT": [MODEL_DEFAULT, MODEL_FALLBACK],
-    "NEET": [MODEL_DEFAULT, MODEL_FALLBACK],
+    "JEE_MAINS": [TEXT_MODEL_DEFAULT, TEXT_MODEL_FALLBACK],
+    "JEE_ADV": [TEXT_MODEL_FALLBACK, TEXT_MODEL_DEFAULT],
+    "UPSC": [TEXT_MODEL_FALLBACK, TEXT_MODEL_DEFAULT],
+    "CAT": [TEXT_MODEL_DEFAULT, TEXT_MODEL_FALLBACK],
+    "NEET": [TEXT_MODEL_DEFAULT, TEXT_MODEL_FALLBACK],
 }
 
 
@@ -247,6 +293,16 @@ def chain_for_exam(exam_type: str | None) -> list[str]:
 RETRY_MAX_ATTEMPTS = 3  # per model
 RETRY_BASE_DELAY_SEC = 2.0
 RETRY_BACKOFF = 2.0  # 2s, 4s, 8s
+
+# HTTP statuses from OpenRouter worth another attempt. 408 and 409 are here
+# because OpenRouter returns them for upstream queue timeouts and races, not for
+# anything malformed in what we sent.
+_OPENROUTER_RETRYABLE = frozenset({408, 409, 429, 500, 502, 503, 504})
+
+# Stamped into the error message for those statuses so _is_transient() can
+# recognise them. A tag rather than a bare "500" marker because that check runs
+# over the whole message, where "500" would also match a token count like 1500.
+_TRANSIENT_TAG = "transient upstream"
 
 
 # Substrings that mark a TRANSIENT upstream error worth retrying. Anything
@@ -279,6 +335,8 @@ _TRANSIENT_MARKERS = (
     "endpointconnectionerror",
     "connecttimeouterror",
     "readtimeouterror",
+    # OpenRouter statuses — see _OPENROUTER_RETRYABLE above.
+    _TRANSIENT_TAG,
 )
 
 
@@ -392,6 +450,174 @@ def _converse_sync(model_id: str, system_message: str, user_text: str) -> str:
     return "".join(b["text"] for b in blocks if "text" in b)
 
 
+def _openrouter_text_content(message: dict) -> str:
+    """Text out of one chat-completions message.
+
+    `content` is a plain string for every model we route to, but the schema also
+    permits the multipart list form, and a reasoning model can return null
+    content with its output in `reasoning` instead. Handle all three rather than
+    let a shape change surface as a silently empty paper.
+    """
+    content = message.get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = "".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") in (None, "text")
+        )
+    else:
+        text = ""
+    if not text.strip():
+        reasoning = message.get("reasoning")
+        if isinstance(reasoning, str):
+            text = reasoning
+    return text
+
+
+def _chat_openrouter_sync(model_id: str, system_message: str, user_text: str) -> str:
+    """Blocking OpenRouter chat-completions call. Always run in a worker thread.
+
+    Same (model, system, user) -> text contract as _converse_sync, which is what
+    lets chat_complete's retry-then-fall-through engine drive either provider
+    without knowing the difference.
+
+    Deliberately NO inner retry loop, unlike _generate_image_openrouter. That one
+    has to retry itself because generate_diagram swallows failures; here the
+    caller already retries with backoff and then advances the chain, so a second
+    loop underneath would multiply the wall time the same way botocore's retries
+    would (see _client). Retryable failures are instead marked with
+    _TRANSIENT_TAG, which is what _is_transient() reads back out.
+    """
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("TEXT_PROVIDER=openrouter but OPENROUTER_API_KEY is unset")
+
+    payload = {
+        "model": model_id,
+        "messages": [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_text},
+        ],
+        "max_tokens": OPENROUTER_TEXT_MAX_TOKENS,
+        "temperature": OPENROUTER_TEXT_TEMPERATURE,
+    }
+
+    started = time.perf_counter()
+    try:
+        # Session, auth and attribution headers are shared with the diagram
+        # path; see _openrouter_session() below.
+        resp = _openrouter_session().post(
+            f"{OPENROUTER_BASE_URL}/chat/completions",
+            json=payload,
+            timeout=(10, OPENROUTER_TEXT_TIMEOUT),
+        )
+    except Exception as e:  # noqa: BLE001 — requests.RequestException et al
+        # Tagged rather than left to speak for itself: a socket failure against a
+        # hosted API is transient by definition, but requests phrases them in
+        # ways _is_transient has no marker for ("Max retries exceeded with url").
+        raise RuntimeError(f"OpenRouter request failed ({_TRANSIENT_TAG}): {e}") from e
+    latency_ms = int((time.perf_counter() - started) * 1000)
+
+    if resp.status_code in (401, 403):
+        # A bad key will never come good. Note the body, never the headers.
+        raise RuntimeError(
+            f"OpenRouter rejected credentials ({resp.status_code}). "
+            "Check OPENROUTER_API_KEY."
+        )
+    if resp.status_code in _OPENROUTER_RETRYABLE:
+        # No sleep and no loop here — chat_complete backs off and then advances
+        # the chain. The tag is what tells it this one is worth re-attempting.
+        raise RuntimeError(
+            f"OpenRouter returned {resp.status_code} ({_TRANSIENT_TAG}): "
+            f"{resp.text[:300]}"
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"OpenRouter returned {resp.status_code}: {resp.text[:300]}")
+
+    try:
+        body = resp.json()
+    except ValueError:
+        raise RuntimeError(
+            f"OpenRouter returned a non-JSON body: {resp.text[:300]}"
+        ) from None
+
+    # An upstream provider failure arrives as HTTP 200 with an `error` object and
+    # no choices, so the status code alone is not enough to call this a success.
+    if body.get("error"):
+        raise RuntimeError(f"OpenRouter error: {str(body['error'])[:300]}")
+
+    choices = body.get("choices") or []
+    message = (choices[0].get("message") or {}) if choices else {}
+    finish_reason = (choices[0].get("finish_reason") or "") if choices else ""
+
+    # Normalised to Bedrock's vocabulary: token_usage.record_tokens keys its
+    # "truncated" outcome on the literal string "max_tokens", and
+    # parse_json_response's salvage path exists for exactly this case.
+    stop_reason = "max_tokens" if finish_reason == "length" else finish_reason
+    if stop_reason == "max_tokens":
+        logger.warning(
+            f"OpenRouter {model_id} hit max_tokens "
+            f"({OPENROUTER_TEXT_MAX_TOKENS}); response is truncated"
+        )
+
+    if _usage_sink:
+        # Recorded here rather than in chat_complete for the same reason as
+        # _converse_sync: this is the only point that sees a call the caller's
+        # timeout may later abandon, and an abandoned call still bills.
+        try:
+            usage = body.get("usage") or {}
+            inp = int(usage.get("prompt_tokens") or 0)
+            out = int(usage.get("completion_tokens") or 0)
+            _usage_sink(
+                model_id,
+                # Bedrock's key names — record_tokens reads these, so keeping the
+                # mapping here means token_usage.py stays provider-agnostic.
+                {
+                    "inputTokens": inp,
+                    "outputTokens": out,
+                    "totalTokens": int(usage.get("total_tokens") or (inp + out)),
+                },
+                stop_reason=stop_reason,
+                latency_ms=latency_ms,
+            )
+        except Exception:  # noqa: BLE001 — accounting must never break generation
+            logger.debug("usage sink failed", exc_info=True)
+
+    # An empty string is a valid return: chat_complete treats it as a failed
+    # attempt and moves on, which is the right response to a content filter.
+    return _openrouter_text_content(message)
+
+
+def _text_complete_sync(model_id: str, system_message: str, user_text: str) -> str:
+    """Dispatch to the configured text provider. Always run in a worker thread.
+
+    TEXT_PROVIDER is read here rather than captured by the caller so that tests
+    can monkeypatch it, matching _generate_image_sync.
+    """
+    if TEXT_PROVIDER == "openrouter":
+        return _chat_openrouter_sync(model_id, system_message, user_text)
+    return _converse_sync(model_id, system_message, user_text)
+
+
+def _text_timeout() -> float:
+    """Per-call budget for chat_complete's asyncio.wait_for.
+
+    The inner/outer relationship inverts between the two providers, deliberately
+    in both cases:
+
+    * Bedrock — botocore's read_timeout is 180s and this is 165s, so a hung call
+      is abandoned out here while the request itself runs on and bills. That is
+      why _converse_sync owns the usage sink.
+    * OpenRouter — OPENROUTER_TEXT_TIMEOUT is the SHORTER of the two, so a slow
+      call comes back as an ordinary exception we can attribute to a model and
+      retry, and this budget is only a backstop against a wedged socket.
+    """
+    if TEXT_PROVIDER == "openrouter":
+        return OPENROUTER_TEXT_TIMEOUT + 15.0
+    return 165.0
+
+
 async def chat_complete(
     system_message: str,
     user_text: str,
@@ -405,10 +631,13 @@ async def chat_complete(
     5xx, timeouts) with exponential backoff. Non-transient errors (auth,
     model access, malformed request) fail fast and we move to the next model.
 
-    IMPORTANT: boto3 is synchronous and a Bedrock call can block for 60-150s.
-    Awaiting it on the event loop would freeze the whole FastAPI app — every
-    other request would queue behind it. Each call therefore runs in a worker
-    thread so the main loop stays free.
+    Which provider serves the chain is set by TEXT_PROVIDER; nothing in this
+    function depends on it beyond _text_complete_sync and _text_timeout.
+
+    IMPORTANT: both provider clients are synchronous and a call can block for
+    60-150s. Awaiting one on the event loop would freeze the whole FastAPI app —
+    every other request would queue behind it. Each call therefore runs in a
+    worker thread so the main loop stays free.
     """
     if LOAD_TEST_STUB:
         # Deliberately blocking sleep dispatched through asyncio.to_thread, NOT
@@ -419,7 +648,7 @@ async def chat_complete(
         await asyncio.to_thread(time.sleep, STUB_LATENCY_MS / 1000.0)
         return _stub_response(system_message)
 
-    PER_CALL_TIMEOUT = 165.0
+    PER_CALL_TIMEOUT = _text_timeout()
     last_err: Exception | None = None
     chain = provider_chain or PROVIDER_CHAIN
 
@@ -428,7 +657,7 @@ async def chat_complete(
             try:
                 response = await asyncio.wait_for(
                     asyncio.to_thread(
-                        _converse_sync, model_id, system_message, user_text
+                        _text_complete_sync, model_id, system_message, user_text
                     ),
                     timeout=PER_CALL_TIMEOUT,
                 )
@@ -872,7 +1101,7 @@ def _diagram_timeout() -> float:
     return inner + 30.0  # headroom for connect, transfer and PNG conversion
 
 
-def _diagram_prompt(description: str) -> str:
+def _diagram_prompt(spec: str | dict) -> str:
     """Build the image prompt for the configured provider.
 
     The two provider families want opposite things. Diffusion models weight the
@@ -881,22 +1110,68 @@ def _diagram_prompt(description: str) -> str:
     asking for black-and-white line art in the first sentence — so they get a
     keyword-led prompt. Gemini follows instructions and can spell, so it gets
     prose, and asks for the labels the diffusion prompt has to forbid.
+
+    `spec` is the structured figure spec from diagram_policy (already vetted and
+    scrubbed) or, for papers generated before that existed, a plain description
+    string. The structured form is what makes the annotation whitelist below
+    possible: the earlier version of this prompt told Gemini to "label the parts
+    clearly", and on a geometry question it duly printed the value the student
+    was asked to find. Labels are now an explicit list, and any measurement not
+    in `given_values` is forbidden outright.
     """
+    if isinstance(spec, dict):
+        description = spec.get("figure") or ""
+        labels = [str(x) for x in (spec.get("labels") or [])]
+        givens = [str(x) for x in (spec.get("given_values") or [])]
+        unknowns = [str(x) for x in (spec.get("unknowns") or [])]
+    else:
+        description, labels, givens, unknowns = str(spec), [], [], []
+
     if IMAGE_PROVIDER == "openrouter":
         # The exclusions carried by _NEGATIVE_PROMPT have to live in the
         # positive text here: the Gemini image endpoints take no negative
-        # prompt. The label ban is dropped on purpose — legible labelling is
-        # the reason to use this provider at all.
-        return (
-            f"A black and white line drawing for a school exam paper: {description}. "
+        # prompt. The blanket label ban is still dropped — legible labelling is
+        # the reason to use this provider — but it is now a closed list rather
+        # than an invitation to annotate whatever the model thinks it sees.
+        parts = [
+            f"A black and white line drawing for a school exam paper: "
+            f"{description}. "
             f"Draw it as a clean, simple, flat 2D diagram with plain black "
             f"outlines on a plain white background, in the style of a "
-            f"scientific textbook figure. "
-            f"Label the parts clearly with short printed text and leader lines, "
-            f"using correct spelling and only terms relevant to the subject. "
-            f"No colour, no shading or gradients, no 3D or perspective, no "
-            f"photorealism or texture, no watermark, no title, no border."
+            f"scientific textbook figure."
+        ]
+        if labels:
+            parts.append(
+                "Print these labels and no others, spelled exactly as given, "
+                "with short leader lines where needed: " + ", ".join(labels) + "."
+            )
+        if givens:
+            parts.append(
+                "Print these measurements exactly as written and no others: "
+                + "; ".join(givens)
+                + "."
+            )
+        if unknowns:
+            parts.append(
+                "Mark each of the following with its symbol alone — never with "
+                "a number, since it is what the student must work out: "
+                + "; ".join(unknowns)
+                + "."
+            )
+        parts.append(
+            "Do not print any measurement, angle, length, coordinate, value or "
+            "annotation that is not listed above. Do not show any working, "
+            "solution steps, construction lines or arrows indicating a "
+            "calculation."
         )
+        parts.append(
+            "No colour, no shading or gradients, no 3D or perspective, no "
+            "photorealism or texture, no watermark, no title, no border."
+        )
+        return " ".join(parts)
+
+    # Diffusion path: text is suppressed wholesale (see _NEGATIVE_PROMPT), so
+    # the givens can only be conveyed by the question text, not the figure.
     return (
         f"black and white line art diagram, {description}, "
         f"simple clean outlines, monochrome, flat 2D, white background, "
@@ -921,9 +1196,12 @@ def _diagram_semaphore() -> asyncio.Semaphore:
     return _diagram_sem
 
 
-async def generate_diagram(description: str) -> bytes | None:
+async def generate_diagram(spec: str | dict) -> bytes | None:
     """Generate a clean B&W line diagram for an exam question. Returns PNG bytes
     or None on failure. Non-raising — diagrams are best-effort.
+
+    `spec` is a vetted diagram spec (see diagram_policy.apply_diagram_policy) or
+    a plain description string for papers that predate it.
 
     Runs in a worker thread so the blocking HTTP call doesn't stall the FastAPI
     event loop (see chat_complete for the same pattern). The provider behind it
@@ -944,11 +1222,12 @@ async def generate_diagram(description: str) -> bytes | None:
         # flight at the provider — waiting here is the point, not a cost.
         async with _diagram_semaphore():
             return await asyncio.wait_for(
-                asyncio.to_thread(_generate_image_sync, _diagram_prompt(description)),
+                asyncio.to_thread(_generate_image_sync, _diagram_prompt(spec)),
                 timeout=_diagram_timeout(),
             )
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"Diagram generation failed for '{description[:40]}': {e}")
+        label = spec.get("figure", "") if isinstance(spec, dict) else str(spec)
+        logger.warning(f"Diagram generation failed for '{label[:40]}': {e}")
         return None
 
 
