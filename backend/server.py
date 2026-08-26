@@ -1,9 +1,10 @@
-"""FastAPI backend for Bodhi.ai (AI Question Paper Generator)."""
+"""FastAPI backend for Bodha AI (AI Question Paper Generator)."""
 # deps must be imported FIRST — it loads .env so subsequent imports
 # (auth.JWT_SECRET, llm_adapter API keys, storage credentials) succeed.
 from deps import api_router, app, client, db, logger, utcnow_iso  # noqa: I001
 
 import asyncio
+import hashlib
 import os
 import uuid
 from datetime import datetime, timezone
@@ -385,7 +386,7 @@ async def startup():
                 {
                     "id": admin_id,
                     "email": admin_email,
-                    "full_name": "Bodhi.ai Admin",
+                    "full_name": "Bodha AI Admin",
                     "role": "admin",
                     "password_hash": hash_password("admin123"),
                     "created_at": utcnow_iso(),
@@ -467,6 +468,7 @@ async def upload_textbook(
     subject: str = Query(...),
     class_name: str = Query(...),
     is_shared: bool = Query(False),
+    allow_duplicate: bool = Query(False),
     user: dict = Depends(get_current_user),
 ):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
@@ -477,6 +479,41 @@ async def upload_textbook(
         raise HTTPException(status_code=400, detail="Empty file")
     if len(data) > 500 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 500MB)")
+
+    # Detect the same PDF even if it has been renamed. Older textbook rows do
+    # not have a fingerprint, so retain a case-insensitive filename fallback
+    # for those records. The check is account-scoped: a shared/admin copy does
+    # not prevent a teacher from adding the book to their own library.
+    content_sha256 = hashlib.sha256(data).hexdigest()
+    if not allow_duplicate:
+        existing_books = await db.textbooks.find(
+            {"owner_id": user["id"], "is_deleted": False},
+            {"_id": 0, "id": 1, "original_filename": 1, "content_sha256": 1},
+        ).to_list(500)
+        incoming_name = file.filename.strip().casefold()
+        duplicate = next(
+            (
+                book
+                for book in existing_books
+                if book.get("content_sha256") == content_sha256
+                or (
+                    not book.get("content_sha256")
+                    and (book.get("original_filename") or "").strip().casefold()
+                    == incoming_name
+                )
+            ),
+            None,
+        )
+        if duplicate:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "duplicate_textbook",
+                    "message": "This book already appears to be in your library.",
+                    "existing_id": duplicate["id"],
+                    "existing_filename": duplicate.get("original_filename", ""),
+                },
+            )
 
     # Only admins can mark a book as shared at upload time. Teachers always
     # upload private books.
@@ -495,6 +532,7 @@ async def upload_textbook(
         "owner_id": user["id"],
         "storage_path": result["path"],
         "original_filename": file.filename,
+        "content_sha256": content_sha256,
         "subject": subject,
         "class_name": class_name,
         "status": "ingesting",
@@ -529,7 +567,11 @@ async def upload_textbook(
             }},
         )
 
-    asyncio.create_task(_ingest())
+    # Keep a strong process-level reference to ingestion. A bare create_task()
+    # is only weakly held by asyncio and can disappear after the upload request
+    # finishes (for example when the user navigates away from Textbooks).
+    # _spawn keeps the job alive independently of the page/request lifecycle.
+    _spawn(_ingest())
 
     return {
         "id": textbook_id,
@@ -1761,7 +1803,7 @@ import admin_routes  # noqa: F401, E402  pylint: disable=wrong-import-position
 # =========================================================
 @api_router.get("/")
 async def root():
-    return {"message": "Bodhi.ai - Question Paper API"}
+    return {"message": "Bodha AI - Question Paper API"}
 
 
 app.include_router(api_router)

@@ -45,7 +45,7 @@ export default function Login() {
             </div>
             <div>
               <div className="brand-mark text-2xl leading-none">
-                Bodhi<span className="accent">.ai</span>
+                Bodha <span className="accent">AI</span>
               </div>
               <div className="overline text-neutral-700 mt-1">
                 Question Paper Studio
@@ -68,7 +68,7 @@ export default function Login() {
           </div>
 
           <div className="overline text-neutral-600">
-            © Bodhi.ai — Academic control room
+            © Bodha AI — Academic control room
           </div>
         </div>
       </div>
