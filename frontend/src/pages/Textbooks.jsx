@@ -32,6 +32,17 @@ export default function Textbooks() {
     load();
   }, []);
 
+  // Ingestion belongs to the backend and continues across navigation. While
+  // this page is visible, refresh pending rows so completion appears without a
+  // manual reload. The interval is removed automatically on navigation.
+  useEffect(() => {
+    if (!textbooks.some((tb) => tb.status === "ingesting")) return undefined;
+    const interval = window.setInterval(() => {
+      load().catch(() => {});
+    }, 3000);
+    return () => window.clearInterval(interval);
+  }, [textbooks]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const onFile = (f) => {
     if (!f) return;
     if (!f.name.toLowerCase().endsWith(".pdf")) {
@@ -55,14 +66,39 @@ export default function Textbooks() {
     fd.append("file", file);
     setUploading(true);
     try {
-      await api.post(
-        `/textbooks/upload?subject=${encodeURIComponent(
-          subject
-        )}&class_name=${encodeURIComponent(className)}`,
-        fd,
-        { headers: { "Content-Type": "multipart/form-data" } }
-      );
-      toast.success("Textbook uploaded & indexed");
+      const uploadUrl = `/textbooks/upload?subject=${encodeURIComponent(
+        subject
+      )}&class_name=${encodeURIComponent(className)}`;
+      const uploadFile = (allowDuplicate = false) =>
+        api.post(
+          `${uploadUrl}&allow_duplicate=${allowDuplicate}`,
+          fd,
+          { headers: { "Content-Type": "multipart/form-data" } }
+        );
+
+      try {
+        await uploadFile();
+      } catch (err) {
+        const detail = err?.response?.data?.detail;
+        if (
+          err?.response?.status !== 409 ||
+          detail?.code !== "duplicate_textbook"
+        ) {
+          throw err;
+        }
+
+        const existingName = detail.existing_filename || file.name;
+        const confirmed = window.confirm(
+          `A book named "${existingName}" already exists in your library. ` +
+            "Is this the same book, and do you still want to upload it again?"
+        );
+        if (!confirmed) {
+          toast.message("Duplicate upload cancelled");
+          return;
+        }
+        await uploadFile(true);
+      }
+      toast.success("Upload accepted — ingestion is continuing in the background");
       setFile(null);
       setSubject("");
       setClassName("");
@@ -115,7 +151,7 @@ export default function Textbooks() {
           <span className="text-[#002FA7]">Topic Extraction.</span>
         </h1>
 
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 md:gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 md:gap-8 min-w-0">
           {/* Upload */}
           <form
             onSubmit={upload}
@@ -185,7 +221,7 @@ export default function Textbooks() {
           </form>
 
           {/* List */}
-          <div className="lg:col-span-3">
+          <div className="lg:col-span-3 min-w-0">
             <div className="overline text-neutral-500 mb-3">
               // INDEXED ({textbooks.length})
             </div>
@@ -207,26 +243,29 @@ export default function Textbooks() {
                     className="border-2 border-black bg-white"
                     data-testid={`textbook-${tb.id}`}
                   >
-                    <div className="p-4 flex flex-col md:flex-row md:items-center gap-3">
+                    <div className="p-4 flex flex-col md:flex-row md:items-center gap-3 min-w-0">
                       <button
                         onClick={() => toggleExpand(tb)}
-                        className="flex-1 flex items-start gap-3 text-left"
+                        className="flex-1 min-w-0 flex items-start gap-3 text-left"
                         data-testid={`textbook-toggle-${tb.id}`}
                       >
                         {expanded[tb.id] ? (
-                          <CaretDown size={20} weight="bold" />
+                          <CaretDown size={20} weight="bold" className="shrink-0" />
                         ) : (
-                          <CaretRight size={20} weight="bold" />
+                          <CaretRight size={20} weight="bold" className="shrink-0" />
                         )}
                         <div className="flex-1 min-w-0">
-                          <div className="font-bold truncate">
+                          <div
+                            className="font-bold leading-snug break-words [overflow-wrap:anywhere]"
+                            title={tb.original_filename}
+                          >
                             {tb.original_filename}
                           </div>
                           <div className="text-xs font-mono text-neutral-500 mt-0.5">
                             {tb.subject} · Class {tb.class_name}
                           </div>
                         </div>
-                        <div className="flex flex-wrap gap-1">
+                        <div className="flex flex-wrap gap-1 shrink-0">
                           {tb.is_shared && (
                             <span
                               className="qp-badge qp-badge-yellow"
@@ -253,7 +292,7 @@ export default function Textbooks() {
                           )}
                         </div>
                       </button>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2 shrink-0">
                         <button
                           onClick={() => extractTopics(tb.id)}
                           disabled={extractingId === tb.id || tb.is_owned === false}

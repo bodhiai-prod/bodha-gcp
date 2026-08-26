@@ -42,7 +42,7 @@ export default function Header() {
           </div>
           <div className="leading-none">
             <div className="brand-mark text-xl">
-              Bodhi<span className="accent">.ai</span>
+              Bodha <span className="accent">AI</span>
             </div>
             <div className="overline text-neutral-500 text-[10px] mt-0.5">
               Question Paper Studio

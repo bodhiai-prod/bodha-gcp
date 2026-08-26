@@ -142,7 +142,7 @@ export default function Register() {
             </div>
             <div>
               <div className="brand-mark text-2xl leading-none">
-                Bodhi<span className="accent">.ai</span>
+                Bodha <span className="accent">AI</span>
               </div>
               <div className="overline text-neutral-700 mt-1">
                 Question Paper Studio
@@ -154,10 +154,10 @@ export default function Register() {
             <h1 className="font-display text-5xl lg:text-6xl leading-[0.9]">
               Join the
               <br />
-              <span className="text-[#002FA7]">Bodhi.ai studio.</span>
+              <span className="text-[#002FA7]">Bodha AI studio.</span>
             </h1>
           </div>
-          <div className="overline text-neutral-600">© Bodhi.ai</div>
+          <div className="overline text-neutral-600">© Bodha AI</div>
         </div>
       </div>
     </div>

@@ -8,6 +8,7 @@ import {
   Sparkle,
   ArrowRight,
   CheckSquare,
+  MinusSquare,
   Square,
   X as XIcon,
   Plus,
@@ -117,6 +118,34 @@ export default function NewPaper() {
     );
   };
 
+  const topicNamesForBook = (topics) =>
+    Array.from(
+      new Set(
+        topics.flatMap((topic) => [topic.name, ...(topic.subtopics || [])])
+      )
+    ).filter(Boolean);
+
+  const toggleAllTopicsForBook = (topics) => {
+    const names = topicNamesForBook(topics);
+    const selectedNames = new Set(selectedTopics.map((topic) => topic.name));
+    const allSelected = names.length > 0 && names.every((name) => selectedNames.has(name));
+
+    setSelectedTopics((curr) => {
+      if (allSelected) {
+        const namesToClear = new Set(names);
+        return curr.filter((topic) => !namesToClear.has(topic.name));
+      }
+
+      const existing = new Set(curr.map((topic) => topic.name));
+      return [
+        ...curr,
+        ...names
+          .filter((name) => !existing.has(name))
+          .map((name) => ({ name, weight: 5 })),
+      ];
+    });
+  };
+
   const setTopicWeight = (name, weight) => {
     setSelectedTopics((curr) =>
       curr.map((t) =>
@@ -142,11 +171,21 @@ export default function NewPaper() {
   };
 
   const setFormatValue = (key, v) => {
-    setFormats((curr) =>
-      curr.map((f) =>
-        f.key === key ? { ...f, value: clamp(v, 0, 100) } : f
-      )
-    );
+    setFormats((curr) => {
+      const selectedValue = Math.round(clamp(v, 0, 100));
+      const others = curr.filter((format) => format.key !== key);
+      if (others.length === 0) {
+        return curr.map((format) => ({ ...format, value: 100 }));
+      }
+
+      const redistributed = distributeFormatValues(others, 100 - selectedValue);
+      const values = new Map(redistributed.map((format) => [format.key, format.value]));
+      return curr.map((format) =>
+        format.key === key
+          ? { ...format, value: selectedValue }
+          : { ...format, value: values.get(format.key) }
+      );
+    });
   };
 
   const addCustomFormat = () => {
@@ -162,7 +201,10 @@ export default function NewPaper() {
   };
 
   const removeFormat = (key) => {
-    setFormats((curr) => curr.filter((f) => f.key !== key));
+    setFormats((curr) => {
+      const remaining = curr.filter((format) => format.key !== key);
+      return distributeFormatValues(remaining, 100);
+    });
   };
 
   const onGenerate = async (e) => {
@@ -438,21 +480,20 @@ export default function NewPaper() {
                 ) : (
                   <span
                     className={`qp-badge ${
-                      !formatActive
-                        ? "qp-badge-success"
-                        : formatTotal === 100
+                      formatTotal === 100
                         ? "qp-badge-success"
                         : "qp-badge-red"
                     }`}
                     data-testid="format-total"
                   >
-                    {formatActive ? `${formatTotal}%` : "AUTO"}
+                    {formatTotal}%
                   </span>
                 )}
               </div>
               <p className="text-xs text-neutral-500 font-mono mb-4">
                 MCQ, Short / Long Answer, Fill-in-the-blanks, True / False, or
-                add your own. Set all to 0 to let the AI decide.
+                add your own. Changing one automatically adjusts the others so
+                the total always remains 100%.
               </p>
 
               {formats.map((f) => (
@@ -626,6 +667,18 @@ Section B (40 marks) - Attempt any FOUR of the following SIX questions
                   const detail = tbDetails[bookId];
                   const tb = textbooks.find((t) => t.id === bookId);
                   const topics = detail?.topics || [];
+                  const bookTopicNames = topicNamesForBook(topics);
+                  const selectedNameSet = new Set(
+                    selectedTopics.map((topic) => topic.name)
+                  );
+                  const selectedBookTopicCount = bookTopicNames.filter((name) =>
+                    selectedNameSet.has(name)
+                  ).length;
+                  const allBookTopicsSelected =
+                    bookTopicNames.length > 0 &&
+                    selectedBookTopicCount === bookTopicNames.length;
+                  const someBookTopicsSelected =
+                    selectedBookTopicCount > 0 && !allBookTopicsSelected;
                   return (
                     <div key={bookId} data-testid={`book-topics-${bookId}`}>
                       <div className="flex items-center justify-between mb-2">
@@ -668,6 +721,33 @@ Section B (40 marks) - Attempt any FOUR of the following SIX questions
 
                       {topics.length > 0 && (
                         <div className="space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => toggleAllTopicsForBook(topics)}
+                            className="flex items-center gap-2 w-full border-2 border-black bg-white p-2 text-left hover:bg-neutral-50"
+                            aria-pressed={allBookTopicsSelected}
+                            data-testid={`topics-select-all-${bookId}`}
+                          >
+                            {allBookTopicsSelected ? (
+                              <CheckSquare
+                                size={18}
+                                weight="fill"
+                                color="#002FA7"
+                              />
+                            ) : someBookTopicsSelected ? (
+                              <MinusSquare
+                                size={18}
+                                weight="fill"
+                                color="#002FA7"
+                              />
+                            ) : (
+                              <Square size={18} weight="bold" />
+                            )}
+                            <span className="text-sm font-bold">Select all</span>
+                            <span className="ml-auto font-mono text-xs text-neutral-500">
+                              {selectedBookTopicCount}/{bookTopicNames.length}
+                            </span>
+                          </button>
                           {topics.map((t, i) => {
                             const items = [
                               { name: t.name, isTopic: true },
@@ -776,6 +856,35 @@ Section B (40 marks) - Attempt any FOUR of the following SIX questions
 }
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v)));
+
+// Scale a group of format values to an exact integer total. Existing ratios
+// are preserved where possible; if every value is zero, the space is shared
+// evenly. Largest remainders receive the leftover points so rounding can never
+// make the displayed total drift away from 100%.
+const distributeFormatValues = (formats, targetTotal) => {
+  if (formats.length === 0) return [];
+
+  const currentTotal = formats.reduce(
+    (sum, format) => sum + Number(format.value || 0),
+    0
+  );
+  const rawValues = formats.map((format) =>
+    currentTotal > 0
+      ? (Number(format.value || 0) / currentTotal) * targetTotal
+      : targetTotal / formats.length
+  );
+  const values = rawValues.map(Math.floor);
+  let remainder = targetTotal - values.reduce((sum, value) => sum + value, 0);
+  const remainderOrder = rawValues
+    .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
+    .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+
+  for (let i = 0; i < remainder; i += 1) {
+    values[remainderOrder[i % remainderOrder.length].index] += 1;
+  }
+
+  return formats.map((format, index) => ({ ...format, value: values[index] }));
+};
 
 const SliderRow = ({ label, value, onChange, readOnly, color, testid }) => (
   <div className="mb-4 last:mb-0" data-testid={testid}>
