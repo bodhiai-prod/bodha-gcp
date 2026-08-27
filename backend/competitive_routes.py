@@ -33,14 +33,19 @@ from prompts import (
     competitive_qgen_prompt,
     competitive_system_for_exam,
 )
+from instruction_spec import parse_instructions, verify as verify_instructions
+from question_dedupe import dedupe_sections
+from question_repair import complete_sections, validate_question
 from rag import top_k_similar, difficulty_distribution
 from storage import APP_NAME, put_object
+from topic_balance import measure_coverage
 from token_usage import tag
 from workers import (
     count_questions,
     generate_diagrams_background,
     merge_topup_sections,
     paper_target_count,
+    _auto_topup_if_short,
     _fail_topup,
     _finish_topup,
 )
@@ -52,7 +57,6 @@ from workers import (
 class ExamCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=80)
     description: str = ""
-    is_shared: bool = True
     exam_type: str = "GENERIC"  # JEE_MAINS | JEE_ADV | CAT | UPSC | NEET | GENERIC
 
 
@@ -65,6 +69,48 @@ class CompetitivePaperRequest(BaseModel):
     duration_minutes: int = Field(60, ge=5, le=300)
     format_distribution: dict = Field(default_factory=lambda: {"mcq": 100})
     custom_instructions: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Access control
+# ---------------------------------------------------------------------------
+# An exam and everything ingested into it belong to exactly one account.
+# These two helpers are the only sanctioned way to reach either, because the
+# leaks they replace were all the same mistake: a query that filtered on
+# exam_id and forgot there was an owner.
+async def _owned_exam(exam_id: str, user: dict, *, include_deleted: bool = False) -> dict:
+    """Fetch an exam the caller is allowed to touch, or raise.
+
+    Answers 404 rather than 403 for an exam belonging to somebody else. A
+    403 confirms the id exists, which is itself a disclosure -- and the ids
+    are handed out in URLs.
+    """
+    q: dict = {"id": exam_id}
+    if not include_deleted:
+        q["is_deleted"] = False
+    exam = await db.competitive_exams.find_one(q, {"_id": 0})
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    if user.get("role") != "admin" and exam.get("owner_id") != user.get("id"):
+        raise HTTPException(status_code=404, detail="Exam not found")
+    exam.setdefault("exam_type", "GENERIC")
+    return exam
+
+
+def _docs_of(exam: dict) -> dict:
+    """Query fragment selecting the documents that belong to this exam.
+
+    Scoped to the exam's OWNER rather than to the caller, and deliberately
+    so: every document in an exam belongs to the exam owner, which the
+    upload guard maintains and the migration establishes. One rule covers
+    every caller, admins included -- an admin opening an exam sees that
+    exam's real corpus, not a different view of it.
+
+    A document with no owner_id (an orphan the migration could not resolve)
+    matches nothing here and is invisible to everyone. Failing closed is the
+    right default for data whose provenance was lost.
+    """
+    return {"exam_id": exam.get("id"), "owner_id": exam.get("owner_id")}
 
 
 @api_router.get("/competitive-exams/formats")
@@ -87,7 +133,6 @@ async def create_exam(payload: ExamCreate, user: dict = Depends(get_current_user
         "id": exam_id,
         "name": payload.name.strip(),
         "description": payload.description.strip(),
-        "is_shared": bool(payload.is_shared),
         "exam_type": (payload.exam_type or "GENERIC").upper(),
         "owner_id": user["id"],
         "papers_count": 0,
@@ -102,12 +147,12 @@ async def create_exam(payload: ExamCreate, user: dict = Depends(get_current_user
 
 @api_router.get("/competitive-exams")
 async def list_exams(user: dict = Depends(get_current_user)):
-    if user["role"] == "student":
-        q = {"is_deleted": False, "is_shared": True}
-    elif user["role"] == "admin":
-        q = {"is_deleted": False}
-    else:
-        q = {"is_deleted": False, "$or": [{"owner_id": user["id"]}, {"is_shared": True}]}
+    # One rule for everyone: your own exams, or all of them if you are an
+    # admin. Students own none (creation is teacher/admin only), so they get
+    # an empty list -- the nav never offered them this section anyway.
+    q: dict = {"is_deleted": False}
+    if user["role"] != "admin":
+        q["owner_id"] = user["id"]
     rows = await db.competitive_exams.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
     for r in rows:
         r.setdefault("exam_type", "GENERIC")
@@ -116,23 +161,14 @@ async def list_exams(user: dict = Depends(get_current_user)):
 
 @api_router.get("/competitive-exams/{exam_id}")
 async def get_exam(exam_id: str, user: dict = Depends(get_current_user)):
-    exam = await db.competitive_exams.find_one(
-        {"id": exam_id, "is_deleted": False}, {"_id": 0}
-    )
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
-    exam.setdefault("exam_type", "GENERIC")
-    if (
-        not exam.get("is_shared")
-        and exam.get("owner_id") != user["id"]
-        and user["role"] != "admin"
-    ):
-        raise HTTPException(status_code=403, detail="Forbidden")
-    # Topic histogram across indexed past questions.
+    exam = await _owned_exam(exam_id, user)
+    # Topic histogram across indexed past questions. Scoped like everything
+    # else here -- an unscoped histogram still discloses what another account
+    # uploaded, in aggregate.
     topic_counts: dict = {}
     diff_counts = {"easy": 0, "medium": 0, "hard": 0}
     async for q in db.past_questions.find(
-        {"exam_id": exam_id}, {"_id": 0, "topic": 1, "difficulty": 1}
+        _docs_of(exam), {"_id": 0, "topic": 1, "difficulty": 1}
     ):
         t = (q.get("topic") or "Uncategorised").strip()
         topic_counts[t] = topic_counts.get(t, 0) + 1
@@ -141,9 +177,12 @@ async def get_exam(exam_id: str, user: dict = Depends(get_current_user)):
             diff_counts[d] += 1
     exam["topic_counts"] = topic_counts
     exam["difficulty_counts"] = diff_counts
+    # storage_path is the object-store key. Nothing in the UI uses it and it
+    # has no business leaving the server.
     papers = (
         await db.past_papers.find(
-            {"exam_id": exam_id, "is_deleted": False}, {"_id": 0}
+            {**_docs_of(exam), "is_deleted": False},
+            {"_id": 0, "storage_path": 0},
         )
         .sort("created_at", -1)
         .to_list(200)
@@ -155,7 +194,9 @@ async def get_exam(exam_id: str, user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 # Upload past paper -> ingest -> embed
 # ---------------------------------------------------------------------------
-async def _ingest_past_paper(paper_id: str, exam_id: str, pdf_bytes: bytes) -> None:
+async def _ingest_past_paper(
+    paper_id: str, exam_id: str, pdf_bytes: bytes, owner_id: str
+) -> None:
     """Background ingestion: extract text, LLM-parse questions, persist."""
     tag("past_paper", paper_id)
     try:
@@ -179,6 +220,9 @@ async def _ingest_past_paper(paper_id: str, exam_id: str, pdf_bytes: bytes) -> N
                         "id": str(uuid.uuid4()),
                         "exam_id": exam_id,
                         "paper_id": paper_id,
+                        # Without this the extracted text is reachable from
+                        # any account that knows the exam id.
+                        "owner_id": owner_id,
                         "text": qt,
                         "marks": int(q.get("marks", 2) or 2),
                         "type": q.get("type", "concept"),
@@ -222,9 +266,9 @@ async def upload_past_paper(
 ):
     if user["role"] not in ("teacher", "admin"):
         raise HTTPException(status_code=403, detail="Teacher or admin only")
-    exam = await db.competitive_exams.find_one({"id": exam_id, "is_deleted": False})
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
+    # Used to check only that the exam existed, so anyone could upload into
+    # anyone's exam -- and inflate their counters doing it.
+    exam = await _owned_exam(exam_id, user)
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
     pdf_bytes = await file.read()
@@ -244,6 +288,11 @@ async def upload_past_paper(
         "id": paper_id,
         "exam_id": exam_id,
         "original_filename": file.filename,
+        # owner_id is the field every access check reads and matches the
+        # convention used by every other collection. uploaded_by is kept in
+        # step with it so documents written before the migration and after it
+        # look the same to anything still reading the old name.
+        "owner_id": exam.get("owner_id"),
         "uploaded_by": user["id"],
         "storage_path": path,
         "status": "ingesting",
@@ -257,7 +306,9 @@ async def upload_past_paper(
         {"id": exam_id}, {"$inc": {"papers_count": 1}}
     )
 
-    _asyncio.create_task(_ingest_past_paper(paper_id, exam_id, pdf_bytes))
+    _asyncio.create_task(
+        _ingest_past_paper(paper_id, exam_id, pdf_bytes, exam.get("owner_id"))
+    )
     doc.pop("_id", None)
     return doc
 
@@ -268,11 +319,15 @@ async def delete_past_paper(
 ):
     if user["role"] not in ("teacher", "admin"):
         raise HTTPException(status_code=403, detail="Teacher or admin only")
+    await _owned_exam(exam_id, user)
     p = await db.past_papers.find_one({"id": paper_id, "exam_id": exam_id})
     if not p:
         raise HTTPException(status_code=404, detail="Past paper not found")
-    if p["uploaded_by"] != user["id"] and user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    # owner_id is the current field; uploaded_by covers a row the migration
+    # has not reached yet.
+    owner = p.get("owner_id") or p.get("uploaded_by")
+    if owner != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=404, detail="Past paper not found")
     await db.past_papers.update_one({"id": paper_id}, {"$set": {"is_deleted": True}})
     # Tombstone the questions too so RAG retrieval ignores them.
     res = await db.past_questions.delete_many({"paper_id": paper_id})
@@ -286,11 +341,20 @@ async def delete_past_paper(
 # ---------------------------------------------------------------------------
 # RAG-calibrated paper generation
 # ---------------------------------------------------------------------------
-async def _retrieve_anchors(exam_id: str, topics: list[str], k_per_topic: int = 3) -> list[dict]:
+async def _retrieve_anchors(
+    exam: dict, topics: list[str], k_per_topic: int = 3
+) -> list[dict]:
     """For each topic build a focused similarity query and grab top-K
-    anchors. Deduplicate by question_id."""
+    anchors. Deduplicate by question_id.
+
+    Takes the exam DOCUMENT, not its id, because the corpus has to be scoped
+    to the owner. This used to select on exam_id alone, which put another
+    account's extracted question text verbatim into this account's generation
+    prompt -- the quietest of the leaks, since it never surfaced in a
+    response.
+    """
     corpus = await db.past_questions.find(
-        {"exam_id": exam_id},
+        _docs_of(exam),
         {"_id": 0, "id": 1, "text": 1, "topic": 1, "difficulty": 1, "marks": 1, "type": 1},
     ).to_list(5000)
     if not corpus:
@@ -308,10 +372,72 @@ async def _retrieve_anchors(exam_id: str, topics: list[str], k_per_topic: int = 
     return anchors
 
 
+# Only the structural faults _normalise_questions already dropped for. A stem
+# that reads oddly still renders and is still answerable, so it is reported
+# and left alone rather than silently deleted from the teacher's paper.
+_STRICT_DROP_ISSUES = {"mcq_missing_options", "blank_option", "bad_correct_option"}
+
+
+def _reject(rejects: Optional[list], q: dict) -> None:
+    """Hand a dropped question to the caller, if the caller wanted it."""
+    if rejects is not None:
+        rejects.append(q)
+
+
+def _drop_unfinished(sections: list) -> int:
+    """Remove strict-MCQ questions the completion pass could not finish.
+
+    The last gate before a locked-format paper is saved: an item that still
+    has no fourth option cannot be shown on a JEE or NEET paper. Returns how
+    many went, for the completeness_check stats.
+    """
+    dropped = 0
+    for s in sections or []:
+        kept = []
+        for q in s.get("questions", []) or []:
+            if _STRICT_DROP_ISSUES & set(validate_question(q, strict_mcq=True)):
+                dropped += 1
+                continue
+            kept.append(q)
+        s["questions"] = kept
+    return dropped
+
+
+async def _complete_and_gate(
+    sections: list,
+    *,
+    ref: str,
+    strict_mcq: bool,
+    exam_type: str,
+    difficulty: str,
+    rejects: Optional[list] = None,
+    room: Optional[int] = None,
+) -> dict:
+    """Fold rejects back in, finish what is unfinished, then re-gate.
+
+    Rejects are merged BEFORE the completion call rather than repaired
+    separately, so a paper that lost questions two different ways still only
+    pays for one repair call.
+    """
+    if rejects and sections:
+        take = rejects if room is None else rejects[:max(0, room)]
+        sections[0].setdefault("questions", []).extend(take)
+    stats = await complete_sections(
+        sections,
+        ref=ref,
+        strict_mcq=strict_mcq,
+        context={"exam_type": exam_type, "difficulty": difficulty},
+    )
+    if strict_mcq:
+        stats["dropped"] = _drop_unfinished(sections)
+    return stats
+
+
 def _normalise_questions(
     sections: list,
     default_difficulty: str,
     strict_mcq: bool = False,
+    rejects: Optional[list] = None,
 ) -> list:
     """In-place normalise sections + return the flat question list.
 
@@ -319,7 +445,12 @@ def _normalise_questions(
     NEET — all locked to 100% 4-option MCQ), any question that arrives
     without exactly 4 options or with no valid correct_option is DROPPED
     rather than degraded. Batching gives us extra questions to absorb the
-    occasional reject."""
+    occasional reject.
+
+    Pass `rejects` to collect those drops instead of losing them. A question
+    that arrives with two options is not junk, it is an unfinished question,
+    and question_repair can usually finish it -- but only if something kept
+    hold of it."""
     for s in sections:
         kept: list = []
         for q in s.get("questions", []):
@@ -339,16 +470,25 @@ def _normalise_questions(
 
             if strict_mcq:
                 # In MCQ-only mode every question MUST be a valid 4-option MCQ.
+                # Write the cleaned values back before any drop decision, so a
+                # rejected question travels to the repair pass in the same
+                # shape a kept one would.
+                q["format"] = "mcq"
+                q["options"] = opts
                 if len(opts) != 4:
-                    continue  # drop
+                    _reject(rejects, q)
+                    continue
                 try:
                     co = int(q.get("correct_option", 0))
                 except (TypeError, ValueError):
-                    co = 0
+                    # Was 0, which reads as a valid index and shipped a wrong
+                    # answer key. -1 fails validate_question instead, so the
+                    # repair pass is asked to solve the question properly.
+                    co = -1
                 if not (0 <= co <= 3):
-                    continue  # drop
-                q["format"] = "mcq"
-                q["options"] = opts
+                    q["correct_option"] = co
+                    _reject(rejects, q)
+                    continue
                 q["correct_option"] = co
                 kept.append(q)
                 continue
@@ -370,6 +510,48 @@ def _normalise_questions(
     return [q for s in sections for q in s.get("questions", [])]
 
 
+def _partition_topics(topics: list, sizes: list) -> list:
+    """Give each batch its own slice of the topic list.
+
+    Every batch used to be handed the FULL topic list. Batches run
+    concurrently, so N independent calls each saw the same topics, the same
+    anchors and the same difficulty, and each independently decided its own
+    mix -- which is why a handful of topics ended up dominating and why the
+    same question came back from two batches at once. Splitting the list
+    fixes both: a topic belongs to one batch, and no two batches can write
+    about it in parallel.
+
+    Slices are sized by each batch's question count. Competitive requests
+    carry no weights, so the split is even -- which is the right default and
+    is what "distribute equally when nothing is adjusted" means here. When
+    there are fewer topics than batches the list cycles, so a small topic set
+    across many batches still spreads rather than starving the tail.
+    """
+    topics = [t for t in (topics or []) if str(t).strip()]
+    if not topics or not sizes:
+        return [list(topics) for _ in (sizes or [1])]
+    if len(topics) <= len(sizes):
+        return [[topics[i % len(topics)]] for i in range(len(sizes))]
+
+    total = sum(sizes) or 1
+    out: list = []
+    cursor = 0
+    for idx, n in enumerate(sizes):
+        remaining_batches = len(sizes) - idx
+        # At least one topic each, and never more than leaves the batches
+        # after this one empty-handed.
+        want = max(1, round(len(topics) * n / total))
+        want = min(want, len(topics) - cursor - (remaining_batches - 1))
+        want = max(1, want)
+        out.append(topics[cursor:cursor + want] or [topics[cursor % len(topics)]])
+        cursor += want
+    # Anything left over from rounding joins the last batch rather than being
+    # silently dropped -- an unassigned topic gets zero questions.
+    if cursor < len(topics):
+        out[-1].extend(topics[cursor:])
+    return out
+
+
 async def _generate_one_batch(
     exam, exam_type: str, batch_topics: list[str], batch_count: int,
     batch_difficulty: str, batch_duration: int, anchors: list,
@@ -383,7 +565,9 @@ async def _generate_one_batch(
             (custom_instructions + "\n\n" if custom_instructions else "")
             + f"This is batch {batch_index + 1} of {batch_total} for the full "
             f"paper. Generate EXACTLY {batch_count} ORIGINAL questions in this "
-            "batch. Vary question style so subsequent batches don't repeat your phrasing."
+            "batch, covering ONLY the topics listed for it -- the other topics "
+            "belong to other batches and are being written in parallel. Vary "
+            "question style so subsequent batches don't repeat your phrasing."
         )
     prompt = competitive_qgen_prompt(
         exam_name=exam.get("name", "Competitive Exam"),
@@ -440,7 +624,7 @@ async def generate_missing_competitive_questions(paper_id: str, count: int) -> N
         fmt_dist = p.get("format_distribution") or {}
         batch_size = spec["batch_size"] if spec else max(count, 30)
 
-        anchors = await _retrieve_anchors(p.get("competitive_exam_id"), topics)
+        anchors = await _retrieve_anchors(exam, topics)
         rag_dist = difficulty_distribution(anchors)
 
         existing_sections = p.get("sections") or []
@@ -462,6 +646,7 @@ async def generate_missing_competitive_questions(paper_id: str, count: int) -> N
         sizes = [count // num_batches] * num_batches
         for i in range(count - sum(sizes)):
             sizes[i] += 1
+        batch_topic_sets = _partition_topics(topics, sizes)
 
         # Same concurrency cap as first-pass generation.
         semaphore = _asyncio.Semaphore(3)
@@ -471,7 +656,7 @@ async def generate_missing_competitive_questions(paper_id: str, count: int) -> N
                 return await _generate_one_batch(
                     exam=exam,
                     exam_type=exam_type,
-                    batch_topics=topics,
+                    batch_topics=batch_topic_sets[idx],
                     batch_count=n,
                     batch_difficulty=difficulty,
                     batch_duration=duration,
@@ -516,10 +701,23 @@ async def generate_missing_competitive_questions(paper_id: str, count: int) -> N
             and len(fmt_dist) == 1
             and (fmt_dist.get("mcq") or 0) >= 100
         )
-        _normalise_questions(new_sections, difficulty, strict_mcq=strict_mcq)
+        rejects: list = []
+        _normalise_questions(
+            new_sections, difficulty, strict_mcq=strict_mcq, rejects=rejects
+        )
+        await _complete_and_gate(
+            new_sections,
+            ref=paper_id,
+            strict_mcq=strict_mcq,
+            exam_type=p.get("exam_type") or "",
+            difficulty=difficulty,
+            rejects=rejects,
+        )
         if not count_questions(new_sections):
             raise RuntimeError("The model returned no usable questions.")
 
+        # Compare against the whole paper, and let only the NEW questions lose.
+        dedupe_sections(new_sections, ref=paper_id, against=existing_sections)
         await repair_sections(new_sections, ref=paper_id)
         pending_count = apply_diagram_policy(new_sections, ref=paper_id)
         for s in new_sections:
@@ -568,7 +766,17 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
         if not exam:
             raise RuntimeError(f"exam {req.exam_id} missing")
         exam_type = (exam.get("exam_type") or "GENERIC").upper()
-        anchors = await _retrieve_anchors(req.exam_id, req.topics)
+        # The section and syllabus parts of the box apply here too. Counts
+        # deliberately do not: a competitive paper's question count is
+        # locked by the exam format, and batches are sized from it.
+        spec = await parse_instructions(
+            req.custom_instructions or "",
+            ref=paper_id,
+            context={"exam_type": exam_type, "difficulty": req.difficulty},
+        )
+        spec["total_questions"] = 0
+        spec["format_counts"] = {}
+        anchors = await _retrieve_anchors(exam, req.topics)
         rag_dist = difficulty_distribution(anchors)
 
         spec = get_format(exam_type)
@@ -589,6 +797,7 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
         sizes = [total_q // num_batches] * num_batches
         for i in range(total_q - sum(sizes)):
             sizes[i] += 1
+        batch_topic_sets = _partition_topics(req.topics, sizes)
 
         # Run batches in parallel (capped concurrency=3 to avoid hammering
         # the LLM gateway and blowing per-tenant rate limits). With per-call
@@ -601,7 +810,7 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
                 return idx, await _generate_one_batch(
                     exam=exam,
                     exam_type=exam_type,
-                    batch_topics=req.topics,
+                    batch_topics=batch_topic_sets[idx],
                     batch_count=count,
                     batch_difficulty=req.difficulty,
                     batch_duration=duration,
@@ -656,7 +865,10 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             and len(fmt_dist) == 1
             and (fmt_dist.get("mcq") or 0) >= 100
         )
-        _normalise_questions(sections, req.difficulty, strict_mcq=strict_mcq)
+        rejects: list = []
+        _normalise_questions(
+            sections, req.difficulty, strict_mcq=strict_mcq, rejects=rejects
+        )
     except Exception as e:  # noqa: BLE001
         logger.exception("Competitive paper generation failed")
         await db.papers.update_one(
@@ -667,6 +879,31 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             }},
         )
         return
+
+    # Drop repeats before the completion pass, not after: dropping first widens
+    # the `room` below, so a duplicate makes space for a strict-MCQ reject that
+    # can actually be recovered. Concurrent batches are the main source here --
+    # they cannot see each other's output, so only this can.
+    topics_weighted = [{"name": t, "weight": 5} for t in (req.topics or [])]
+    coverage = measure_coverage(sections, topics_weighted, total_q)
+    dedupe_stats = dedupe_sections(sections, ref=paper_id, coverage=coverage)
+
+    # Finish the questions that arrived incomplete, including the ones strict
+    # MCQ mode had to reject. The cap at the top of this function ran before
+    # those rejections, so the paper is short by exactly the number dropped
+    # and there is room for every one that can be recovered.
+    completeness_stats = await _complete_and_gate(
+        sections,
+        ref=paper_id,
+        strict_mcq=strict_mcq,
+        exam_type=exam_type,
+        difficulty=req.difficulty,
+        rejects=rejects,
+        room=total_q - count_questions(sections),
+    )
+
+    # Re-measure: both passes above changed the counts.
+    coverage = measure_coverage(sections, topics_weighted, total_q)
 
     # Same LaTeX gate as the school path, in the same position: before the
     # diagram policy flattens anything and before generation_status goes ready.
@@ -701,6 +938,10 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             "exam_type": exam_type,
             "recovered_from_truncation": recovered,
             "latex_check": latex_stats,
+            "completeness_check": completeness_stats,
+            "dedupe_check": dedupe_stats,
+            "topic_coverage": coverage,
+            "instruction_check": verify_instructions(sections, spec),
             "duration_minutes": spec["duration_minutes"] if spec else req.duration_minutes,
             "total_marks": spec["total_marks"] if spec else req.question_count,
             "format_distribution": (
@@ -714,6 +955,11 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
     if pending_count > 0:
         await generate_diagrams_background(paper_id, user_id)
 
+    # A competitive paper goes short the other way: whole batches fail and
+    # are only counted. Same remedy, same single attempt - the worker routes
+    # itself back here for the actual generation.
+    await _auto_topup_if_short(paper_id, user_id)
+
 
 @api_router.post("/competitive-exams/{exam_id}/generate-paper")
 async def generate_competitive_paper(
@@ -725,9 +971,7 @@ async def generate_competitive_paper(
         raise HTTPException(status_code=403, detail="Teacher or admin only")
     if req.exam_id != exam_id:
         raise HTTPException(status_code=400, detail="exam_id mismatch in body")
-    exam = await db.competitive_exams.find_one({"id": exam_id, "is_deleted": False})
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
+    exam = await _owned_exam(exam_id, user)
 
     paper_id = str(uuid.uuid4())
     # Lock to official format spec when exam_type is a known preset.
@@ -792,8 +1036,12 @@ async def rag_preview(
     to show teachers what calibration the LLM will see."""
     if user["role"] not in ("teacher", "admin"):
         raise HTTPException(status_code=403, detail="Teacher or admin only")
+    # This route returns the literal text of ingested questions and used to
+    # authorise nothing at all -- any teacher holding an exam id could read
+    # another account's uploaded paper straight out of it.
+    exam = await _owned_exam(exam_id, user)
     corpus = await db.past_questions.find(
-        {"exam_id": exam_id},
+        _docs_of(exam),
         {"_id": 0, "id": 1, "text": 1, "topic": 1, "difficulty": 1, "marks": 1},
     ).to_list(5000)
     hits = top_k_similar(topic, corpus, k=k)

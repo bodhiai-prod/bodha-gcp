@@ -165,6 +165,29 @@ class Topic(BaseModel):
     subtopics: List[str] = []
 
 
+# The slider in NewPaper.jsx runs 1-10 and starts at 5. The clamp used to be
+# max(1, ...) with no ceiling, so a client posting weight=1000 took the whole
+# paper and starved every other topic -- the weights are apportioned as a
+# ratio, and one enormous number leaves the rest with nothing.
+TOPIC_WEIGHT_MIN = 1
+TOPIC_WEIGHT_MAX = 10
+TOPIC_WEIGHT_DEFAULT = 5
+
+
+def _clamp_weight(raw) -> int:
+    """A usable 1-10 weight from whatever the client sent.
+
+    A non-numeric weight used to raise straight out of the endpoint as an
+    unhandled 500; it now falls back to the default, because one bad slider
+    value is not a reason to refuse to generate a paper.
+    """
+    try:
+        weight = int(raw)
+    except (TypeError, ValueError):
+        return TOPIC_WEIGHT_DEFAULT
+    return max(TOPIC_WEIGHT_MIN, min(TOPIC_WEIGHT_MAX, weight))
+
+
 class PaperRequest(BaseModel):
     title: str
     subject: str
@@ -313,9 +336,9 @@ async def startup():
             ("papers", ["id", "owner_id"]),
             ("mock_tests", ["id", "student_id"]),
             ("qbank", ["owner_id"]),
-            ("competitive_exams", ["id"]),
+            ("competitive_exams", ["id", "owner_id"]),
             ("past_papers", ["exam_id"]),
-            ("past_questions", ["exam_id"]),
+            ("past_questions", ["exam_id", "paper_id"]),
         ):
             for key in keys:
                 await db[coll].create_index(key)
@@ -325,6 +348,11 @@ async def startup():
             await db[coll].create_index(
                 [("owner_id", 1), ("subject", 1), ("class_name", 1)]
             )
+        # Every read of an ingested competitive document is now scoped to the
+        # owner as well as the exam, so the single-key exam_id index above no
+        # longer matches the query shape on its own.
+        for coll in ("past_papers", "past_questions"):
+            await db[coll].create_index([("exam_id", 1), ("owner_id", 1)])
         logger.info("Indexes ensured")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"index create: {e}")
@@ -838,12 +866,12 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     topics_weighted: list = []
     for t in req.topics or []:
         if isinstance(t, str):
-            topics_weighted.append({"name": t.strip(), "weight": 5})
+            topics_weighted.append({"name": t.strip(), "weight": TOPIC_WEIGHT_DEFAULT})
         elif isinstance(t, dict) and t.get("name"):
             topics_weighted.append(
                 {
                     "name": str(t["name"]).strip(),
-                    "weight": max(1, int(t.get("weight", 5))),
+                    "weight": _clamp_weight(t.get("weight")),
                 }
             )
     topics_weighted = [t for t in topics_weighted if t["name"]]
@@ -872,12 +900,14 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "format_distribution": fmt_dist,
         "custom_instructions": custom_instructions,
         "section_blueprint": section_blueprint,
-        # Only meaningful when the slider settings are actually in
-        # charge. See workers.paper_target_count for why an override
-        # paper stores no target rather than a guessed one.
+        # A blueprint still states its count in prose nobody parses, so it
+        # stores 0 and paper_target_count declines to guess. Additional
+        # instructions no longer do: generate_paper_background parses them
+        # and writes the real number back, so the slider-derived value is a
+        # usable starting point rather than a wrong one.
         "target_question_count": (
             0
-            if (custom_instructions or section_blueprint)
+            if section_blueprint
             else derive_target_question_count(req.total_marks)
         ),
         "instructions": "",

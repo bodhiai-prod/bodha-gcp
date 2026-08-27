@@ -53,7 +53,6 @@ export default function CompetitiveExams() {
   const [form, setForm] = useState({
     name: "",
     description: "",
-    is_shared: true,
     exam_type: "GENERIC",
   });
 
@@ -63,7 +62,6 @@ export default function CompetitiveExams() {
       await api.post("/competitive-exams", {
         name: preset.name,
         description: preset.description,
-        is_shared: true,
         exam_type: preset.code,
       });
       toast.success(`${preset.name} library created`);
@@ -95,7 +93,7 @@ export default function CompetitiveExams() {
     try {
       await api.post("/competitive-exams", form);
       toast.success("Exam created");
-      setForm({ name: "", description: "", is_shared: true, exam_type: "GENERIC" });
+      setForm({ name: "", description: "", exam_type: "GENERIC" });
       load();
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Could not create exam");
@@ -195,11 +193,6 @@ export default function CompetitiveExams() {
                               {e.exam_type.replace("_", " ")}
                             </span>
                           )}
-                          {e.is_shared && (
-                            <span className="px-2 py-0.5 text-[10px] font-bold uppercase bg-[#EEF2FF] text-[#002FA7]">
-                              Shared
-                            </span>
-                          )}
                         </div>
                         {e.description && (
                           <p className="text-sm text-neutral-600">{e.description}</p>
@@ -262,15 +255,10 @@ export default function CompetitiveExams() {
                   <option value="NEET">NEET UG</option>
                 </select>
               </div>
-              <label className="flex items-center gap-2 text-sm mb-4">
-                <input
-                  type="checkbox"
-                  checked={form.is_shared}
-                  onChange={(e) => setForm({ ...form, is_shared: e.target.checked })}
-                  data-testid="new-exam-shared"
-                />
-                Visible to students
-              </label>
+              <p className="text-xs text-neutral-500 mb-4">
+                Exams and the papers you upload into them are private to your
+                account.
+              </p>
               <button
                 type="submit"
                 disabled={creating}

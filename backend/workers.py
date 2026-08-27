@@ -7,6 +7,7 @@ the API endpoints in `server.py`.
 from __future__ import annotations
 
 import asyncio as _asyncio
+import os
 import uuid
 from typing import Optional
 
@@ -22,7 +23,11 @@ from prompts import (
     solution_prompt,
     SOLUTION_SYSTEM,
 )
+from instruction_spec import parse_instructions, verify as verify_instructions
+from question_dedupe import dedupe_sections
+from question_repair import complete_sections
 from storage import APP_NAME, put_object
+from topic_balance import measure_coverage, topic_shortfall
 from token_usage import tag
 
 
@@ -157,11 +162,26 @@ async def generate_diagrams_background(paper_id: str, owner_id: str) -> None:
         logger.warning(f"Diagram background job failed: {e}")
 
 
-def _normalise_paper_questions(sections: list, difficulty: str) -> None:
+def _flag(flags: Optional[dict], q: dict, reason: str) -> None:
+    """Record a value the normaliser had to invent, if anyone is collecting."""
+    if flags is None:
+        return
+    flags.setdefault(q.get("id"), []).append(reason)
+
+
+def _normalise_paper_questions(
+    sections: list, difficulty: str, flags: Optional[dict] = None
+) -> None:
     """Stamp ids and fill in the defaults every question is expected to have.
 
     Shared by first-pass generation and the top-up worker so the two cannot
     drift apart on MCQ handling or default marks. Mutates in place.
+
+    When `flags` is passed it collects question_id -> [reason] for every
+    value this function had to invent. The coercion below is lossy on
+    purpose (a paper still renders with a wrong answer key), so without
+    somewhere to record it, question_repair has no way to tell a
+    correct_option the model chose from one this function made up.
     """
     for s in sections:
         for q in s.get("questions", []):
@@ -185,7 +205,11 @@ def _normalise_paper_questions(sections: list, difficulty: str) -> None:
                     co = int(q.get("correct_option", 0))
                 except (TypeError, ValueError):
                     co = 0
-                q["correct_option"] = co if 0 <= co < len(opts) else 0
+                    _flag(flags, q, "coerced_correct_option")
+                if not 0 <= co < len(opts):
+                    co = 0
+                    _flag(flags, q, "coerced_correct_option")
+                q["correct_option"] = co
             else:
                 q.pop("options", None)
                 q.pop("correct_option", None)
@@ -214,6 +238,20 @@ async def generate_paper_background(
     burst the 60s ingress timeout. Writes the result back to the paper doc
     and updates `generation_status`."""
     tag("paper", paper_id)
+    # Parse the Additional Instructions box into counts BEFORE building the
+    # prompt. Without this the box is prose competing with a slider-derived
+    # quota that contradicts it, and the quota wins because it is the one
+    # stated as a number.
+    spec = await parse_instructions(
+        custom_instructions,
+        ref=paper_id,
+        context={
+            "subject": subject,
+            "klass": klass,
+            "total_marks": total_marks,
+            "difficulty": difficulty,
+        },
+    )
     prompt = qgen_prompt(
         subject=subject,
         klass=klass,
@@ -227,6 +265,7 @@ async def generate_paper_background(
         format_distribution=format_distribution or {},
         custom_instructions=custom_instructions or "",
         section_blueprint=section_blueprint or "",
+        spec=spec,
     )
     try:
         raw = await chat_complete(
@@ -249,7 +288,33 @@ async def generate_paper_background(
         return
 
     sections = data.get("sections") or []
-    _normalise_paper_questions(sections, difficulty)
+    coercions: dict = {}
+    _normalise_paper_questions(sections, difficulty, coercions)
+
+    # Finish the questions that arrived structurally incomplete: an MCQ with
+    # two options, a stem cut mid-sentence, an answer key pointing at
+    # nothing. Runs ahead of repair_sections so options written here get the
+    # same LaTeX gate as the ones the first call produced.
+    completeness_stats = await complete_sections(
+        sections,
+        ref=paper_id,
+        context={"subject": subject, "klass": klass, "difficulty": difficulty},
+        flags=coercions,
+    )
+
+    # Measure coverage first so the dedupe pass knows which topics are already
+    # over-quota: when two questions are the same question, the one belonging
+    # to the topic with too many is the one to lose. This first pass is also
+    # what canonicalises each question's topic label, which everything below
+    # counts on. Then measure again, because the answer changed.
+    # Same number the prompt was built from, or the coverage check measures
+    # the paper against a target the model was never given.
+    target_q = int(spec.get("total_questions") or 0) or (
+        derive_target_question_count(total_marks)
+    )
+    coverage = measure_coverage(sections, topics_weighted, target_q)
+    dedupe_stats = dedupe_sections(sections, ref=paper_id, coverage=coverage)
+    coverage = measure_coverage(sections, topics_weighted, target_q)
 
     # Check and repair the LaTeX before anything downstream reads it. Runs
     # ahead of apply_diagram_policy so diagram_policy.plain_text() flattens
@@ -277,12 +342,31 @@ async def generate_paper_background(
             "generation_error": None,
             "recovered_from_truncation": bool(data.get("_recovered_from_truncation")),
             "latex_check": latex_stats,
+            "completeness_check": completeness_stats,
+            "dedupe_check": dedupe_stats,
+            "topic_coverage": coverage,
+            "instruction_check": verify_instructions(sections, spec),
+            # A stated count makes the target knowable, which is what
+            # re-enables auto-top-up and the missing-questions banner for
+            # instruction-driven papers -- both were dead while this was 0.
+            **(
+                {"target_question_count": target_q}
+                if spec.get("total_questions")
+                else {}
+            ),
         }},
     )
 
     # Kick off diagram generation asynchronously.
     if pending_count > 0:
         await generate_diagrams_background(paper_id, owner_id)
+
+    # Last: if the paper is still short of what it was meant to be, top it
+    # up. Deliberately after the $set above, so the teacher already has the
+    # partial paper on screen while this runs.
+    await _auto_topup_if_short(
+        paper_id, owner_id, context_excerpt, feedback_hints
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -332,13 +416,17 @@ def paper_target_count(paper: dict) -> int:
         stored = 0
     if stored > 0:
         return stored
-    # A blueprint or a free-form teacher prompt overrides the slider settings,
-    # and states the real question count in prose the app never parses. Deriving
-    # one from total_marks would be a guess, and a wrong guess here shows a
-    # "12 questions missing" banner on a paper that is perfectly complete. Better
-    # to admit we do not know: 0 means the banner falls back to the truncation
-    # flag and the teacher supplies the count.
-    if paper.get("section_blueprint") or paper.get("custom_instructions"):
+    # A blueprint states its real question count in prose nobody parses.
+    # Deriving one from total_marks would be a guess, and a wrong guess here
+    # shows a "12 questions missing" banner on a paper that is perfectly
+    # complete. Better to admit we do not know: 0 means the banner falls back to
+    # the truncation flag and the teacher supplies the count.
+    #
+    # Additional instructions used to land here too. They no longer do:
+    # instruction_spec parses them into a count and generate_paper_background
+    # stores it, so those papers have a real target and get the top-up and the
+    # banner back.
+    if paper.get("section_blueprint"):
         return 0
     return derive_target_question_count(int(paper.get("total_marks") or 0))
 
@@ -422,14 +510,136 @@ async def _fail_topup(paper_id: str, err: str) -> None:
     )
 
 
+# A paper that came out short used to sit there until a teacher noticed the
+# banner and pressed the button. The machinery to fix it already existed --
+# this just presses the button automatically, once.
+AUTO_TOPUP_ENABLED = os.environ.get("AUTO_TOPUP_ENABLED", "true").strip().lower() not in (
+    "false", "0", "no",
+)
+# Two attempts, and the counter is persisted before each. Two, not one,
+# because there are now two independent ways to come up short -- a truncated
+# generation and a dedupe pass that dropped repeats -- and a paper that hit
+# both would otherwise get one refill for two gaps. Still bounded, so a paper
+# can never top up a paper that tops up a paper.
+AUTO_TOPUP_MAX_ATTEMPTS = 2
+
+
+def _trim_targets(wanted: dict, count: int) -> dict:
+    """Cut a per-topic shortfall down to `count` questions, worst gaps first.
+
+    The measured shortfall can exceed what is being asked for -- a paper can
+    be four questions short in total while five topics are each one light,
+    because a topic can also be OVER quota. Handing the model targets that sum
+    to more than the request reintroduces exactly the contradiction
+    resolve_shares exists to remove.
+    """
+    if not wanted or count <= 0:
+        return {}
+    out: dict = {}
+    left = count
+    for name, gap in sorted(wanted.items(), key=lambda kv: (-kv[1], kv[0])):
+        if left <= 0:
+            break
+        take = min(int(gap), left)
+        if take > 0:
+            out[name] = take
+            left -= take
+    return out
+
+
+async def _auto_topup_if_short(
+    paper_id: str,
+    owner_id: str,
+    context_excerpt: str = "",
+    feedback_hints: str = "",
+) -> None:
+    """Fill in the questions a truncated generation never produced.
+
+    The school path makes one LLM call for the whole paper. When it runs out
+    of output tokens, parse_json_response salvages the questions that were
+    complete and drops the one that was mid-write, so the paper saves as
+    "ready" while being several questions short. question_repair cannot help
+    there -- there is no half-written question left to finish, only a gap.
+
+    Best-effort by construction: this runs after the paper is already saved
+    and visible, so anything that goes wrong here leaves a short paper with
+    its top-up banner, which is exactly the old behaviour.
+    """
+    if not AUTO_TOPUP_ENABLED:
+        return
+    try:
+        p = await db.papers.find_one(
+            {"id": paper_id, "is_deleted": False}, {"_id": 0}
+        )
+        if not p:
+            return
+        attempts = int(p.get("topup_auto_attempts") or 0)
+        if attempts >= AUTO_TOPUP_MAX_ATTEMPTS:
+            return
+        # A teacher who already pressed the button owns the topup document.
+        if (p.get("topup") or {}).get("status") == "generating":
+            return
+        # 0 means paper_target_count deliberately declined to guess (a
+        # blueprint or free-form paper states its count in prose we never
+        # parse). Adding questions to a paper whose real size is unknown is
+        # worse than leaving it alone.
+        target = paper_target_count(p)
+        if not target:
+            return
+        short_by = target - count_questions(p.get("sections") or [])
+        if short_by <= 0:
+            return
+        count = min(short_by, TOPUP_MAX)
+        # Ask for the topics that are actually missing rather than telling the
+        # model to spread the new questions around and hoping. Trimmed to what
+        # is being requested so the per-topic numbers still sum to `count`.
+        wanted = topic_shortfall(p.get("topic_coverage") or {})
+        targets = _trim_targets(wanted, count)
+        # Claim the slot before doing any work, so a crash mid-top-up cannot
+        # come back for a second go.
+        await db.papers.update_one(
+            {"id": paper_id},
+            {"$set": {
+                "topup_auto_attempts": attempts + 1,
+                "topup": {
+                    "status": "generating",
+                    "started_at": utcnow_iso(),
+                    "requested": count,
+                    "added": 0,
+                    "auto": True,
+                },
+            }},
+        )
+        logger.info(
+            f"Auto top-up: paper {paper_id} is {short_by} question(s) short "
+            f"of {target}, requesting {count}"
+        )
+        await generate_missing_questions_background(
+            paper_id=paper_id,
+            owner_id=owner_id,
+            count=count,
+            context_excerpt=context_excerpt,
+            feedback_hints=feedback_hints,
+            topic_targets=targets,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Auto top-up skipped for {paper_id}: {e}")
+
+
 async def generate_missing_questions_background(
     paper_id: str,
     owner_id: str,
     count: int,
     context_excerpt: str = "",
     feedback_hints: str = "",
+    topic_targets: Optional[dict] = None,
 ) -> None:
-    """Generate `count` extra questions and append them to an existing paper."""
+    """Generate `count` extra questions and append them to an existing paper.
+
+    `topic_targets` names how many questions each under-covered topic needs.
+    Without it the model is merely asked to spread the new questions around,
+    which is how a paper that was already skewed stays skewed.
+    """
     tag("paper_topup", paper_id)
     try:
         p = await db.papers.find_one(
@@ -448,6 +658,21 @@ async def generate_missing_questions_background(
 
         existing_sections = p.get("sections") or []
         difficulty = p.get("difficulty", "medium")
+        # The teacher's instructions govern the top-up too -- a paper told
+        # to stay in syllabus must not drift on the questions added to fix
+        # a shortfall. Counts are deliberately NOT reapplied: this call is
+        # asking for the gap, not for the whole paper again.
+        topup_spec = await parse_instructions(
+            p.get("custom_instructions") or "",
+            ref=paper_id,
+            context={
+                "subject": p.get("subject", ""),
+                "klass": p.get("class_name", ""),
+                "difficulty": difficulty,
+            },
+        )
+        topup_spec["total_questions"] = 0
+        topup_spec["format_counts"] = {}
         prompt = qgen_prompt(
             subject=p.get("subject", ""),
             klass=p.get("class_name", ""),
@@ -463,6 +688,8 @@ async def generate_missing_questions_background(
             section_blueprint=p.get("section_blueprint") or "",
             topup_count=count,
             existing_questions=flatten_question_texts(existing_sections),
+            topic_targets=topic_targets or None,
+            spec=topup_spec,
         )
         raw = await chat_complete(
             system_message=(
@@ -474,13 +701,29 @@ async def generate_missing_questions_background(
         data = parse_json_response(raw)
 
         new_sections = data.get("sections") or []
-        _normalise_paper_questions(new_sections, difficulty)
+        coercions: dict = {}
+        _normalise_paper_questions(new_sections, difficulty, coercions)
         if not count_questions(new_sections):
             raise RuntimeError("The model returned no usable questions.")
 
-        # Same order as first-pass generation: repair the LaTeX, then let the
-        # diagram policy decide what keeps a figure. Both run on the new
+        # Same order as first-pass generation: finish what came in
+        # incomplete, repair the LaTeX, then let the diagram policy decide
+        # what keeps a figure. All three run on the new
         # questions only — the existing ones have already been through this.
+        await complete_sections(
+            new_sections,
+            ref=paper_id,
+            context={
+                "subject": p.get("subject", ""),
+                "klass": p.get("class_name", ""),
+                "difficulty": difficulty,
+            },
+            flags=coercions,
+        )
+        # A top-up is the likeliest place to re-ask an existing question: the
+        # prompt lists only the first 60 stems, truncated, as things to avoid.
+        # Compare against the whole paper, and let only the NEW questions lose.
+        dedupe_sections(new_sections, ref=paper_id, against=existing_sections)
         await repair_sections(new_sections, ref=paper_id)
         pending_count = apply_diagram_policy(new_sections, ref=paper_id)
         for s in new_sections:
