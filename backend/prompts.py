@@ -292,18 +292,67 @@ def resolve_shares(topics_weighted: list, target_q: int) -> dict:
     return dict(zip(names, shares))
 
 
-def _topic_target_lines(topics_weighted: list, shares: dict) -> str:
-    """The per-topic block the model is held to."""
+def _weight_percentages(topics_weighted: list) -> dict:
+    """Each topic's share of the paper as a percentage of the total weight.
+
+    Largest-remainder again, for the same reason as resolve_shares: independent
+    rounding lets five equal topics render as 20/20/20/20/20 one moment and
+    17/17/17/17/17 the next, and a set that visibly fails to add up reads as a
+    mistake the model then feels free to correct.
+
+    Derived from the weights ALONE -- deliberately not from target_q. That is
+    what makes the result safe to print next to a blueprint: it states the
+    proportion the teacher asked for without asserting a paper size that the
+    blueprint has already decided.
+    """
+    names = [str(t.get("name", "")).strip() for t in topics_weighted or []]
+    weights = [max(1, int(t.get("weight", 5) or 5)) for t in topics_weighted or []]
+    pairs = [(n, w) for n, w in zip(names, weights) if n]
+    if not pairs:
+        return {}
+
+    total_w = sum(w for _, w in pairs) or 1
+    exact = [100 * w / total_w for _, w in pairs]
+    pcts = [int(e) for e in exact]
+    leftover = 100 - sum(pcts)
+    order = sorted(
+        range(len(pairs)),
+        key=lambda i: (-(exact[i] - pcts[i]), -pairs[i][1], i),
+    )
+    for i in range(leftover):
+        pcts[order[i % len(order)]] += 1
+    return {pairs[i][0]: pcts[i] for i in range(len(pairs))}
+
+
+def _topic_target_lines(
+    topics_weighted: list, shares: dict, *, proportional: bool = False
+) -> str:
+    """The per-topic block the model is held to.
+
+    `proportional` swaps the exact per-topic count for a percentage of the
+    paper. Used when a blueprint is in play: the blueprint has already fixed
+    how many questions the paper contains, so a second set of absolute counts
+    is a contradiction rather than a constraint -- the same reasoning that
+    drops the Bloom split and the format mix under `has_override` below.
+    The weights survive either way, so a weight-10 topic still outweighs a
+    weight-1 topic by ten to one.
+    """
+    pcts = _weight_percentages(topics_weighted) if proportional else {}
     lines = []
     for t in topics_weighted or []:
         name = str(t.get("name", "")).strip()
         if not name:
             continue
         w = max(1, int(t.get("weight", 5) or 5))
-        n = int(shares.get(name, 0))
-        lines.append(
-            f"- {name}  (weight {w}, EXACTLY {n} question{'s' if n != 1 else ''})"
-        )
+        if proportional:
+            lines.append(
+                f"- {name}  (weight {w}, ~{pcts.get(name, 0)}% of the paper)"
+            )
+        else:
+            n = int(shares.get(name, 0))
+            lines.append(
+                f"- {name}  (weight {w}, EXACTLY {n} question{'s' if n != 1 else ''})"
+            )
     return "\n".join(lines)
 
 
@@ -520,6 +569,9 @@ def qgen_prompt(
             f"{feedback_hints}\n=== END ===\n\n"
         )
 
+    has_blueprint = bool(section_blueprint and section_blueprint.strip())
+    has_custom = bool(custom_instructions and custom_instructions.strip())
+
     # Per-topic question counts. Apportioned so they sum to exactly the number
     # of questions being asked for -- see resolve_shares. In a top-up the pool
     # being split is the SHORTFALL, not the whole paper: a 3-question top-up
@@ -536,10 +588,19 @@ def qgen_prompt(
     else:
         shares = resolve_shares(topics_weighted, share_pool)
         weighted_for_block = topics_weighted
-    topics_block = _topic_target_lines(weighted_for_block, shares)
-
-    has_blueprint = bool(section_blueprint and section_blueprint.strip())
-    has_custom = bool(custom_instructions and custom_instructions.strip())
+    # Under a blueprint the counts above describe a paper the blueprint has
+    # already sized differently -- 16 topics at one question each against a
+    # 38-question format -- and the model correctly refuses rather than pick a
+    # winner. Weighting is what the teacher actually expressed here, so that is
+    # what survives; the absolute count is what goes.
+    #
+    # A targeted refill is exempt: there the caller measured a real shortfall
+    # and the exact numbers ARE the instruction.
+    topics_block = _topic_target_lines(
+        weighted_for_block,
+        shares,
+        proportional=has_blueprint and not topic_targets,
+    )
     # A blueprint genuinely defines the sections, so the engine's own
     # Bloom split and marks rule would fight it and are dropped.
     #
@@ -606,15 +667,32 @@ def qgen_prompt(
     )
 
 
-    coverage_rule = (
-        "TOPIC COVERAGE RULE (mandatory — this is counted after you reply):\n"
-        "- Produce EXACTLY the stated number of questions for each topic. The\n"
-        "  numbers above already sum to the total; they are quotas, not hints.\n"
-        "- Every listed topic MUST receive its full count. Running out of ideas\n"
-        "  for a topic is not a reason to give its questions to another one.\n"
-        "- Set the 'topic' field of every question to the topic name EXACTLY as\n"
-        "  spelled in the list above, so the counts can be verified.\n\n"
-    )
+    # Two wordings for one rule, because the topic block above states its
+    # targets two different ways. Quoting quotas at a model that was handed
+    # percentages is the same contradiction this whole branch exists to
+    # remove -- it would put the absolute counts straight back into the prompt.
+    if has_blueprint and not topic_targets:
+        coverage_rule = (
+            "TOPIC COVERAGE RULE (mandatory — this is counted after you reply):\n"
+            "- Honour the percentages above: they are the share of the paper each\n"
+            "  topic gets. The blueprint decides HOW MANY questions there are; the\n"
+            "  percentages decide WHICH topics they come from.\n"
+            "- Every listed topic MUST appear at least once, however small its\n"
+            "  share. Running out of ideas for a topic is not a reason to give its\n"
+            "  questions to another one.\n"
+            "- Set the 'topic' field of every question to the topic name EXACTLY as\n"
+            "  spelled in the list above, so the shares can be verified.\n\n"
+        )
+    else:
+        coverage_rule = (
+            "TOPIC COVERAGE RULE (mandatory — this is counted after you reply):\n"
+            "- Produce EXACTLY the stated number of questions for each topic. The\n"
+            "  numbers above already sum to the total; they are quotas, not hints.\n"
+            "- Every listed topic MUST receive its full count. Running out of ideas\n"
+            "  for a topic is not a reason to give its questions to another one.\n"
+            "- Set the 'topic' field of every question to the topic name EXACTLY as\n"
+            "  spelled in the list above, so the counts can be verified.\n\n"
+        )
 
     # Top-up mode: the paper already exists and came up short, so this call
     # asks for the shortfall only. The whole-paper targets above would fight
@@ -673,13 +751,25 @@ def qgen_prompt(
         "  the reasoning required, never the scope.\n"
     )
 
+    # Dropped under a blueprint, which states its own total and duration in its
+    # prose ("Total: 80 marks, 3 hours."). Printing the form's numbers as well
+    # asked for 50 marks in 60 minutes and 80 marks in 3 hours in the same
+    # prompt. Omission rather than a "defer to the blueprint" sentence: an
+    # instruction to ignore a number the prompt no longer contains is just one
+    # more thing to get wrong.
+    totals_line = (
+        ""
+        if has_blueprint
+        else f"Total marks: {total_marks}, Duration: {duration} minutes.\n"
+    )
+
     return (
         f"{topup_block}"
         f"Generate an ORIGINAL question paper for Class {klass} - {subject}.\n"
         f"Topics to cover (with weightage — heavier topics get more questions):\n"
         f"{topics_block}\n\n"
         f"Overall difficulty: {difficulty}\n"
-        f"Total marks: {total_marks}, Duration: {duration} minutes.\n\n"
+        f"{totals_line}\n"
         f"{difficulty_calibration_block(klass, difficulty, target_q, include_mix=not has_override)}"
         f"{blueprint_block}"
         f"{default_section_block}"
