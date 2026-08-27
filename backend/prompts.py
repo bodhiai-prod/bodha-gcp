@@ -229,6 +229,259 @@ def derive_target_question_count(total_marks: int) -> int:
     return max(5, min(25, total_marks // 3))
 
 
+def resolve_shares(topics_weighted: list, target_q: int) -> dict:
+    """Split `target_q` questions across weighted topics. Sums to EXACTLY target_q.
+
+    Largest-remainder apportionment, not independent rounding. The old
+    `round(target_q * w / total_w)` per topic was computed independently for
+    each, so five equal topics against a 13-question paper each rendered "~3" --
+    15 questions demanded from a 13-question paper. The model resolved that
+    contradiction by favouring whatever it saw first, which is the topic skew
+    this function exists to remove.
+
+    Every topic is guaranteed at least one question while there are enough
+    questions to go round; past that the lightest topics are the ones that miss
+    out, which is what a weight of 1 against a weight of 10 should mean.
+
+    Lives here rather than in topic_balance for the same reason
+    `derive_target_question_count` does: this is the module that TELLS the model
+    the number, so anything measuring compliance later must import it from here
+    or the two will drift.
+    """
+    names = [str(t.get("name", "")).strip() for t in topics_weighted or []]
+    weights = [max(1, int(t.get("weight", 5) or 5)) for t in topics_weighted or []]
+    names = [n for n in names if n]
+    if not names:
+        return {}
+    weights = weights[: len(names)]
+    target_q = max(0, int(target_q or 0))
+    if target_q <= 0:
+        return {n: 0 for n in names}
+
+    total_w = sum(weights) or 1
+    exact = [target_q * w / total_w for w in weights]
+    shares = [int(e) for e in exact]
+
+    # Hand out the remainder to the largest fractional parts. Ties break towards
+    # the heavier topic, then towards the earlier one, so the result is stable.
+    leftover = target_q - sum(shares)
+    order = sorted(
+        range(len(names)),
+        key=lambda i: (-(exact[i] - shares[i]), -weights[i], i),
+    )
+    for i in range(leftover):
+        shares[order[i % len(order)]] += 1
+
+    # Nobody selected a topic to see zero questions from it. Fund the empties
+    # from whoever is furthest above their exact entitlement.
+    if target_q >= len(names):
+        while True:
+            empty = [i for i, s in enumerate(shares) if s == 0]
+            if not empty:
+                break
+            donor = max(
+                (i for i in range(len(names)) if shares[i] > 1),
+                key=lambda i: (shares[i] - exact[i], -weights[i]),
+                default=None,
+            )
+            if donor is None:
+                break
+            shares[donor] -= 1
+            shares[empty[0]] += 1
+
+    return dict(zip(names, shares))
+
+
+def _topic_target_lines(topics_weighted: list, shares: dict) -> str:
+    """The per-topic block the model is held to."""
+    lines = []
+    for t in topics_weighted or []:
+        name = str(t.get("name", "")).strip()
+        if not name:
+            continue
+        w = max(1, int(t.get("weight", 5) or 5))
+        n = int(shares.get(name, 0))
+        lines.append(
+            f"- {name}  (weight {w}, EXACTLY {n} question{'s' if n != 1 else ''})"
+        )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Marks apportionment
+# ---------------------------------------------------------------------------
+# Relative weight of one question of each format, used only to divide the paper's
+# total marks when the teacher stated counts. A long answer is worth about six
+# times an MCQ in every board paper this app targets.
+_FORMAT_WEIGHT = {
+    "mcq": 1,
+    "true_false": 1,
+    "fill_blank": 1,
+    "short_answer": 3,
+    "long_answer": 6,
+}
+_DEFAULT_WEIGHT = 3
+
+
+def is_empty(spec: dict | None) -> bool:
+    """Whether this spec asks for anything the renderer would act on."""
+    if not spec:
+        return True
+    return not (
+        spec.get("total_questions")
+        or spec.get("format_counts")
+        or spec.get("section_difficulty")
+        or spec.get("question_overrides")
+        or spec.get("allow_out_of_syllabus")
+    )
+
+
+def apportion_marks(format_counts: dict, total_marks: int) -> dict:
+    """Marks per question of each format, so the paper still totals total_marks.
+
+    Returns {} when it cannot find a sane split -- every format needs at least
+    one mark per question, and a paper asking for 40 questions out of 10 marks
+    has no answer this function should invent.
+    """
+    counts = {k: int(v) for k, v in (format_counts or {}).items() if int(v) > 0}
+    total_marks = int(total_marks or 0)
+    if not counts or total_marks <= 0:
+        return {}
+    if sum(counts.values()) > total_marks:
+        return {}
+
+    weight_total = sum(
+        _FORMAT_WEIGHT.get(fmt, _DEFAULT_WEIGHT) * n for fmt, n in counts.items()
+    ) or 1
+    per: dict = {}
+    for fmt, n in counts.items():
+        share = total_marks * _FORMAT_WEIGHT.get(fmt, _DEFAULT_WEIGHT) * n / weight_total
+        per[fmt] = max(1, round(share / n))
+
+    def _sum(mapping: dict) -> int:
+        return sum(mapping[f] * counts[f] for f in counts)
+
+    if _sum(per) == total_marks:
+        return per
+
+    # The rounded split rarely lands exactly, so solve for one format and keep
+    # the rest. Nudging a single format by +/-1 cannot always reach the total --
+    # a format with 2 questions moves the sum in steps of 2, so an odd residual
+    # oscillates forever -- but freeing one variable and solving it exactly
+    # does, whenever any solution exists at all.
+    #
+    # Heaviest first: giving the long answers the awkward remainder is less
+    # visible on a printed paper than an MCQ worth 7 marks.
+    for free in sorted(
+        counts, key=lambda f: -_FORMAT_WEIGHT.get(f, _DEFAULT_WEIGHT)
+    ):
+        others = sum(per[f] * counts[f] for f in counts if f != free)
+        remaining = total_marks - others
+        if remaining <= 0 or remaining % counts[free]:
+            continue
+        candidate = dict(per)
+        candidate[free] = remaining // counts[free]
+        if candidate[free] >= 1 and _sum(candidate) == total_marks:
+            return candidate
+
+    # No exact split exists for these counts against this mark total. Say so
+    # rather than print a paper whose marks do not add up.
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Rendering
+# ---------------------------------------------------------------------------
+def render_spec(spec: dict, *, total_marks: int = 0) -> str:
+    """The block of hard requirements derived from the teacher's own words."""
+    if is_empty(spec):
+        return ""
+    lines = ["TEACHER'S STATED REQUIREMENTS (derived from their instructions "
+             "below — these are counts, not suggestions):"]
+
+    total = spec.get("total_questions") or 0
+    if total:
+        lines.append(f"- Produce EXACTLY {total} questions in total.")
+
+    counts = spec.get("format_counts") or {}
+    if counts:
+        for fmt, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+            lines.append(
+                f"- EXACTLY {n} question{'s' if n != 1 else ''} with format='{fmt}'."
+            )
+        marks = apportion_marks(counts, total_marks)
+        if marks:
+            spread = ", ".join(
+                f"{fmt} = {m} mark{'s' if m != 1 else ''} each"
+                for fmt, m in sorted(marks.items())
+            )
+            lines.append(
+                f"- Marks per question so the paper still totals {total_marks}: "
+                f"{spread}."
+            )
+
+    sections = spec.get("section_difficulty") or {}
+    if sections:
+        for name, level in sections.items():
+            lines.append(
+                f"- Every question in {name} must have difficulty='{level}'."
+            )
+
+    overrides = spec.get("question_overrides") or []
+    if overrides:
+        lines.append(
+            "- Per-question overrides. Questions are numbered CONTINUOUSLY from 1 "
+            "across the whole paper, ignoring section boundaries — question 1 of "
+            "the second section continues the count from the first. These beat "
+            "the section rules above:"
+        )
+        for o in overrides:
+            bits = []
+            if o.get("difficulty"):
+                bits.append(f"difficulty='{o['difficulty']}'")
+            if o.get("note"):
+                bits.append(o["note"])
+            lines.append(f"    - Question {o['n']}: {'; '.join(bits)}")
+
+    for extra in spec.get("unparsed") or []:
+        lines.append(f"- {extra}")
+
+    return "\n".join(lines) + "\n\n"
+
+
+def render_precedence(klass: str, subject: str, spec: dict | None) -> str:
+    """The one ranked ladder, replacing the competing 'HIGHEST PRIORITY' labels.
+
+    Emitted late in the prompt on purpose. Two blocks each claiming highest
+    priority left the model to guess, and the syllabus rule that sat 2,800
+    characters earlier lost to whatever the teacher typed.
+    """
+    block = (
+        "PRECEDENCE — when two instructions conflict, the FIRST that applies wins:\n"
+        "  1. The per-question overrides above\n"
+        "  2. The teacher's stated requirements and additional instructions\n"
+        "  3. The paper blueprint / exam format\n"
+        "  4. The question format mix and distribution settings\n"
+        "  5. Engine defaults\n\n"
+    )
+    if (spec or {}).get("allow_out_of_syllabus"):
+        return block + (
+            "The teacher has explicitly asked for content beyond the syllabus, so "
+            "that restriction is lifted for this paper. Stay on the listed topics "
+            "regardless.\n\n"
+        )
+    return block + (
+        f"NON-NEGOTIABLE — nothing above lifts this:\n"
+        f"  Every question stays inside the Class {klass} {subject} syllabus and "
+        "the listed topics. Making a question harder means harder to SEE — more "
+        "steps, a less obvious entry point — never further out. A demand for "
+        "'as hard as possible' raises the reasoning required, it does NOT "
+        "authorise olympiad content, university material, or a topic that was "
+        "not listed.\n\n"
+    )
+
+
+
 def qgen_prompt(
     subject: str,
     klass: str,
@@ -244,8 +497,15 @@ def qgen_prompt(
     section_blueprint: str = "",
     topup_count: int = 0,
     existing_questions: list | None = None,
+    topic_targets: dict | None = None,
+    spec: dict | None = None,
 ) -> str:
-    target_q = derive_target_question_count(total_marks)
+    # A teacher who stated a count in the instructions box has said the
+    # thing this number is a guess at. Deferring to it here is what stops
+    # the prompt carrying a topic quota that sums to 16 next to a sentence
+    # asking for 12 -- the contradiction that made the box look ignored.
+    spec_total = int((spec or {}).get("total_questions") or 0)
+    target_q = spec_total or derive_target_question_count(total_marks)
     info_n = round(target_q * distribution.get("information", 0) / 100)
     concept_n = round(target_q * distribution.get("concept", 0) / 100)
     app_n = max(1, target_q - info_n - concept_n) if target_q - info_n - concept_n > 0 else round(
@@ -260,28 +520,42 @@ def qgen_prompt(
             f"{feedback_hints}\n=== END ===\n\n"
         )
 
-    # Compute proportional question counts per topic so the LLM has a hard target.
-    total_w = sum(max(1, int(t.get("weight", 5))) for t in topics_weighted) or 1
-    topic_lines = []
-    for t in topics_weighted:
-        w = max(1, int(t.get("weight", 5)))
-        share = round(target_q * w / total_w)
-        topic_lines.append(
-            f"- {t['name']}  (weight {w}, target ~{share} question{'s' if share != 1 else ''})"
-        )
-    topics_block = "\n".join(topic_lines)
+    # Per-topic question counts. Apportioned so they sum to exactly the number
+    # of questions being asked for -- see resolve_shares. In a top-up the pool
+    # being split is the SHORTFALL, not the whole paper: a 3-question top-up
+    # that still printed whole-paper targets was telling the model to write
+    # six questions per topic.
+    share_pool = topup_count if topup_count > 0 else target_q
+    if topic_targets:
+        # A targeted refill: the caller measured what is actually missing and
+        # names it, rather than re-deriving a whole-paper split.
+        shares = {k: int(v) for k, v in topic_targets.items() if int(v) > 0}
+        weighted_for_block = [
+            t for t in topics_weighted if str(t.get("name", "")).strip() in shares
+        ] or topics_weighted
+    else:
+        shares = resolve_shares(topics_weighted, share_pool)
+        weighted_for_block = topics_weighted
+    topics_block = _topic_target_lines(weighted_for_block, shares)
 
     has_blueprint = bool(section_blueprint and section_blueprint.strip())
     has_custom = bool(custom_instructions and custom_instructions.strip())
-    # When EITHER a blueprint or free-form custom instructions are given,
-    # the user-supplied prompt takes precedence over the slider-based
-    # Question Distribution and Format Mix. The teacher is expected to
-    # describe those inside their prompt/blueprint if they care about them.
-    has_override = has_blueprint or has_custom
+    # A blueprint genuinely defines the sections, so the engine's own
+    # Bloom split and marks rule would fight it and are dropped.
+    #
+    # Additional instructions suppress NOTHING. They used to share this
+    # flag, which meant that merely typing in the box deleted the format
+    # mix the teacher had just set on the sliders -- they compose now, and
+    # the precedence ladder below states which wins where they disagree.
+    has_override = has_blueprint
+    spec_formats = dict((spec or {}).get("format_counts") or {})
 
     # Optional question-format mix (MCQ / Short Answer / Long Answer / etc).
+    # Skipped only when the teacher stated per-format COUNTS, which are the
+    # same instruction expressed more precisely; two sets of numbers for one
+    # decision is the contradiction, not the fix.
     format_block = ""
-    if format_distribution and not has_override:
+    if format_distribution and not has_override and not spec_formats:
         fmt_lines = []
         for fmt, pct in format_distribution.items():
             if pct <= 0:
@@ -298,18 +572,17 @@ def qgen_prompt(
     custom_block = ""
     if has_custom:
         custom_block = (
-            "TEACHER'S ADDITIONAL INSTRUCTIONS (HIGHEST PRIORITY — these "
-            "override the default question-type and format defaults. The "
-            "teacher will usually describe their desired section / type / "
-            "format mix inside this block; honour it strictly):\n"
+            "TEACHER'S ADDITIONAL INSTRUCTIONS (honour every one of these; "
+            "see the precedence ladder below for what wins where they "
+            "conflict with a setting):\n"
             f"{custom_instructions.strip()}\n\n"
         )
 
     blueprint_block = ""
     if has_blueprint:
         blueprint_block = (
-            "PAPER BLUEPRINT (HIGHEST PRIORITY — overrides any default section / type "
-            "split). Reproduce sections, question counts, marks, internal-choice rules, "
+            "PAPER BLUEPRINT — reproduce sections, question counts, marks, "
+            "internal-choice rules, "
             "and per-question formats EXACTLY as described below. Use the section "
             "TITLES verbatim as the LLM 'sections[].title' values. If the blueprint "
             "specifies internal choice (e.g. 'attempt any 4 of 6'), generate ALL the "
@@ -334,10 +607,13 @@ def qgen_prompt(
 
 
     coverage_rule = (
-        "TOPIC COVERAGE RULE (mandatory):\n"
-        "- Distribute questions across ALL listed topics in proportion to their weights.\n"
-        "- No single topic should exceed its target by more than 1 question.\n"
-        "- If a topic has weight > 0 it MUST receive at least one question.\n\n"
+        "TOPIC COVERAGE RULE (mandatory — this is counted after you reply):\n"
+        "- Produce EXACTLY the stated number of questions for each topic. The\n"
+        "  numbers above already sum to the total; they are quotas, not hints.\n"
+        "- Every listed topic MUST receive its full count. Running out of ideas\n"
+        "  for a topic is not a reason to give its questions to another one.\n"
+        "- Set the 'topic' field of every question to the topic name EXACTLY as\n"
+        "  spelled in the list above, so the counts can be verified.\n\n"
     )
 
     # Top-up mode: the paper already exists and came up short, so this call
@@ -350,9 +626,11 @@ def qgen_prompt(
         default_section_block = ""
         marks_rule = ""
         coverage_rule = (
-            "TOPIC COVERAGE RULE: spread the new questions across the listed "
-            "topics, favouring any that look under-represented in the "
-            "existing questions below.\n\n"
+            "TOPIC COVERAGE RULE (mandatory): produce EXACTLY the stated number\n"
+            "of questions for each topic listed above. Those counts describe the\n"
+            "questions MISSING from this paper, not the paper as a whole, and they\n"
+            "already sum to the number being asked for. Set the 'topic' field of\n"
+            "every new question to the topic name EXACTLY as spelled above.\n\n"
         )
         stems = []
         for q in (existing_questions or [])[:60]:
@@ -377,6 +655,24 @@ def qgen_prompt(
             + existing_block
         )
 
+    # Rendered from the teacher's own words, and placed with the ladder
+    # LATE in the prompt: the syllabus rule used to sit ~2,800 characters
+    # ahead of the instructions that overrode it, and lost on recency.
+    spec_block = render_spec(spec or {}, total_marks=total_marks)
+    precedence_block = render_precedence(klass, subject, spec)
+    # STRICT RULES is the true tail of the prompt, so the floor gets a one-line
+    # echo there as well as its numbered ladder entry -- without displacing the
+    # JSON schema, which needs to stay last for format compliance.
+    syllabus_rule = (
+        "- Stay strictly within the listed topics. The teacher asked for content\n"
+        "  beyond the syllabus, so the DEPTH may exceed it; the topics may not.\n"
+        if (spec or {}).get("allow_out_of_syllabus")
+        else "- Stay strictly within the listed topics, and inside the Class "
+        f"{klass} syllabus.\n"
+        "  This holds however hard a question was asked to be: difficulty raises\n"
+        "  the reasoning required, never the scope.\n"
+    )
+
     return (
         f"{topup_block}"
         f"Generate an ORIGINAL question paper for Class {klass} - {subject}.\n"
@@ -391,7 +687,9 @@ def qgen_prompt(
         f"{FORMAT_CONVENTIONS}"
         f"{marks_rule}"
         f"{coverage_rule}"
+        f"{spec_block}"
         f"{custom_block}"
+        f"{precedence_block}"
         f"{feedback_block}"
         "MATH FORMATTING (STRICT — critical for PDF rendering):\n"
         "Wrap EVERY mathematical or scientific expression in LaTeX delimiters — "
@@ -426,7 +724,7 @@ def qgen_prompt(
         "STRICT RULES:\n"
         "- Do NOT copy any sentence from the textbook content.\n"
         "- Every question must be originally phrased.\n"
-        "- Stay strictly within the listed topics.\n"
+        f"{syllabus_rule}"
         "- Set 'topic' field on every question to the matching topic name from the list above.\n"
         "- Set 'format' field on every question (use one of the provided format labels, or empty string if none specified).\n"
         "- For format='mcq', 'options' MUST be an array of EXACTLY 4 plain strings, and 'correct_option' MUST be one of 0,1,2,3 pointing to the correct entry. Omit these fields for non-MCQ questions.\n"
@@ -544,6 +842,7 @@ def competitive_qgen_prompt(
     format_distribution: dict | None = None,
     custom_instructions: str = "",
     exam_type: str = "GENERIC",
+    topic_targets: dict | None = None,
 ) -> str:
     """RAG-calibrated competitive-exam paper prompt.
 
@@ -609,7 +908,20 @@ def competitive_qgen_prompt(
             f"{custom_instructions.strip()}\n\n"
         )
 
-    topics_block = "\n".join(f"- {t}" for t in topics)
+    # Competitive requests carry no weights, so an even split across whatever
+    # topics this batch owns is the right default -- and stating it as a count
+    # is what stops one topic swallowing the batch.
+    if topic_targets:
+        shares = {k: int(v) for k, v in topic_targets.items() if int(v) > 0}
+    else:
+        shares = resolve_shares(
+            [{"name": t, "weight": 5} for t in topics], question_count
+        )
+    topics_block = "\n".join(
+        f"- {t}  (EXACTLY {int(shares.get(t, 0))} question"
+        f"{'s' if int(shares.get(t, 0)) != 1 else ''})"
+        for t in topics
+    )
     return (
         f"Generate an ORIGINAL practice paper for the {exam_name} competitive exam "
         f"(exam_type={exam_type}).\n"
@@ -651,7 +963,15 @@ def competitive_qgen_prompt(
         "}\n\n"
         "STRICT RULES:\n"
         "- Originally phrased, never copy anchor wording.\n"
-        "- Stay on the listed topics.\n"
+        "- Difficulty is depth, not scope. A hard question demands more\n"
+        "  reasoning steps or a less obvious entry point; it never reaches\n"
+        "  outside this exam's syllabus or the topics listed below. This\n"
+        "  holds no matter how hard the target difficulty is set.\n"
+        "- Stay on the listed topics, and produce EXACTLY the stated number of\n"
+        "  questions for each one. Those counts sum to the target question\n"
+        "  count; they are quotas, not hints.\n"
+        "- Set the 'topic' field of every question to the topic name EXACTLY as\n"
+        "  spelled in the list above.\n"
         "- For format='mcq', options MUST be 4 plain strings and correct_option in [0,3].\n"
         "- Sum of marks should approximate question_count * average mark-per-question of anchors (default 1 mark each if unsure).\n"
         "- No markdown formatting in any field. No prose outside JSON.\n"
@@ -867,4 +1187,188 @@ def latex_repair_prompt(items: list) -> str:
         '  "fixes": [ { "id": "...", "text": "..." } ]\n'
         "}\n\n"
         f"=== ITEMS ===\n{payload}\n=== END ==="
+    )
+
+
+# ---------------------------------------------------------------------------
+# Question completion / repair
+# ---------------------------------------------------------------------------
+# Used by question_repair.py for questions that arrived structurally incomplete
+# -- an MCQ with two options, a stem that stops mid-sentence, a correct_option
+# pointing nowhere. Unlike LATEX_REPAIR_SYSTEM this model IS allowed to think
+# about the subject matter, because finishing an options list means knowing the
+# answer. What it is not allowed to do is rewrite the parts that arrived intact,
+# and question_repair._accept() re-checks that independently.
+QUESTION_REPAIR_SYSTEM = (
+    "You complete exam questions that were generated incompletely. You are "
+    "finishing someone else's work, not writing your own.\n\n"
+    "ABSOLUTE RULES:\n"
+    "- Preserve every part of the question that already arrived intact. If the "
+    "stem is complete, return it byte-for-byte unchanged and supply only what "
+    "is missing.\n"
+    "- Never change a number, variable, unit or quantity that is already "
+    "present in the stem.\n"
+    "- Only when the stem is explicitly flagged as empty or truncated may you "
+    "add to it, and then you must continue it, not restart it: keep the "
+    "existing wording as the opening and write only the missing remainder.\n"
+    "- Options you supply must be genuinely plausible distractors, not filler "
+    "such as 'None of the above', 'Option C' or a repeat of another option.\n"
+    "- 'correct_option' must point at the option that is actually correct. "
+    "Solve the question to determine it. Never guess and never default to 0.\n\n"
+    "A reply that rewrites intact content is discarded outright, so when you "
+    "are unsure the safe move is to change as little as possible."
+)
+
+
+def question_repair_prompt(items: list, *, context: dict | None = None) -> str:
+    """Build one batched completion request.
+
+    `items` is a list of {"id", "issues", "question"} where "question" is the
+    whole question dict as it currently stands. The issue codes come from
+    question_repair.validate_question() and are passed through so the model is
+    told what was detected rather than having to rediscover it.
+    """
+    ctx = context or {}
+    header_bits = []
+    for label, key in (
+        ("Subject", "subject"),
+        ("Class", "klass"),
+        ("Exam", "exam_type"),
+        ("Difficulty", "difficulty"),
+    ):
+        val = str(ctx.get(key) or "").strip()
+        if val:
+            header_bits.append(f"{label}: {val}")
+    header = ("\n".join(header_bits) + "\n\n") if header_bits else ""
+
+    payload = json.dumps(
+        [
+            {
+                "id": str(it.get("id", "")),
+                "issues": it.get("issues") or [],
+                "question": it.get("question") or {},
+            }
+            for it in items
+        ],
+        ensure_ascii=False,
+        indent=1,
+    )
+    return (
+        "Each item below is a question that failed a completeness check. "
+        "Return the completed version of each one.\n\n"
+        f"{header}"
+        "WHAT THE CHECKER FOUND (the issue codes on each item):\n"
+        "- empty_stem: the 'question' text is missing or too short to be a "
+        "question. Write the question the rest of the item implies.\n"
+        "- truncated_stem: the 'question' text stops mid-sentence. Continue it "
+        "from where it stops and finish the sentence. Do not restart it.\n"
+        "- mcq_missing_options: 'options' does not hold exactly 4 entries. Keep "
+        "the ones already there in their existing order and add the rest.\n"
+        "- blank_option: one of the options is an empty string. Replace that "
+        "entry only.\n"
+        "- duplicate_options: two options say the same thing, which makes the "
+        "question unanswerable. Replace the later duplicate.\n"
+        "- bad_correct_option: 'correct_option' is missing or does not point at "
+        "a real option. Solve the question and set it correctly.\n\n"
+        f"{FORMAT_CONVENTIONS}"
+        "OUTPUT RULES:\n"
+        "- For format='mcq', 'options' MUST be an array of EXACTLY 4 plain "
+        "strings and 'correct_option' MUST be one of 0,1,2,3.\n"
+        "- Keep every other field ('topic', 'marks', 'type', 'difficulty', "
+        "'format', 'needs_diagram', 'diagram_spec') exactly as supplied.\n"
+        "- Inline math uses '$...$'. No markdown, no '**bold**', no question "
+        "numbering such as 'Q1.' or '(i)'.\n\n"
+        "Return ONLY strict JSON, one entry per input item, with the same ids:\n"
+        "{\n"
+        '  "fixes": [ { "id": "...", "question": { ... } } ]\n'
+        "}\n\n"
+        f"=== ITEMS ===\n{payload}\n=== END ==="
+    )
+
+
+# ---------------------------------------------------------------------------
+# Instruction parsing
+# ---------------------------------------------------------------------------
+# Used by instruction_spec.py to turn the Additional Instructions box into
+# numbers the main prompt can enforce. The box used to be handed to the model as
+# prose alongside a slider-derived quota that contradicted it -- a teacher asking
+# for "10 mcq and 2 long" got 16 questions, because the quota was stated as a
+# counted rule and their sentence was not.
+INSTRUCTION_SPEC_SYSTEM = (
+    "You convert a teacher's free-text exam instructions into a strict JSON "
+    "specification. You are a parser, not a teacher.\n\n"
+    "ABSOLUTE RULES:\n"
+    "- Extract only what the teacher actually stated. Never invent a count, a "
+    "difficulty or a section that is not in their text.\n"
+    "- If they did not state something, leave that field empty or zero. An "
+    "empty field means 'the teacher did not say', which is different from "
+    "'the teacher said none'.\n"
+    "- Anything you cannot express in the fields provided goes into "
+    "'unparsed', verbatim and in the teacher's own words. Never drop an "
+    "instruction because there is no field for it.\n"
+    "- 'allow_out_of_syllabus' is true ONLY if the teacher explicitly asked "
+    "for content beyond the syllabus or course. Asking for questions to be "
+    "hard, very hard, challenging, or 'as hard as possible' is NOT such a "
+    "request -- difficulty and syllabus scope are different things.\n\n"
+    "Return strict JSON only. No prose, no markdown, no code fences."
+)
+
+
+def instruction_spec_prompt(text: str, *, context: dict | None = None) -> str:
+    """Ask for one teacher's instructions as a structured spec."""
+    ctx = context or {}
+    header_bits = []
+    for label, key in (
+        ("Subject", "subject"),
+        ("Class", "klass"),
+        ("Total marks", "total_marks"),
+        ("Paper difficulty", "difficulty"),
+    ):
+        val = str(ctx.get(key) or "").strip()
+        if val:
+            header_bits.append(f"{label}: {val}")
+    header = ("PAPER SETTINGS (context only — do not copy these into the "
+              "spec):\n" + "\n".join(header_bits) + "\n\n") if header_bits else ""
+
+    return (
+        "Convert the teacher's instructions below into this JSON shape:\n"
+        "{\n"
+        '  "total_questions": 0,\n'
+        '  "format_counts": { "mcq": 0, "long_answer": 0 },\n'
+        '  "section_difficulty": { "Section A": "hard" },\n'
+        '  "question_overrides": [ { "n": 23, "difficulty": "hard", "note": "" } ],\n'
+        '  "allow_out_of_syllabus": false,\n'
+        '  "unparsed": [ "any instruction that fits no field above" ]\n'
+        "}\n\n"
+        f"{header}"
+        "FIELD RULES:\n"
+        "- total_questions: the total the teacher asked for, or 0 if they did "
+        "not say. If they gave a per-format breakdown, this is its sum.\n"
+        "- format_counts: how many questions of each format. Use only these "
+        "keys: mcq, short_answer, long_answer, fill_blank, true_false. Map the "
+        "teacher's wording onto them — 'MCQ', 'multiple choice' and 'objective' "
+        "are all mcq; 'long question', 'essay' and 'descriptive' are all "
+        "long_answer. Omit a format they did not mention.\n"
+        "- section_difficulty: a whole section pinned to one level. Key it by "
+        "the section name the teacher used, e.g. 'Section A'. Values must be "
+        "easy, medium or hard.\n"
+        "- question_overrides: a single question singled out by number. 'n' is "
+        "the question number as the teacher wrote it. Put the level in "
+        "'difficulty' when they named one ('as hard as possible' means hard), "
+        "and anything else about that question in 'note'.\n"
+        "- allow_out_of_syllabus: see the absolute rules. Almost always false.\n"
+        "- unparsed: everything else they asked for, unchanged.\n\n"
+        "WORKED EXAMPLES:\n"
+        '"10 mcq hard and 2 long question" ->\n'
+        '  total_questions 12, format_counts {"mcq":10,"long_answer":2},\n'
+        '  question_overrides [], unparsed ["make the MCQs hard"]\n'
+        '  (the "hard" applies to a format, not a section or a number, so it '
+        'is carried in unparsed rather than invented into a field)\n'
+        '"Make Section A hard, Section B medium. Make Q23 as hard as possible." ->\n'
+        '  section_difficulty {"Section A":"hard","Section B":"medium"},\n'
+        '  question_overrides [{"n":23,"difficulty":"hard",'
+        '"note":"as hard as possible"}]\n'
+        '"Use SI units throughout" ->\n'
+        '  everything zero/empty, unparsed ["Use SI units throughout"]\n\n'
+        f"=== TEACHER'S INSTRUCTIONS ===\n{text.strip()}\n=== END ==="
     )

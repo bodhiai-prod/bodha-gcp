@@ -58,14 +58,16 @@ export default function NewPaper() {
     [formats]
   );
 
-  // When the teacher provides Additional Instructions or a Paper Blueprint,
-  // those take precedence over the Question Distribution and Format Mix
-  // sliders — the teacher is expected to describe their desired type/format
-  // mix inside the prompt itself. We grey the slider cards out in that case.
+  // A Paper Blueprint defines the sections itself, so the slider-based
+  // Question Distribution and Format Mix would fight it and are greyed out.
+  //
+  // Additional Instructions used to grey them too, which is why typing
+  // "make Section A hard" silently threw away the format mix the teacher
+  // had just set. They compose now: the backend layers the instructions on
+  // top of these settings and states which wins where they disagree.
   const promptOverride = useMemo(
-    () =>
-      Boolean(customInstructions.trim()) || Boolean(sectionBlueprint.trim()),
-    [customInstructions, sectionBlueprint]
+    () => Boolean(sectionBlueprint.trim()),
+    [sectionBlueprint]
   );
 
   useEffect(() => {
@@ -596,7 +598,10 @@ Section B (40 marks) - Attempt any FOUR of the following SIX questions
                 onChange={(e) => setCustomInstructions(e.target.value)}
                 rows={4}
                 className="qp-input font-mono text-sm"
-                placeholder="Type extra instructions for the question paper engine here..."
+                placeholder={`Layered on top of the settings above. Examples:
+10 MCQs and 2 long questions
+Make Section A hard, Section B medium
+Make Q23 as hard as possible`}
                 spellCheck={false}
                 data-testid="custom-instructions-input"
               />

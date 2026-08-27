@@ -24,10 +24,6 @@ PyJWT>=2.8
 
 # --- PDF parsing + rendering -------------------------------------------------
 pypdf>=4.2
-cryptography>=42            # pypdf needs this to open AES-encrypted PDFs.
-                            # Without it extract_text() raises DependencyError
-                            # before the OCR fallback can run, so an encrypted
-                            # book lands on `extraction_failed` with 0 chunks.
 reportlab>=4.1
 matplotlib>=3.8              # mathtext rendering + bundled DejaVu fonts
 pillow>=10.3
@@ -45,10 +41,7 @@ scikit-learn>=1.4            # rag.py: TfidfVectorizer + cosine_similarity.
 # --- AWS ---------------------------------------------------------------------
 boto3>=1.34                  # Bedrock Converse + S3 + Textract (OCR)
 
-# --- HTTP --------------------------------------------------------------------
-requests>=2.31               # llm_adapter: Hugging Face diagram endpoint
-                             # (IMAGE_PROVIDER=huggingface). Also used by the
-                             # integration test suites.
-
 # --- misc --------------------------------------------------------------------
+requests>=2.31               # used by the integration test suites
 pytest>=8.1
+
