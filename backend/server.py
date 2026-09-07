@@ -200,6 +200,9 @@ class PaperRequest(BaseModel):
     difficulty: str = "medium"  # easy / medium / hard
     duration_minutes: int = 60
     total_marks: int = 50
+    total_questions: Optional[int] = Field(default=None, ge=1, le=200)
+    format_counts: Optional[Dict[str, int]] = None
+    diagram_count: Optional[int] = Field(default=None, ge=0, le=200)
     distribution: dict  # {information, concept, application}
     # Optional free-form instructions appended to the LLM prompt.
     custom_instructions: Optional[str] = None
@@ -819,7 +822,24 @@ async def _paper_generation_inputs(paper: dict) -> tuple:
 
 @api_router.post("/papers/generate")
 async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_user)):
+    if req.format_counts is not None:
+        if any(n < 0 for n in req.format_counts.values()) or not 1 <= sum(req.format_counts.values()) <= 200:
+            raise HTTPException(status_code=422, detail="Format counts must total 1–200 questions")
+        if req.total_questions and sum(req.format_counts.values()) != req.total_questions:
+            raise HTTPException(status_code=422, detail="Format counts must match the question count")
+    requested_count = req.total_questions or sum((req.format_counts or {}).values())
+    if not req.section_blueprint and requested_count and requested_count > req.total_marks:
+        raise HTTPException(status_code=422, detail="Total marks must allow at least one mark per question")
+    if req.diagram_count is not None and requested_count and req.diagram_count > requested_count:
+        raise HTTPException(status_code=422, detail="Diagram count cannot exceed question count")
     dist = req.distribution or {}
+    if any(not isinstance(v, (int, float)) or not 0 <= v <= 100 for v in dist.values()):
+        raise HTTPException(status_code=422, detail="Distribution percentages must be between 0 and 100")
+    if req.format_distribution and (
+        any(not 0 <= n <= 100 for n in req.format_distribution.values()) or
+        sum(req.format_distribution.values()) != 100
+    ):
+        raise HTTPException(status_code=422, detail="Format percentages must sum to 100")
     total = sum([dist.get(k, 0) for k in ("information", "concept", "application")])
     if total < 99 or total > 101:
         raise HTTPException(
@@ -862,16 +882,20 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         user["id"], req.subject, req.class_name
     )
 
-    # Normalise topics to weighted form: [{"name": str, "weight": int}, ...]
+    # Keep per-topic difficulty for initial generation, retries and top-ups.
     topics_weighted: list = []
     for t in req.topics or []:
         if isinstance(t, str):
             topics_weighted.append({"name": t.strip(), "weight": TOPIC_WEIGHT_DEFAULT})
         elif isinstance(t, dict) and t.get("name"):
+            topic_difficulty = t.get("difficulty")
+            if topic_difficulty is not None and topic_difficulty not in ("easy", "medium", "hard"):
+                raise HTTPException(status_code=422, detail="Topic difficulty must be easy, medium or hard")
             topics_weighted.append(
                 {
                     "name": str(t["name"]).strip(),
                     "weight": _clamp_weight(t.get("weight")),
+                    **({"difficulty": topic_difficulty} if topic_difficulty else {}),
                 }
             )
     topics_weighted = [t for t in topics_weighted if t["name"]]
@@ -898,6 +922,9 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "total_marks": req.total_marks,
         "distribution": dist,
         "format_distribution": fmt_dist,
+        "total_questions": req.total_questions,
+        "format_counts": req.format_counts,
+        "diagram_count": req.diagram_count,
         "custom_instructions": custom_instructions,
         "section_blueprint": section_blueprint,
         # A blueprint still states its count in prose nobody parses, so it
@@ -908,7 +935,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "target_question_count": (
             0
             if section_blueprint
-            else derive_target_question_count(req.total_marks)
+            else requested_count or derive_target_question_count(req.total_marks)
         ),
         "instructions": "",
         "sections": [],
@@ -939,6 +966,9 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
             format_distribution=fmt_dist,
             custom_instructions=custom_instructions,
             section_blueprint=section_blueprint,
+            total_questions=req.total_questions,
+            format_counts=req.format_counts,
+            diagram_count=req.diagram_count,
         )
     )
 
@@ -1139,6 +1169,10 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
             subject=p.get("subject", ""),
             klass=p.get("class_name", ""),
             topics_weighted=p.get("topics", []),
+            saved_requirements=p.get("generation_requirements"),
+            total_questions=p.get("total_questions"),
+            format_counts=p.get("format_counts"),
+            diagram_count=p.get("diagram_count"),
             difficulty=p.get("difficulty", "medium"),
             distribution=p.get("distribution", {}),
             total_marks=p.get("total_marks", 50),

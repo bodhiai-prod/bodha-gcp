@@ -216,7 +216,7 @@ export default function PaperView() {
   };
 
   // Saved via the browser's print engine rather than the backend renderer, so
-  // the PDF keeps the fonts, KaTeX math and badges shown on screen.
+  // the PDF keeps the fonts and KaTeX math shown on screen.
   const download = () => {
     if (!diagramsReady()) {
       toast.error("Diagrams are still loading — try again in a moment");
@@ -456,6 +456,15 @@ export default function PaperView() {
                 Regenerate all
               </button>
             </div>
+          </div>
+        )}
+        {paper.instruction_check?.honoured === false && !busy && (
+          <div className="no-print mb-6 border border-amber-300 bg-amber-50 p-4"
+            data-testid="paper-requirements-check">
+            <p className="font-bold text-sm">Some requested settings need review</p>
+            <ul className="list-disc pl-5 mt-2 text-sm">
+              {(paper.instruction_check.misses || []).map((miss, index) => <li key={index}>{miss}</li>)}
+            </ul>
           </div>
         )}
         {/* Toolbar */}
@@ -787,7 +796,7 @@ export default function PaperView() {
                               })}
                             </div>
                           )}
-                        <div className="mt-2 flex flex-wrap gap-1 pl-6">
+                        <div className="no-print mt-2 flex flex-wrap gap-1 pl-6">
                           <span className={typeBadge(q.type)}>{q.type}</span>
                           <span className="qp-badge">{q.difficulty}</span>
                           {q.format && (

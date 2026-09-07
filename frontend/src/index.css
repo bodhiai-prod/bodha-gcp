@@ -274,7 +274,7 @@ pre.math-fallback {
    ---------------------------------------------------------------------------
    The question paper and answer key are saved as PDF by printing the live DOM
    rather than by the backend ReportLab renderer, so the output keeps the app's
-   fonts, KaTeX math (as vector, not raster) and badge colours. See lib/print.js.
+   fonts and KaTeX math (as vector, not raster). See lib/print.js.
 
    Note: the print layout viewport is the page content box (~182mm ≈ 690px),
    which is below Tailwind's `md` breakpoint (768px) — `md:` variants therefore
@@ -283,7 +283,10 @@ pre.math-fallback {
 @media print {
     @page {
         size: A4 portrait;
-        margin: 14mm;
+        /* No vertical margin means the browser has no space for its automatic
+           header/footer (including the paper URL and ID). Keep side margins
+           on every sheet and add document spacing through main below. */
+        margin: 0 14mm;
     }
 
     /* --- Strip the application chrome --- */
@@ -312,7 +315,7 @@ pre.math-fallback {
     main {
         max-width: none !important;
         margin: 0 !important;
-        padding: 0 !important;
+        padding: 14mm 0 !important;
     }
 
     /* --- The paper / answer key becomes the page itself --- */

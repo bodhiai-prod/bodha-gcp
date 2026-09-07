@@ -19,11 +19,13 @@ from latex_repair import repair_answers, repair_sections, repair_text
 from llm_adapter import chat_complete, generate_diagram, parse_json_response
 from prompts import (
     derive_target_question_count,
+    resolve_shares,
     qgen_prompt,
     solution_prompt,
     SOLUTION_SYSTEM,
 )
 from instruction_spec import parse_instructions, verify as verify_instructions
+from generation_requirements import compile_requirements, remaining_requirements
 from question_dedupe import dedupe_sections
 from question_repair import complete_sections
 from storage import APP_NAME, put_object
@@ -233,6 +235,10 @@ async def generate_paper_background(
     format_distribution: Optional[dict] = None,
     custom_instructions: str = "",
     section_blueprint: str = "",
+    total_questions: Optional[int] = None,
+    format_counts: Optional[dict] = None,
+    diagram_count: Optional[int] = None,
+    saved_requirements: Optional[dict] = None,
 ) -> None:
     """Run question generation off the request loop so the LLM call doesn't
     burst the 60s ingress timeout. Writes the result back to the paper doc
@@ -242,7 +248,7 @@ async def generate_paper_background(
     # prompt. Without this the box is prose competing with a slider-derived
     # quota that contradicts it, and the quota wins because it is the one
     # stated as a number.
-    spec = await parse_instructions(
+    instruction_spec = {} if saved_requirements else await parse_instructions(
         custom_instructions,
         ref=paper_id,
         context={
@@ -252,6 +258,18 @@ async def generate_paper_background(
             "difficulty": difficulty,
         },
     )
+    blueprint_spec = {} if saved_requirements else await parse_instructions(section_blueprint, ref=f"{paper_id}:blueprint")
+    spec = saved_requirements or compile_requirements(
+        total_marks=total_marks, distribution=distribution,
+        format_distribution=format_distribution, topics=topics_weighted,
+        difficulty=difficulty, total_questions=total_questions,
+        format_counts=format_counts, diagram_count=diagram_count,
+        instruction_spec=instruction_spec, blueprint_spec=blueprint_spec,
+        has_blueprint=bool(section_blueprint.strip()),
+    )
+    if spec.get("total_questions"):
+        spec["topic_counts"] = resolve_shares(topics_weighted, spec["total_questions"])
+    await db.papers.update_one({"id": paper_id}, {"$set": {"generation_requirements": spec}})
     prompt = qgen_prompt(
         subject=subject,
         klass=klass,
@@ -290,6 +308,26 @@ async def generate_paper_background(
     sections = data.get("sections") or []
     coercions: dict = {}
     _normalise_paper_questions(sections, difficulty, coercions)
+    measure_coverage(sections, topics_weighted, spec.get("total_questions") or derive_target_question_count(total_marks))
+    # One bounded correction attempt for a complete but noncompliant paper.
+    # Truncated papers use the existing top-up path instead.
+    initial_check = verify_instructions(sections, spec)
+    if not initial_check["honoured"] and count_questions(sections) >= spec.get("total_questions", 0):
+        try:
+            corrected_raw = await chat_complete(
+                system_message="Create original exam questions in strict JSON. Satisfy the resolved requirements exactly.",
+                user_text=prompt + "\nCORRECTION REQUIRED: A previous attempt failed these checks:\n" +
+                    "\n".join(initial_check["misses"]) +
+                    "\nGenerate the complete paper again, correcting these mismatches. Return only JSON.",
+            )
+            corrected_data = parse_json_response(corrected_raw)
+            corrected = corrected_data.get("sections") or []
+            _normalise_paper_questions(corrected, difficulty)
+            measure_coverage(corrected, topics_weighted, spec.get("total_questions") or derive_target_question_count(total_marks))
+            if corrected and len(verify_instructions(corrected, spec)["misses"]) < len(initial_check["misses"]):
+                data, sections = corrected_data, corrected
+        except Exception as exc:
+            logger.warning(f"Requirement correction skipped for {paper_id}: {exc}")
 
     # Finish the questions that arrived structurally incomplete: an MCQ with
     # two options, a stem cut mid-sentence, an answer key pointing at
@@ -326,7 +364,8 @@ async def generate_paper_background(
     # student's own drawing task, a decorative illustration, or a spec carrying
     # the answer — then mark what survives pending so the UI can show
     # "generating" placeholders.
-    pending_count = apply_diagram_policy(sections, ref=paper_id)
+    pending_count = apply_diagram_policy(sections, ref=paper_id,
+        max_diagrams=spec.get("diagram_count", 5))
     for s in sections:
         for q in s.get("questions", []):
             q["diagram_status"] = "pending" if q.get("needs_diagram") else "none"
@@ -662,17 +701,24 @@ async def generate_missing_questions_background(
         # to stay in syllabus must not drift on the questions added to fix
         # a shortfall. Counts are deliberately NOT reapplied: this call is
         # asking for the gap, not for the whole paper again.
-        topup_spec = await parse_instructions(
-            p.get("custom_instructions") or "",
-            ref=paper_id,
-            context={
-                "subject": p.get("subject", ""),
-                "klass": p.get("class_name", ""),
-                "difficulty": difficulty,
-            },
-        )
-        topup_spec["total_questions"] = 0
-        topup_spec["format_counts"] = {}
+        legacy_spec = p.get("generation_requirements")
+        if not legacy_spec:
+            legacy_spec = await parse_instructions(
+                p.get("custom_instructions") or "",
+                ref=paper_id,
+                context={
+                    "subject": p.get("subject", ""),
+                    "klass": p.get("class_name", ""),
+                    "difficulty": difficulty,
+                },
+            )
+            legacy_spec = compile_requirements(
+                total_marks=int(p.get("total_marks") or 0), distribution=p.get("distribution") or {},
+                format_distribution=p.get("format_distribution") or {}, topics=p.get("topics") or [],
+                difficulty=difficulty, instruction_spec=legacy_spec,
+                has_blueprint=bool(p.get("section_blueprint")),
+            )
+        topup_spec = remaining_requirements(legacy_spec, existing_sections, count)
         prompt = qgen_prompt(
             subject=p.get("subject", ""),
             klass=p.get("class_name", ""),
@@ -725,7 +771,10 @@ async def generate_missing_questions_background(
         # Compare against the whole paper, and let only the NEW questions lose.
         dedupe_sections(new_sections, ref=paper_id, against=existing_sections)
         await repair_sections(new_sections, ref=paper_id)
-        pending_count = apply_diagram_policy(new_sections, ref=paper_id)
+        pending_count = apply_diagram_policy(new_sections, ref=paper_id,
+            max_diagrams=topup_spec.get("diagram_count", max(0, 5 - sum(
+                bool(q.get("needs_diagram")) for s in existing_sections for q in s.get("questions", [])
+            ))))
         for s in new_sections:
             for q in s.get("questions", []):
                 q["diagram_status"] = "pending" if q.get("needs_diagram") else "none"
@@ -736,6 +785,9 @@ async def generate_missing_questions_background(
         added = count_questions(merged) - before
 
         await _finish_topup(paper_id, merged, added, pending_count, target)
+        await db.papers.update_one({"id": paper_id}, {"$set": {
+            "instruction_check": verify_instructions(merged, legacy_spec),
+        }})
         logger.info(f"Top-up added {added} question(s) to paper {paper_id}")
 
         if pending_count > 0:

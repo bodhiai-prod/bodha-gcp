@@ -1,0 +1,129 @@
+"""Compile form values and explicit overrides once, without an LLM round trip."""
+from collections import Counter
+from copy import deepcopy
+import math
+
+
+def _marks_total(questions):
+    try:
+        values = [float(q.get("marks") or 0) for q in questions]
+    except (TypeError, ValueError):
+        return None
+    if any(not math.isfinite(value) or value <= 0 or not value.is_integer() for value in values):
+        return None
+    return sum(values)
+
+
+def apportion(values: dict, total: int) -> dict:
+    """Stable largest-remainder counts; zero percentages always remain zero."""
+    values = {key: max(0, float(value)) for key, value in values.items()}
+    denominator = sum(values.values())
+    if not denominator:
+        return {}
+    exact = {key: total * value / denominator for key, value in values.items()}
+    counts = {key: int(value) for key, value in exact.items()}
+    order = sorted(values, key=lambda key: -(exact[key] - counts[key]))
+    for key in order[:total - sum(counts.values())]:
+        counts[key] += 1
+    return counts
+
+
+def compile_requirements(*, total_marks, distribution, format_distribution,
+                         topics, difficulty, total_questions=None, format_counts=None,
+                         diagram_count=None, instruction_spec=None, blueprint_spec=None,
+                         has_blueprint=False):
+    """Additional instructions override only the fields they actually specify.
+
+    A blueprint owns structure, so percentages must not compete with it.
+    Plain UI settings are compiled into the same hard counts as parsed prose.
+    """
+    spec = deepcopy(blueprint_spec or {}) if has_blueprint else {}
+    for key, value in (instruction_spec or {}).items():
+        if value or (key == "diagram_count" and value == 0):
+            if isinstance(value, dict) and isinstance(spec.get(key), dict):
+                spec[key] = {**spec[key], **value}
+            else:
+                spec[key] = deepcopy(value)
+    # Format breakdowns replace one another as a unit, never add old quotas.
+    explicit_formats = (instruction_spec or {}).get("format_counts") or (
+        (blueprint_spec or {}).get("format_counts") if has_blueprint else format_counts
+    )
+    if (instruction_spec or {}).get("total_questions") and not (instruction_spec or {}).get("format_counts") and explicit_formats:
+        explicit_formats = apportion(explicit_formats, instruction_spec["total_questions"])
+    if explicit_formats:
+        spec["format_counts"] = dict(explicit_formats)
+        spec["total_questions"] = sum(explicit_formats.values())
+    total = spec.get("total_questions") or (
+        0 if has_blueprint else total_questions or max(5, min(25, total_marks // 3))
+    )
+    spec["total_questions"] = total
+    if not has_blueprint:
+        if not explicit_formats:
+            spec["format_counts"] = apportion(format_distribution or {}, total)
+        spec["type_counts"] = apportion(distribution or {}, total)
+        spec["total_marks"] = total_marks
+    if "diagram_count" not in spec and diagram_count is not None:
+        spec["diagram_count"] = diagram_count
+    levels = {t["name"]: t.get("difficulty") or difficulty for t in topics}
+    if spec.get("difficulty"):
+        levels = {name: spec["difficulty"] for name in levels}
+    for name, level in (spec.get("topic_difficulty") or {}).items():
+        for canonical in levels:
+            if canonical.casefold() == name.casefold() or canonical.casefold().endswith(" > " + name.casefold()):
+                levels[canonical] = level
+    spec["topic_difficulty"] = levels
+    spec["compiled"] = True
+    return spec
+
+
+def remaining_requirements(spec, sections, count):
+    """Only ask a top-up for missing counts; never reapply full-paper quotas."""
+    remaining = deepcopy(spec)
+    questions = [q for s in sections for q in s.get("questions", [])]
+    remaining["total_questions"] = count
+    remaining.pop("total_marks", None)
+    if spec.get("total_marks") and spec.get("total_questions", 0) - len(questions) == count:
+        existing_marks = _marks_total(questions)
+        marks_left = spec["total_marks"] - existing_marks if existing_marks is not None else 0
+        if marks_left >= count:
+            remaining["total_marks"] = marks_left
+    for key, field in (("format_counts", "format"), ("type_counts", "type"), ("topic_counts", "topic")):
+        actual = Counter(q.get(field, "") for q in questions)
+        gaps = {name: max(0, n - actual[name]) for name, n in spec.get(key, {}).items()}
+        # The quota is meaningful only when the remaining slots can satisfy it.
+        remaining[key] = apportion(gaps, count) if sum(gaps.values()) >= count else {}
+    if spec.get("diagram_count") is not None:
+        remaining["diagram_count"] = min(count, max(0, spec["diagram_count"] -
+            sum(bool(q.get("needs_diagram")) for q in questions)))
+    offset = len(questions)
+    remaining["question_overrides"] = [
+        {**override, "n": override["n"] - offset}
+        for override in spec.get("question_overrides", [])
+        if offset < override["n"] <= offset + count
+    ]
+    return remaining
+
+
+def check_ui_requirements(sections, spec):
+    """Check observable requirements; this does not judge pedagogical quality."""
+    questions = [q for s in sections or [] for q in s.get("questions", [])]
+    misses = []
+    actual_types = Counter(q.get("type", "") for q in questions)
+    actual_topics = Counter(q.get("topic", "") for q in questions)
+    for topic, count in spec.get("topic_counts", {}).items():
+        if actual_topics[topic] != count:
+            misses.append(f"asked for {count} questions on {topic}, got {actual_topics[topic]}")
+    for kind, count in spec.get("type_counts", {}).items():
+        if actual_types[kind] != count:
+            misses.append(f"asked for {count} {kind} questions, got {actual_types[kind]}")
+    if spec.get("total_marks"):
+        marks = _marks_total(questions)
+        if marks is None:
+            misses.append("every question must have positive integer marks")
+        elif marks != spec["total_marks"]:
+            misses.append(f"asked for {spec['total_marks']} total marks, got {marks:g}")
+    if spec.get("diagram_count") is not None:
+        diagrams = sum(bool(q.get("needs_diagram")) for q in questions)
+        if diagrams != spec["diagram_count"]:
+            misses.append(f"asked for {spec['diagram_count']} diagrams, got {diagrams}")
+    return misses

@@ -34,6 +34,7 @@ import re
 from deps import logger, utcnow_iso
 from llm_adapter import chat_complete, parse_json_response
 from prompts import INSTRUCTION_SPEC_SYSTEM, instruction_spec_prompt
+from generation_requirements import check_ui_requirements
 
 # Rendering lives in prompts.py with every other prompt builder, and is
 # re-exported here so callers have one import for the whole feature.
@@ -169,6 +170,17 @@ def normalise(raw: dict | None) -> dict:
 
     spec["format_counts"] = _clean_format_counts(raw.get("format_counts"))
     spec["section_difficulty"] = _clean_section_difficulty(raw.get("section_difficulty"))
+    spec["topic_difficulty"] = _clean_section_difficulty(raw.get("topic_difficulty"))
+    spec["format_difficulty"] = _clean_section_difficulty(raw.get("format_difficulty"))
+    level = str(raw.get("difficulty") or "").lower()
+    if level in _DIFFICULTIES:
+        spec["difficulty"] = level
+    try:
+        diagram_count = int(raw["diagram_count"])
+        if 0 <= diagram_count <= MAX_TOTAL_QUESTIONS:
+            spec["diagram_count"] = diagram_count
+    except (KeyError, TypeError, ValueError):
+        pass
     spec["question_overrides"] = _clean_overrides(raw.get("question_overrides"))
     spec["allow_out_of_syllabus"] = bool(raw.get("allow_out_of_syllabus"))
     spec["unparsed"] = _clean_unparsed(raw.get("unparsed"))
@@ -299,13 +311,9 @@ def verify(sections: list, spec: dict | None) -> dict:
                 if isinstance(q, dict)
             }
             seen[match] = sorted(levels)
-            wrong = levels - {wanted_sections[match]}
-            if wrong:
-                stats["misses"].append(
-                    f"{match} should be all '{wanted_sections[match]}', "
-                    f"found {sorted(wrong)}"
-                )
         stats["actual"]["section_difficulty"] = seen
+        for name in wanted_sections.keys() - seen.keys():
+            stats["misses"].append(f"requested section '{name}' is missing")
 
     overrides = spec.get("question_overrides") or []
     if overrides:
@@ -332,6 +340,20 @@ def verify(sections: list, spec: dict | None) -> dict:
                 )
         stats["actual"]["question_overrides"] = got
 
+    stats["misses"].extend(check_ui_requirements(sections, spec))
+    # Explicit section and question rules override topic defaults.
+    index = 0
+    overrides_by_n = {o["n"]: o.get("difficulty") for o in overrides}
+    for section in sections or []:
+        match = _match_section(section.get("title", ""), wanted_sections)
+        for question in section.get("questions", []):
+            index += 1
+            expected = overrides_by_n.get(index) or (
+                wanted_sections.get(match) if match else None
+            ) or (spec.get("format_difficulty") or {}).get(question.get("format")) or (
+                spec.get("topic_difficulty") or {}).get(question.get("topic"))
+            if expected and question.get("difficulty") != expected:
+                stats["misses"].append(f"question {index} should be '{expected}', is '{question.get('difficulty', 'unset')}'")
     stats["honoured"] = not stats["misses"]
     return stats
 

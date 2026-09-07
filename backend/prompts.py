@@ -1,6 +1,7 @@
 """Prompt builders for topic extraction, question generation and solutions."""
 
 import json
+from generation_requirements import compile_requirements
 
 TOPIC_SYSTEM = (
     "You are an expert academic content analyst. Given chapter text from a textbook, "
@@ -382,6 +383,12 @@ def is_empty(spec: dict | None) -> bool:
         or spec.get("section_difficulty")
         or spec.get("question_overrides")
         or spec.get("allow_out_of_syllabus")
+        or spec.get("type_counts")
+        or spec.get("topic_difficulty")
+        or spec.get("difficulty")
+        or spec.get("format_difficulty")
+        or spec.get("diagram_count") is not None
+        or spec.get("unparsed")
     )
 
 
@@ -445,12 +452,14 @@ def render_spec(spec: dict, *, total_marks: int = 0) -> str:
     """The block of hard requirements derived from the teacher's own words."""
     if is_empty(spec):
         return ""
-    lines = ["TEACHER'S STATED REQUIREMENTS (derived from their instructions "
-             "below — these are counts, not suggestions):"]
+    lines = ["RESOLVED PAPER REQUIREMENTS (compiled from form settings and explicit "
+             "teacher overrides — these are mandatory counts, not suggestions):"]
 
     total = spec.get("total_questions") or 0
     if total:
         lines.append(f"- Produce EXACTLY {total} questions in total.")
+    if spec.get("total_marks"):
+        lines.append(f"- The questions in this response must total EXACTLY {spec['total_marks']} marks.")
 
     counts = spec.get("format_counts") or {}
     if counts:
@@ -458,6 +467,7 @@ def render_spec(spec: dict, *, total_marks: int = 0) -> str:
             lines.append(
                 f"- EXACTLY {n} question{'s' if n != 1 else ''} with format='{fmt}'."
             )
+        lines.append("- Use only the formats listed above; a zero count excludes that format.")
         marks = apportion_marks(counts, total_marks)
         if marks:
             spread = ", ".join(
@@ -469,6 +479,13 @@ def render_spec(spec: dict, *, total_marks: int = 0) -> str:
                 f"{spread}."
             )
 
+    for kind, count in (spec.get("type_counts") or {}).items():
+        lines.append(f"- EXACTLY {count} questions with type='{kind}'.")
+    for fmt, level in (spec.get("format_difficulty") or {}).items():
+        lines.append(f"- Every question with format='{fmt}' must have difficulty='{level}'; this overrides topic defaults.")
+    if spec.get("diagram_count") is not None:
+        lines.append(f"- EXACTLY {spec['diagram_count']} questions must include a supplied diagram. "
+                     "Choose questions where a diagram is necessary and does not reveal the answer.")
     sections = spec.get("section_difficulty") or {}
     if sections:
         for name, level in sections.items():
@@ -508,9 +525,9 @@ def render_precedence(klass: str, subject: str, spec: dict | None) -> str:
     block = (
         "PRECEDENCE — when two instructions conflict, the FIRST that applies wins:\n"
         "  1. The per-question overrides above\n"
-        "  2. The teacher's stated requirements and additional instructions\n"
+        "  2. Explicit additional instructions (override only conflicting fields)\n"
         "  3. The paper blueprint / exam format\n"
-        "  4. The question format mix and distribution settings\n"
+        "  4. Resolved form requirements: exact counts, topic/subtopic difficulty, marks and diagrams\n"
         "  5. Engine defaults\n\n"
     )
     if (spec or {}).get("allow_out_of_syllabus"):
@@ -548,18 +565,26 @@ def qgen_prompt(
     existing_questions: list | None = None,
     topic_targets: dict | None = None,
     spec: dict | None = None,
+    total_questions: int | None = None,
 ) -> str:
+    if not (spec or {}).get("compiled"):
+        spec = compile_requirements(
+            total_marks=total_marks, distribution=distribution,
+            format_distribution=format_distribution, topics=topics_weighted,
+            difficulty=difficulty, total_questions=total_questions,
+            instruction_spec=spec, has_blueprint=bool(section_blueprint.strip()),
+        )
     # A teacher who stated a count in the instructions box has said the
     # thing this number is a guess at. Deferring to it here is what stops
     # the prompt carrying a topic quota that sums to 16 next to a sentence
     # asking for 12 -- the contradiction that made the box look ignored.
     spec_total = int((spec or {}).get("total_questions") or 0)
-    target_q = spec_total or derive_target_question_count(total_marks)
-    info_n = round(target_q * distribution.get("information", 0) / 100)
-    concept_n = round(target_q * distribution.get("concept", 0) / 100)
-    app_n = max(1, target_q - info_n - concept_n) if target_q - info_n - concept_n > 0 else round(
-        target_q * distribution.get("application", 0) / 100
-    )
+    difficulty = spec.get("difficulty") or difficulty
+    target_q = topup_count or spec_total or derive_target_question_count(total_marks)
+    type_counts = spec.get("type_counts") or {}
+    info_n = type_counts.get("information", 0)
+    concept_n = type_counts.get("concept", 0)
+    app_n = type_counts.get("application", 0)
 
     guide = "\n".join(f"- {k}: {v}" for k, v in QUESTION_TYPE_GUIDE.items())
     feedback_block = ""
@@ -599,8 +624,25 @@ def qgen_prompt(
     topics_block = _topic_target_lines(
         weighted_for_block,
         shares,
-        proportional=has_blueprint and not topic_targets,
+        proportional=has_blueprint and not spec_total and not topic_targets,
     )
+    topic_difficulty_lines = [
+        f"- {name}: {level}"
+        for name, level in (spec.get("topic_difficulty") or {}).items()
+    ]
+    topic_difficulty_block = ""
+    if topic_difficulty_lines:
+        topic_difficulty_block = (
+            "TOPIC AND SUBTOPIC DIFFICULTY (mandatory):\n"
+            + "\n".join(topic_difficulty_lines)
+            + "\nEach question must use its listed topic's difficulty. Names containing ' > ' "
+            "identify a subtopic of the preceding topic. A subtopic's difficulty wins over "
+            "its parent's, including when a parent-topic question covers that subtopic. "
+            "These levels override overall difficulty; unlisted topics use overall difficulty. "
+            "Explicit per-question, per-section or per-format difficulty in the teacher's instructions "
+            "or blueprint takes precedence over these topic defaults. "
+            "Do not impose an overall difficulty mix that conflicts with these levels.\n\n"
+        )
     # A blueprint genuinely defines the sections, so the engine's own
     # Bloom split and marks rule would fight it and are dropped.
     #
@@ -609,26 +651,7 @@ def qgen_prompt(
     # mix the teacher had just set on the sliders -- they compose now, and
     # the precedence ladder below states which wins where they disagree.
     has_override = has_blueprint
-    spec_formats = dict((spec or {}).get("format_counts") or {})
-
-    # Optional question-format mix (MCQ / Short Answer / Long Answer / etc).
-    # Skipped only when the teacher stated per-format COUNTS, which are the
-    # same instruction expressed more precisely; two sets of numbers for one
-    # decision is the contradiction, not the fix.
-    format_block = ""
-    if format_distribution and not has_override and not spec_formats:
-        fmt_lines = []
-        for fmt, pct in format_distribution.items():
-            if pct <= 0:
-                continue
-            n = max(1, round(target_q * pct / 100))
-            fmt_lines.append(f"- {fmt}: ~{n} question{'s' if n != 1 else ''} ({pct}%)")
-        if fmt_lines:
-            format_block = (
-                "QUESTION FORMAT MIX (mandatory — set each question's 'format' field):\n"
-                + "\n".join(fmt_lines)
-                + "\n"
-            )
+    # Formats are rendered exclusively from the compiled integer quotas below.
 
     custom_block = ""
     if has_custom:
@@ -660,10 +683,10 @@ def qgen_prompt(
         f"Target question counts: information={info_n}, concept={concept_n}, application={app_n}.\n\n"
         f"Question type definitions:\n{guide}\n\n"
     )
-    marks_rule = (
-        "" if has_override else
-        "Marks allocation: assign 1-2 marks for information, 3-4 for concept, 5-6 for application, "
-        "ensuring the sum equals the total marks as closely as possible.\n\n"
+    marks_rule = "" if has_override else (
+        f"Marks allocation: positive integer marks must sum to EXACTLY {total_marks}. "
+        "Use the per-format marks below when supplied; otherwise vary marks as needed. "
+        "Question type and difficulty do not impose a separate marks formula.\n\n"
     )
 
 
@@ -671,7 +694,7 @@ def qgen_prompt(
     # targets two different ways. Quoting quotas at a model that was handed
     # percentages is the same contradiction this whole branch exists to
     # remove -- it would put the absolute counts straight back into the prompt.
-    if has_blueprint and not topic_targets:
+    if has_blueprint and not spec_total and not topic_targets:
         coverage_rule = (
             "TOPIC COVERAGE RULE (mandatory — this is counted after you reply):\n"
             "- Honour the percentages above: they are the share of the paper each\n"
@@ -736,8 +759,17 @@ def qgen_prompt(
     # Rendered from the teacher's own words, and placed with the ladder
     # LATE in the prompt: the syllabus rule used to sit ~2,800 characters
     # ahead of the instructions that overrode it, and lost on recency.
-    spec_block = render_spec(spec or {}, total_marks=total_marks)
+    spec_block = render_spec(spec or {}, total_marks=(spec.get("total_marks", 0) if topup_count else 0 if has_blueprint else total_marks))
     precedence_block = render_precedence(klass, subject, spec)
+    if topup_count:
+        precedence_block = (
+            "TOP-UP SCOPE OVERRIDES WHOLE-PAPER COUNTS: The resolved counts in this "
+            "request describe ONLY the missing questions. Original instructions and "
+            "blueprint describe the completed paper; never regenerate their full counts. "
+            "Resolved per-question overrides have been renumbered from 1 for this "
+            "response. Preserve the original section names when placing new questions.\n\n"
+            + precedence_block
+        )
     # STRICT RULES is the true tail of the prompt, so the floor gets a one-line
     # echo there as well as its numbered ladder entry -- without displacing the
     # JSON schema, which needs to stay last for format compliance.
@@ -759,7 +791,7 @@ def qgen_prompt(
     # more thing to get wrong.
     totals_line = (
         ""
-        if has_blueprint
+        if has_blueprint or topup_count
         else f"Total marks: {total_marks}, Duration: {duration} minutes.\n"
     )
 
@@ -770,10 +802,10 @@ def qgen_prompt(
         f"{topics_block}\n\n"
         f"Overall difficulty: {difficulty}\n"
         f"{totals_line}\n"
-        f"{difficulty_calibration_block(klass, difficulty, target_q, include_mix=not has_override)}"
+        f"{difficulty_calibration_block(klass, difficulty, target_q, include_mix=not has_override and not topic_difficulty_lines)}"
+        f"{topic_difficulty_block}"
         f"{blueprint_block}"
         f"{default_section_block}"
-        f"{format_block}"
         f"{FORMAT_CONVENTIONS}"
         f"{marks_rule}"
         f"{coverage_rule}"
@@ -818,13 +850,13 @@ def qgen_prompt(
         "- Set 'topic' field on every question to the matching topic name from the list above.\n"
         "- Set 'format' field on every question (use one of the provided format labels, or empty string if none specified).\n"
         "- For format='mcq', 'options' MUST be an array of EXACTLY 4 plain strings, and 'correct_option' MUST be one of 0,1,2,3 pointing to the correct entry. Omit these fields for non-MCQ questions.\n"
-        "- Ensure sum of marks of all questions equals the total marks.\n"
-        "- At most 5 questions in the entire paper may have needs_diagram=true. "
-        "Papers in diagram-heavy subjects (geometry, circuits, biology) should "
-        "normally have 2-4; a paper in a subject with no figural content may "
-        "have none.\n"
+        + ("" if has_blueprint or topup_count else
+           "- Ensure sum of marks of all questions equals the total marks.\n")
+        + ("- Follow the resolved diagram count above.\n" if spec.get("diagram_count") is not None else
+           "- By default include at most 5 necessary diagrams; explicit teacher diagram requests override this default.\n")
+        +
         "- Set 'difficulty' on every question per the calibration above; the "
-        "mix must match the stated counts.\n"
+        "mix must match any stated counts unless topic/subtopic difficulty overrides them.\n"
         "- Do NOT use markdown formatting in any field. No '**bold**', no '*italic*', "
         "no '#' headings, no backticks, no bullet '-' or '*' markers at the start of "
         "lines. Use plain prose. Question numbering is added by the renderer; do NOT "
@@ -1425,6 +1457,10 @@ def instruction_spec_prompt(text: str, *, context: dict | None = None) -> str:
         "{\n"
         '  "total_questions": 0,\n'
         '  "format_counts": { "mcq": 0, "long_answer": 0 },\n'
+        '  "difficulty": "",\n'
+        '  "topic_difficulty": {},\n'
+        '  "format_difficulty": {},\n'
+        '  "diagram_count": null,\n'
         '  "section_difficulty": { "Section A": "hard" },\n'
         '  "question_overrides": [ { "n": 23, "difficulty": "hard", "note": "" } ],\n'
         '  "allow_out_of_syllabus": false,\n'
@@ -1434,6 +1470,8 @@ def instruction_spec_prompt(text: str, *, context: dict | None = None) -> str:
         "FIELD RULES:\n"
         "- total_questions: the total the teacher asked for, or 0 if they did "
         "not say. If they gave a per-format breakdown, this is its sum.\n"
+        "  For internal choice, count all numbered questions to be PRINTED, including "
+        "alternatives (attempt 4 of 6 means print 6). Do not count subparts as separate questions.\n"
         "- format_counts: how many questions of each format. Use only these "
         "keys: mcq, short_answer, long_answer, fill_blank, true_false. Map the "
         "teacher's wording onto them — 'MCQ', 'multiple choice' and 'objective' "
@@ -1442,6 +1480,12 @@ def instruction_spec_prompt(text: str, *, context: dict | None = None) -> str:
         "- section_difficulty: a whole section pinned to one level. Key it by "
         "the section name the teacher used, e.g. 'Section A'. Values must be "
         "easy, medium or hard.\n"
+        "- difficulty: only an explicit whole-paper difficulty, mapped to easy/medium/hard. "
+        "Simple means easy; Moderate means medium; Challenging means hard.\n"
+        "- topic_difficulty: explicit topic/subtopic levels, keyed by the teacher's topic name.\n"
+        "- format_difficulty: levels for a whole format, e.g. {'mcq':'hard'} for hard MCQs.\n"
+        "- diagram_count: exact number of supplied diagrams requested; 0 for no diagrams, "
+        "null when unspecified. Do not count questions asking students to draw a figure.\n"
         "- question_overrides: a single question singled out by number. 'n' is "
         "the question number as the teacher wrote it. Put the level in "
         "'difficulty' when they named one ('as hard as possible' means hard), "
@@ -1451,9 +1495,7 @@ def instruction_spec_prompt(text: str, *, context: dict | None = None) -> str:
         "WORKED EXAMPLES:\n"
         '"10 mcq hard and 2 long question" ->\n'
         '  total_questions 12, format_counts {"mcq":10,"long_answer":2},\n'
-        '  question_overrides [], unparsed ["make the MCQs hard"]\n'
-        '  (the "hard" applies to a format, not a section or a number, so it '
-        'is carried in unparsed rather than invented into a field)\n'
+        '  format_difficulty {"mcq":"hard"}, question_overrides [], unparsed []\n'
         '"Make Section A hard, Section B medium. Make Q23 as hard as possible." ->\n'
         '  section_difficulty {"Section A":"hard","Section B":"medium"},\n'
         '  question_overrides [{"n":23,"difficulty":"hard",'

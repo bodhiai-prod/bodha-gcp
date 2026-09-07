@@ -159,7 +159,7 @@ export default function SolutionView() {
   };
 
   // Saved via the browser's print engine rather than the backend renderer, so
-  // the PDF keeps the fonts, KaTeX math and badges shown on screen.
+  // the PDF keeps the fonts and KaTeX math shown on screen.
   const download = () => {
     if (!diagramsReady()) {
       toast.error("Diagrams are still loading — try again in a moment");
@@ -466,7 +466,7 @@ export default function SolutionView() {
                             [{q.marks}]
                           </span>
                         </div>
-                        <div className="mt-2 flex flex-wrap gap-1 pl-6">
+                        <div className="no-print mt-2 flex flex-wrap gap-1 pl-6">
                           <span className={typeBadge(q.type)}>{q.type}</span>
                           <span className="qp-badge">{q.difficulty}</span>
                           {q.diagram_path && (

@@ -4,7 +4,7 @@
  * The paper and solution PDFs are produced by the browser's own print engine
  * against the live DOM (see the `@media print` block in index.css) rather than
  * by the backend ReportLab renderer, so the saved PDF matches what is on
- * screen — same fonts, same KaTeX math, same badges.
+ * screen — same fonts and KaTeX math, with screen-only metadata hidden.
  */
 
 /**

@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { BLUEPRINT_PRESETS, fillBlueprint } from "@/lib/blueprints";
+import { buildTopicPayload, topicKey } from "@/lib/topicDifficulty";
+import { apportionCounts } from "@/lib/questionCounts";
 import Header from "@/components/Header";
 import { toast } from "sonner";
 import {
@@ -15,6 +17,7 @@ import {
 } from "@phosphor-icons/react";
 
 const DIFFICULTIES = ["easy", "medium", "hard"];
+const DIFFICULTY_LABELS = { easy: "Simple", medium: "Moderate", hard: "Challenging" };
 const DEFAULT_FORMATS = [
   { key: "mcq", label: "MCQ", default: 0 },
   { key: "short_answer", label: "Short Answer", default: 40 },
@@ -32,9 +35,15 @@ export default function NewPaper() {
   const [difficulty, setDifficulty] = useState("medium");
   const [duration, setDuration] = useState(60);
   const [totalMarks, setTotalMarks] = useState(50);
+  const [questionCount, setQuestionCount] = useState(16);
+  const [diagramCount, setDiagramCount] = useState("");
+  const [formatMode, setFormatMode] = useState("percentages");
+  const [exactFormatCounts, setExactFormatCounts] = useState({});
   const [info, setInfo] = useState(40);
   const [concept, setConcept] = useState(40);
-  const [selectedTopics, setSelectedTopics] = useState([]); // [{name, weight}]
+  const [selectedTopics, setSelectedTopics] = useState([]);
+  // Scoped by book and parent so similarly named subtopics stay independent.
+  const [topicDifficulties, setTopicDifficulties] = useState({});
   const [generating, setGenerating] = useState(false);
   const [extractingId, setExtractingId] = useState(null);
   const [customInstructions, setCustomInstructions] = useState("");
@@ -44,11 +53,17 @@ export default function NewPaper() {
     DEFAULT_FORMATS.map((f) => ({ ...f, value: f.default, custom: false }))
   );
   const [newFormatLabel, setNewFormatLabel] = useState("");
+  const effectiveQuestionCount = formatMode === "counts"
+    ? formats.reduce((sum, f) => sum + (exactFormatCounts[f.key] || 0), 0)
+    : Number(questionCount);
+  const formatQuestionCounts = formatMode === "counts" ? exactFormatCounts :
+    apportionCounts(Object.fromEntries(formats.map((f) => [f.key, f.value])), effectiveQuestionCount);
 
   const application = useMemo(
     () => Math.max(0, 100 - info - concept),
     [info, concept]
   );
+  const typeQuestionCounts = apportionCounts({ information: info, concept, application }, effectiveQuestionCount);
 
   const formatTotal = useMemo(
     () => formats.reduce((sum, f) => sum + Number(f.value || 0), 0),
@@ -98,62 +113,43 @@ export default function NewPaper() {
 
   const removeTextbook = (id) => {
     setSelectedTbIds((curr) => curr.filter((x) => x !== id));
-    // Prune topics tied only to this book
-    const others = selectedTbIds.filter((x) => x !== id);
-    const allowed = new Set();
-    for (const other of others) {
-      const d = tbDetails[other];
-      if (!d) continue;
-      (d.topics || []).forEach((t) => {
-        allowed.add(t.name);
-        (t.subtopics || []).forEach((s) => allowed.add(s));
-      });
-    }
-    setSelectedTopics((curr) => curr.filter((t) => allowed.has(t.name)));
+    setSelectedTopics((curr) => curr.filter((t) => t.textbook_id !== id));
   };
 
-  const toggleTopic = (name) => {
+  const toggleTopic = (bookId, name, parent = "") => {
+    const key = topicKey(bookId, name, parent);
     setSelectedTopics((curr) =>
-      curr.find((t) => t.name === name)
-        ? curr.filter((t) => t.name !== name)
-        : [...curr, { name, weight: 5 }]
+      curr.find((t) => t.key === key)
+        ? curr.filter((t) => t.key !== key)
+        : [...curr, { key, name, textbook_id: bookId, parent_topic: parent, weight: 5 }]
     );
   };
 
-  const topicNamesForBook = (topics) =>
-    Array.from(
-      new Set(
-        topics.flatMap((topic) => [topic.name, ...(topic.subtopics || [])])
-      )
-    ).filter(Boolean);
+  const topicsForBook = (bookId, topics) => topics.flatMap((topic) => [
+    { name: topic.name, parent_topic: "" },
+    ...(topic.subtopics || []).map((name) => ({ name, parent_topic: topic.name })),
+  ]).filter((topic) => topic.name).map((topic) => ({
+    ...topic, textbook_id: bookId, weight: 5,
+    key: topicKey(bookId, topic.name, topic.parent_topic),
+  }));
 
-  const toggleAllTopicsForBook = (topics) => {
-    const names = topicNamesForBook(topics);
-    const selectedNames = new Set(selectedTopics.map((topic) => topic.name));
-    const allSelected = names.length > 0 && names.every((name) => selectedNames.has(name));
+  const toggleAllTopicsForBook = (bookId, topics) => {
+    const items = topicsForBook(bookId, topics);
+    const selectedKeys = new Set(selectedTopics.map((topic) => topic.key));
+    const allSelected = items.length > 0 && items.every((item) => selectedKeys.has(item.key));
 
     setSelectedTopics((curr) => {
       if (allSelected) {
-        const namesToClear = new Set(names);
-        return curr.filter((topic) => !namesToClear.has(topic.name));
+        const keysToClear = new Set(items.map((item) => item.key));
+        return curr.filter((topic) => !keysToClear.has(topic.key));
       }
 
-      const existing = new Set(curr.map((topic) => topic.name));
+      const existing = new Set(curr.map((topic) => topic.key));
       return [
         ...curr,
-        ...names
-          .filter((name) => !existing.has(name))
-          .map((name) => ({ name, weight: 5 })),
+        ...items.filter((item) => !existing.has(item.key)),
       ];
     });
-  };
-
-  const setTopicWeight = (name, weight) => {
-    setSelectedTopics((curr) =>
-      curr.map((t) =>
-        t.name === name ? { ...t, weight: Math.max(1, Math.min(10, weight)) } : t
-      )
-    );
   };
 
   const extractTopicsFor = async (id) => {
@@ -216,16 +212,20 @@ export default function NewPaper() {
     if (!title) return toast.error("Title required");
     if (selectedTopics.length === 0)
       return toast.error("Select at least one topic");
+    if (!promptOverride && (!Number.isInteger(effectiveQuestionCount) || effectiveQuestionCount < 1 || effectiveQuestionCount > 200))
+      return toast.error("Choose between 1 and 200 questions");
+    if (!promptOverride && effectiveQuestionCount > Number(totalMarks))
+      return toast.error("Allow at least one mark per question");
     if (!promptOverride && info + concept + application !== 100)
       return toast.error("Distribution must sum to 100%");
-    if (!promptOverride && formatActive && formatTotal !== 100)
+    if (!promptOverride && formatMode === "percentages" && formatActive && formatTotal !== 100)
       return toast.error(
         "Format mix must sum to 100% (or set all to 0 to let AI decide)"
       );
 
     // Build format_distribution payload (only when sliders are still active)
     const fmtPayload = {};
-    if (!promptOverride) {
+    if (!promptOverride && formatMode === "percentages") {
       for (const f of formats) {
         const v = Number(f.value || 0);
         if (v > 0) fmtPayload[f.key] = v;
@@ -241,10 +241,14 @@ export default function NewPaper() {
         subject: first.subject || "",
         class_name: first.class_name || "",
         textbook_ids: selectedTbIds,
-        topics: selectedTopics,
+        topics: buildTopicPayload(selectedTopics, topicDifficulties, difficulty),
         difficulty,
         duration_minutes: Number(duration),
         total_marks: Number(totalMarks),
+        total_questions: promptOverride ? null : effectiveQuestionCount,
+        format_counts: !promptOverride && formatMode === "counts"
+          ? Object.fromEntries(formats.map((f) => [f.key, exactFormatCounts[f.key] || 0])) : null,
+        diagram_count: diagramCount === "" ? null : Number(diagramCount),
         distribution: { information: info, concept, application },
         format_distribution: fmtPayload,
         custom_instructions: customInstructions.trim() || null,
@@ -389,6 +393,26 @@ export default function NewPaper() {
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-4 mt-4">
+                <div>
+                  <label className="qp-label" htmlFor="question-count">Questions</label>
+                  <input id="question-count" type="number" min={1} max={200}
+                    value={effectiveQuestionCount} disabled={promptOverride || formatMode === "counts"}
+                    onChange={(e) => setQuestionCount(e.target.value)} className="qp-input"
+                    data-testid="paper-question-count-input" />
+                  <p className="text-xs text-neutral-500 mt-1">
+                    {promptOverride ? "Set by the blueprint" : formatMode === "counts" ? "Sum of format counts below" : "Exact number to generate"}
+                  </p>
+                </div>
+                <div>
+                  <label className="qp-label" htmlFor="diagram-count">Supplied diagrams</label>
+                  <input id="diagram-count" type="number" min={0} max={200} placeholder="Automatic"
+                    value={diagramCount} onChange={(e) => setDiagramCount(e.target.value)}
+                    className="qp-input" data-testid="paper-diagram-count-input" />
+                  <p className="text-xs text-neutral-500 mt-1">Leave blank for automatic, or 0 for none.</p>
+                </div>
+              </div>
+
               <div className="mt-4">
                 <label className="qp-label">Difficulty</label>
                 <div className="grid grid-cols-3 border-2 border-black">
@@ -404,7 +428,7 @@ export default function NewPaper() {
                           : "bg-white hover:bg-neutral-100"
                       } ${i !== 2 ? "border-r-2 border-black" : ""}`}
                     >
-                      {d}
+                      {DIFFICULTY_LABELS[d]}
                     </button>
                   ))}
                 </div>
@@ -445,6 +469,7 @@ export default function NewPaper() {
                 onChange={(v) => setInfo(clamp(v, 0, 100 - concept))}
                 color="#002FA7"
                 testid="dist-info"
+                count={typeQuestionCounts.information || 0}
               />
               <SliderRow
                 label="Concept"
@@ -452,6 +477,7 @@ export default function NewPaper() {
                 onChange={(v) => setConcept(clamp(v, 0, 100 - info))}
                 color="#FFC300"
                 testid="dist-concept"
+                count={typeQuestionCounts.concept || 0}
               />
               <SliderRow
                 label="Application"
@@ -459,6 +485,7 @@ export default function NewPaper() {
                 readOnly
                 color="#E63946"
                 testid="dist-app"
+                count={typeQuestionCounts.application || 0}
               />
               <p className="text-xs text-neutral-500 font-mono mt-3">
                 Application is auto-adjusted so total stays at 100%.
@@ -488,15 +515,25 @@ export default function NewPaper() {
                     }`}
                     data-testid="format-total"
                   >
-                    {formatTotal}%
+                    {formatMode === "counts" ? `${effectiveQuestionCount} questions` : `${formatTotal}%`}
                   </span>
                 )}
               </div>
               <p className="text-xs text-neutral-500 font-mono mb-4">
                 MCQ, Short / Long Answer, Fill-in-the-blanks, True / False, or
-                add your own. Changing one automatically adjusts the others so
-                the total always remains 100%.
+                add your own. Use exact counts or percentages. Percentage mixes
+                are converted to the whole-question counts shown below.
               </p>
+              <label className="qp-label" htmlFor="format-mode">Set formats using</label>
+              <select id="format-mode" className="qp-input mb-4" value={formatMode}
+                onChange={(e) => {
+                  if (e.target.value === "counts") setExactFormatCounts(formatQuestionCounts);
+                  else setQuestionCount(effectiveQuestionCount || 16);
+                  setFormatMode(e.target.value);
+                }} data-testid="format-mode">
+                <option value="percentages">Percentages</option>
+                <option value="counts">Exact question counts</option>
+              </select>
 
               {formats.map((f) => (
                 <div
@@ -520,10 +557,11 @@ export default function NewPaper() {
                       )}
                     </div>
                     <div className="font-mono text-sm font-bold">
-                      {f.value}%
+                      {formatMode === "percentages" ? `${f.value}% · ` : ""}
+                      {formatQuestionCounts[f.key] || 0} questions
                     </div>
                   </div>
-                  <div className="relative h-2 bg-neutral-200">
+                  {formatMode === "percentages" ? <><div className="relative h-2 bg-neutral-200">
                     <div
                       className="absolute top-0 left-0 h-full bg-black"
                       style={{ width: `${f.value}%` }}
@@ -540,6 +578,12 @@ export default function NewPaper() {
                     className="w-full mt-1"
                     data-testid={`format-${f.key}-slider`}
                   />
+                  </> : <input type="number" min={0} max={200}
+                    value={exactFormatCounts[f.key] || 0}
+                    onChange={(e) => setExactFormatCounts((curr) => ({
+                      ...curr, [f.key]: Math.max(0, Math.min(200, Math.trunc(Number(e.target.value)))),
+                    }))} aria-label={`Number of ${f.label} questions`} className="qp-input"
+                    data-testid={`format-${f.key}-count`} />}
                 </div>
               ))}
 
@@ -624,14 +668,12 @@ Section B (40 marks) - Attempt any FOUR of the following SIX questions
                 // ADDITIONAL INSTRUCTIONS FOR THE AI
               </div>
               <p className="text-xs text-neutral-500 font-mono mb-3">
-                Optional. <b>When set, this overrides the Question Distribution
-                and Format Mix sliders above</b> &mdash; describe your full
-                requirement (sections, types, format mix, numbering style)
-                right here. Example:&nbsp;
+                Optional. Your form settings already define the paper. Add only
+                refinements or exceptions here; an explicit instruction overrides
+                the setting it conflicts with. Example:&nbsp;
                 <span className="text-neutral-700">
-                  &ldquo;30% MCQ, 40% short answer, 30% long answer. Use only
-                  whole numbers. Section A is compulsory, Section B has internal
-                  choice.&rdquo;
+                  &ldquo;Use whole numbers. Put Mechanics in Section A and
+                  Electricity in Section B.&rdquo;
                 </span>
               </p>
               <textarea
@@ -652,7 +694,7 @@ Make Q23 as hard as possible`}
           {/* Right: Topics + submit */}
           <div className="lg:col-span-2 space-y-6">
             <div className="qp-card">
-              <div className="overline mb-4">// TOPICS &amp; WEIGHTS</div>
+              <div className="overline mb-4">// TOPICS &amp; DIFFICULTY</div>
 
               {selectedTbIds.length === 0 && (
                 <div className="text-sm text-neutral-500">
@@ -662,8 +704,8 @@ Make Q23 as hard as possible`}
 
               {selectedTbIds.length > 0 && anyTopics && (
                 <p className="text-xs text-neutral-500 font-mono mb-3">
-                  Pick topics or subtopics from any book. Heavier weights →
-                  more questions from that item.
+                  Pick topics or subtopics from any book. Subtopics use their topic’s
+                  difficulty unless you choose a separate level.
                 </p>
               )}
 
@@ -672,9 +714,9 @@ Make Q23 as hard as possible`}
                   const detail = tbDetails[bookId];
                   const tb = textbooks.find((t) => t.id === bookId);
                   const topics = detail?.topics || [];
-                  const bookTopicNames = topicNamesForBook(topics);
+                  const bookTopicNames = topicsForBook(bookId, topics).map((topic) => topic.key);
                   const selectedNameSet = new Set(
-                    selectedTopics.map((topic) => topic.name)
+                    selectedTopics.map((topic) => topic.key)
                   );
                   const selectedBookTopicCount = bookTopicNames.filter((name) =>
                     selectedNameSet.has(name)
@@ -728,7 +770,7 @@ Make Q23 as hard as possible`}
                         <div className="space-y-2">
                           <button
                             type="button"
-                            onClick={() => toggleAllTopicsForBook(topics)}
+                            onClick={() => toggleAllTopicsForBook(bookId, topics)}
                             className="flex items-center gap-2 w-full border-2 border-black bg-white p-2 text-left hover:bg-neutral-50"
                             aria-pressed={allBookTopicsSelected}
                             data-testid={`topics-select-all-${bookId}`}
@@ -768,14 +810,17 @@ Make Q23 as hard as possible`}
                                 data-testid={`topic-block-${bookId}-${i}`}
                               >
                                 {items.map((it, j) => {
+                                  const key = topicKey(bookId, it.name, it.isTopic ? "" : t.name);
                                   const sel = selectedTopics.find(
-                                    (s) => s.name === it.name
+                                    (s) => s.key === key
                                   );
                                   const checked = !!sel;
+                                  const inheritedDifficulty = it.isTopic ? difficulty :
+                                    topicDifficulties[topicKey(bookId, t.name)] || difficulty;
                                   return (
                                     <div
                                       key={j}
-                                      className={`flex items-center gap-2 p-2 ${
+                                      className={`flex flex-wrap items-center gap-2 p-2 ${
                                         j !== items.length - 1
                                           ? "border-b border-neutral-200"
                                           : ""
@@ -784,7 +829,8 @@ Make Q23 as hard as possible`}
                                     >
                                       <button
                                         type="button"
-                                        onClick={() => toggleTopic(it.name)}
+                                        onClick={() => toggleTopic(bookId, it.name, it.isTopic ? "" : t.name)}
+                                        aria-pressed={checked}
                                         className="flex items-center gap-2 flex-1 text-left"
                                         data-testid={`topic-toggle-${bookId}-${i}-${j}`}
                                       >
@@ -805,29 +851,23 @@ Make Q23 as hard as possible`}
                                           {it.name}
                                         </span>
                                       </button>
-                                      {checked && (
-                                        <div
-                                          className="flex items-center gap-2 shrink-0"
-                                          data-testid={`weight-row-${bookId}-${i}-${j}`}
+                                      {(checked || it.isTopic) && (
+                                        <select
+                                          className="qp-input text-xs py-1 w-auto max-w-full"
+                                          aria-label={`Difficulty for ${it.name}${it.isTopic ? "" : ` in ${t.name}`}`}
+                                          value={topicDifficulties[key] || ""}
+                                          onChange={(e) => setTopicDifficulties((curr) => ({
+                                            ...curr, [key]: e.target.value,
+                                          }))}
+                                          data-testid={`topic-difficulty-${bookId}-${i}-${j}`}
                                         >
-                                          <input
-                                            type="range"
-                                            min={1}
-                                            max={10}
-                                            value={sel.weight}
-                                            onChange={(e) =>
-                                              setTopicWeight(
-                                                it.name,
-                                                Number(e.target.value)
-                                              )
-                                            }
-                                            className="w-20"
-                                            data-testid={`weight-slider-${bookId}-${i}-${j}`}
-                                          />
-                                          <span className="font-mono text-xs w-6 text-right font-bold">
-                                            {sel.weight}
-                                          </span>
-                                        </div>
+                                          <option value="">
+                                            {it.isTopic ? "Topic" : "SubTopic"}: {DIFFICULTY_LABELS[inheritedDifficulty]}
+                                          </option>
+                                          {DIFFICULTIES.map((level) => (
+                                            <option key={level} value={level}>{DIFFICULTY_LABELS[level]}</option>
+                                          ))}
+                                        </select>
                                       )}
                                     </div>
                                   );
@@ -891,11 +931,11 @@ const distributeFormatValues = (formats, targetTotal) => {
   return formats.map((format, index) => ({ ...format, value: values[index] }));
 };
 
-const SliderRow = ({ label, value, onChange, readOnly, color, testid }) => (
+const SliderRow = ({ label, value, count, onChange, readOnly, color, testid }) => (
   <div className="mb-4 last:mb-0" data-testid={testid}>
     <div className="flex items-center justify-between mb-2">
       <div className="font-bold text-sm uppercase tracking-wider">{label}</div>
-      <div className="font-mono text-sm font-bold">{value}%</div>
+      <div className="font-mono text-sm font-bold">{value}% · {count} questions</div>
     </div>
     <div className="relative h-2 bg-neutral-200">
       <div
