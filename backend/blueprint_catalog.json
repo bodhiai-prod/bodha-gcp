@@ -1,0 +1,378 @@
+[
+  {
+    "id": "icse10",
+    "version": 1,
+    "label": "ICSE Class 10",
+    "total_marks": 80,
+    "duration_minutes": 120,
+    "sections": [
+      {
+        "id": "A",
+        "title": "Section A",
+        "groups": [
+          {
+            "id": "objective",
+            "count": 1,
+            "marks": 15,
+            "format": "short_answer",
+            "label": "1 numbered blocks x 15 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 0
+          },
+          {
+            "id": "blanks",
+            "count": 1,
+            "marks": 6,
+            "format": "fill_blank",
+            "label": "1 numbered blocks x 6 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 0
+          },
+          {
+            "id": "structured",
+            "count": 1,
+            "marks": 19,
+            "format": "short_answer",
+            "label": "1 numbered blocks x 19 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      },
+      {
+        "id": "B",
+        "title": "Section B",
+        "groups": [
+          {
+            "id": "structured",
+            "count": 6,
+            "marks": 10,
+            "format": "long_answer",
+            "label": "6 numbered blocks x 10 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": 4,
+        "choice_set": null
+      }
+    ],
+    "template": "Section A (40 marks, compulsory — answer ALL)\n- Q1: 15 multiple-choice questions, 1 mark each. Each MCQ must have 4 options labelled (a)-(d). Cover the full topic list.\n- Q2: 6 fill-in-the-blank questions, 1 mark each. Provide a short word-bank in brackets where useful.\n- Q3: 4-5 short-answer parts (i)-(v), totalling 19 marks. Mix of definitions, reasoning, simple numerical, and graph/figure interpretation.\n\nSection B (40 marks) — Attempt any FOUR out of the following SIX questions\n- Q4 to Q9: 10 marks each, every question subdivided into (a) 3 marks + (b) 3 marks + (c) 4 marks.\n- Each question covers ONE main topic in depth and mixes conceptual, derivation, and numerical parts.\n- Section title MUST literally read: \"Section B (40 Marks) — Attempt any FOUR of the following SIX questions\".\n\nTotal: 80 marks, 2 hours. Print \"[15 minutes reading time, no writing allowed]\" in the instructions line."
+  },
+  {
+    "id": "cbse10",
+    "version": 1,
+    "label": "CBSE Class 10",
+    "total_marks": 80,
+    "duration_minutes": 180,
+    "sections": [
+      {
+        "id": "A",
+        "title": "Section A",
+        "groups": [
+          {
+            "id": "main",
+            "count": 16,
+            "marks": 1,
+            "format": "mcq",
+            "label": "16 numbered blocks x 1 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      },
+      {
+        "id": "B",
+        "title": "Section B",
+        "groups": [
+          {
+            "id": "main",
+            "count": 5,
+            "marks": 2,
+            "format": "short_answer",
+            "label": "5 numbered blocks x 2 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      },
+      {
+        "id": "C",
+        "title": "Section C",
+        "groups": [
+          {
+            "id": "main",
+            "count": 7,
+            "marks": 3,
+            "format": "short_answer",
+            "label": "7 numbered blocks x 3 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      },
+      {
+        "id": "D",
+        "title": "Section D",
+        "groups": [
+          {
+            "id": "main",
+            "count": 4,
+            "marks": 5,
+            "format": "long_answer",
+            "label": "4 numbered blocks x 5 marks",
+            "internal_choices": 2,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      },
+      {
+        "id": "E",
+        "title": "Section E",
+        "groups": [
+          {
+            "id": "main",
+            "count": 3,
+            "marks": 4,
+            "format": "short_answer",
+            "label": "3 numbered blocks x 4 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      }
+    ],
+    "template": "Section A (16 marks) — 16 MCQs of 1 mark each (4 options).\nSection B (10 marks) — 5 Very Short Answer questions of 2 marks each.\nSection C (21 marks) — 7 Short Answer questions of 3 marks each.\nSection D (20 marks) — 4 Long Answer questions of 5 marks each (internal choice in 2 of them).\nSection E (12 marks) — 3 Case-Study/Source-Based questions of 4 marks each, each with sub-parts (a) 1m + (b) 1m + (c) 2m.\n\nTotal: 80 marks, 3 hours."
+  },
+  {
+    "id": "isc12",
+    "version": 1,
+    "label": "ISC Class 12",
+    "total_marks": 80,
+    "duration_minutes": 180,
+    "sections": [
+      {
+        "id": "A",
+        "title": "Section A",
+        "groups": [
+          {
+            "id": "objective",
+            "count": 1,
+            "marks": 15,
+            "format": "short_answer",
+            "label": "1 numbered blocks x 15 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 1
+          },
+          {
+            "id": "short",
+            "count": 5,
+            "marks": 2,
+            "format": "short_answer",
+            "label": "5 numbered blocks x 2 marks",
+            "internal_choices": 2,
+            "diagram_minimum": 0
+          },
+          {
+            "id": "medium",
+            "count": 4,
+            "marks": 4,
+            "format": "short_answer",
+            "label": "4 numbered blocks x 4 marks",
+            "internal_choices": 2,
+            "diagram_minimum": 0
+          },
+          {
+            "id": "long",
+            "count": 4,
+            "marks": 6,
+            "format": "long_answer",
+            "label": "4 numbered blocks x 6 marks",
+            "internal_choices": 2,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      },
+      {
+        "id": "B",
+        "title": "Section B",
+        "groups": [
+          {
+            "id": "objective",
+            "count": 1,
+            "marks": 5,
+            "format": "short_answer",
+            "label": "1 numbered blocks x 5 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 1
+          },
+          {
+            "id": "short",
+            "count": 1,
+            "marks": 2,
+            "format": "short_answer",
+            "label": "1 numbered blocks x 2 marks",
+            "internal_choices": 1,
+            "diagram_minimum": 0
+          },
+          {
+            "id": "structured",
+            "count": 2,
+            "marks": 4,
+            "format": "long_answer",
+            "label": "2 numbered blocks x 4 marks",
+            "internal_choices": 1,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": "optional-stream"
+      },
+      {
+        "id": "C",
+        "title": "Section C",
+        "groups": [
+          {
+            "id": "objective",
+            "count": 1,
+            "marks": 5,
+            "format": "short_answer",
+            "label": "1 numbered blocks x 5 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 0
+          },
+          {
+            "id": "short",
+            "count": 1,
+            "marks": 2,
+            "format": "short_answer",
+            "label": "1 numbered blocks x 2 marks",
+            "internal_choices": 1,
+            "diagram_minimum": 0
+          },
+          {
+            "id": "structured",
+            "count": 2,
+            "marks": 4,
+            "format": "long_answer",
+            "label": "2 numbered blocks x 4 marks",
+            "internal_choices": 1,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": "optional-stream"
+      }
+    ],
+    "template": "Generate a complete ISC Class 12 {SUBJECT} examination paper in the format below.\nOutput English only.\n\n=== HEADER ===\nPrint exactly:\n  ISC EXAMINATION PAPER – {YEAR}\n  {SUBJECT}\n  Class – 12th\n  Maximum Marks: 80    Time Allotted: Three Hours    Reading Time: Additional Fifteen Minutes\n\n=== INSTRUCTIONS TO CANDIDATES ===\nPrint these thirteen numbered instructions:\n  1.  You are allowed an additional fifteen minutes for only reading the paper.\n  2.  You must NOT start writing during reading time.\n  3.  A blank page is provided at the end of the Question Paper for rough work.\n  4.  The Question Paper is divided into three sections and has 22 questions in all.\n  5.  Section A is compulsory and has fourteen questions.\n  6.  You are required to attempt all questions either from Section B or Section C.\n  7.  Section B and Section C have four questions each.\n  8.  Internal choices have been provided in two questions of 2 marks, two questions of\n      4 marks and two questions of 6 marks in Section A.\n  9.  Internal choices have been provided in one question of 2 marks and one question of\n      4 marks each in Section B and Section C.\n  10. While attempting Multiple Choice Questions in Section A, B and C, you are required to\n      write only ONE option as the answer.\n  11. All workings, including rough work, should be done on the same page as, and adjacent to,\n      the rest of the answer.\n  12. Any tables, data booklets, maps or graph papers this subject requires are provided.\n  13. The intended marks for questions or parts of questions are given in the brackets [].\n\n=== SECTION – A (65 MARKS) ===\nHeader must literally read: \"SECTION−A (65 MARKS)\"\nContains Question 1 to Question 14. Marks: 15 + (5×2) + (4×4) + (4×6) = 65.\n\n--- Question 1 [15 × 1] ---\nPrint the stem exactly:\n  \"In subparts (i) to (xi) choose the correct options and in subparts (xii) to (xv), answer\n   the questions as instructed.\"\nFifteen subparts (i)–(xv), each carrying [1] printed at the right.\n\n  Subparts (i)–(xi) are OBJECTIVE, options labelled (a) (b) (c) (d), laid out two per line\n  for short options. Mandatory composition within these eleven:\n    - At least TWO plain single-step items: one straight recall of a definition, term, law or\n      fact, and one needing a single computation, classification or one-line application.\n    - EXACTLY TWO ASSERTION–REASON subparts. Print \"Assertion:\" and \"Reason:\" on separate\n      lines, then these four options verbatim:\n        (a) Both Assertion and Reason are true and Reason is the correct explanation for Assertion.\n        (b) Both Assertion and Reason are true but Reason is not the correct explanation for Assertion.\n        (c) Assertion is true and Reason is false.\n        (d) Both Assertion and Reason are false.\n      Keep the four wordings identical across both subparts. The Reason must always be the\n      general principle and the Assertion a particular instance of it — never two unrelated facts.\n    - EXACTLY TWO STATEMENT-PAIR subparts. Print \"Statement 1:\" and \"Statement 2:\" on separate\n      lines, then the stem \"Which of the following is correct with respect to the above\n      statements?\" and these four options verbatim:\n        (a) Statement 1 is true and Statement 2 is false.\n        (b) Statement 2 is true and Statement 1 is false.\n        (c) Both the statements are true.\n        (d) Both the statements are false.\n    - At least ONE FIGURE-BASED subpart: a graph, diagram, map, circuit, structure or plot with\n      marked points, followed by a question answerable only by reading the figure (a trend, a\n      turning point, a labelled part, or a value read off it). Set needs_diagram true and supply\n      a full diagram_spec for it.\n    - At least ONE TABLE-BASED subpart: a small two- or three-row table of supplied data, then a\n      question that depends on that table.\n    - At least ONE applied subpart set in a named real-world context, supplying every figure the\n      candidate needs.\n\n  Subparts (xii)–(xv) are VERY SHORT ANSWER, no options. One-line answers only.\n  Typical verbs: \"Write …\", \"State …\", \"Name …\", \"For what value of … \", \"Give one reason why …\",\n  \"Find …\". Each still carries [1].\n\n--- Questions 2 to 6 — [2] marks each ---\nSingle short tasks answerable in 3–5 lines: state and briefly justify a result, work one short\ncomputation, complete a one-step derivation, identify and explain a case, or verify a stated\nclaim against given data.\nEXACTLY TWO of these five carry an internal choice, printed as:\n     (i)  <question>\n                        OR\n     (ii) <alternative of the same marks>\nThe remaining three are printed as plain stems with no (i)/(ii) labels.\nONE of the five must be a REAL-WORLD DATA question: a 60–100 word stem naming three people,\nagents, samples or sources with three quantities each plus a per-unit rate, property or price\nlist, then two sub-parts: \"(i) Represent/organise the above information …\" and\n\"(ii) Find/determine the value of …\".\n\n--- Questions 7 to 10 — [4] marks each ---\nMulti-step tasks. Include across the four:\n  - ONE proof, derivation or formal justification of a general result stated in the stem.\n  - ONE multi-step working question that requires a change of method or technique partway\n    through.\n  - ONE question that establishes a relationship, or shows that a stated condition holds under\n    the given constraints.\n  - ONE applied question with a real-world stem (people, objects, samples, transactions) split\n    into sub-parts (i) [2] and (ii) [2].\n  - Optionally ONE figure-reading alternative: a printed graph, diagram or data plot with two\n    labelled points A and B, then (a) a one-line read-off [1], (b) identify or compute the two\n    labelled quantities [2], (c) compare or order three stated values [1].\nEXACTLY TWO of these four carry an internal choice in the (i) / OR / (ii) form above.\n\n--- Questions 11 to 14 — [6] marks each ---\nThe heaviest questions. Include across the four:\n  - ONE extended question that requires a standard property, theorem, law or principle of the\n    subject to be named and then applied through to a result.\n  - ONE question solved for a particular case from initial, boundary or starting conditions that\n    are supplied in full in the stem.\n  - ONE COMPARISON question built on two supplied figures, data sets or scenarios labelled\n    \"Case 1\" and \"Case 2\" (or \"Graph 1\" and \"Graph 2\"), then four sub-parts: (i) [1] identify\n    which is which, (ii) [1] state the range, scope or conditions of one of them, (iii) [2]\n    prove or justify a stated relation between them, (iv) [2] evaluate or apply the result.\n  - ONE SYNTHESIS question with an 80–130 word real-world stem: three agents, machines, sources\n    or groups with their stated rates and stated allocations, ending in a single \"what is / find\n    the …\" question. No sub-parts.\nEXACTLY TWO of these four carry an internal choice in the (i) / OR / (ii) form above.\n\nInternal-choice tally for Section A must be EXACTLY: two 2-mark, two 4-mark, two 6-mark\nquestions — six OR blocks, no more, no fewer.\n\n=== SECTION – B (15 MARKS) ===\nHeader must literally read: \"SECTION−B (15 MARKS)\"\nFour questions, Question 15 to Question 18.\nSection B is the FIRST OPTIONAL STREAM. Choose ONE coherent group of chapters from the topic\nlist given above — chapters that naturally belong together — and build ALL FOUR Section B\nquestions from that group only. Name the group in the opening line of the section.\n\n  Question 15 [5] — mixed objective/short block. Print the stem:\n    \"In subparts (i) and (ii) choose the correct options and in subparts (iii) and (iv),\n     answer the questions as instructed.\"\n      (i)   [1] Assertion–Reason on a core result of this stream, using the same four options\n            as Section A.\n      (ii)  [1] MCQ, options (a)–(d), on a single-step comparison or relation.\n      (iii) [1] a one-line \"Show that …\" / \"State whether …\" with a one-line justification.\n      (iv)  [2] a real-world stem for this stream (people, machines, animals, sites) with an\n            illustrated figure, split into (a) [1] restate or convert the given information into\n            the standard form and (b) [1] extend it to a second, related case.\n  Question 16 [2] — a single short task from this stream. CARRIES the internal choice.\n  Question 17 [4] — a three-part structured question on given data:\n       (i) [1] identify or state the quantities involved, (ii) [1] derive one of them in a single\n       step, (iii) [2] combine the two into the final result.\n  Question 18 [4] — an extended task from this stream. CARRIES the internal choice:\n       (i) split as (a) rough sketch, outline or plan [1], (b) the main working [2],\n           (c) hence state the complete result [1]\n                        OR\n       (ii) a single self-contained 4-mark task on the same chapters [4].\n\nInternal-choice tally for Section B: EXACTLY one 2-mark question and one 4-mark question.\n\n=== SECTION – C (15 MARKS) ===\nHeader must literally read: \"SECTION−C (15 MARKS)\"\nFour questions, Question 19 to Question 22.\nSection C is the SECOND OPTIONAL STREAM. Choose a group of chapters from the topic list that is\nDISJOINT from the Section B group — no chapter may appear in both sections — and build all four\nSection C questions from that group only. Name the group in the opening line of the section.\n\n  Question 19 [5] — mixed objective/short block. Print the stem:\n    \"In subparts (i) and (ii) choose the correct options and in subpart (iii), answer the\n     questions as instructed.\"\n      (i)   [1] MCQ on a key measure, rate or index of this stream, options (a)–(d).\n      (ii)  [1] a FOUR-STATEMENT MCQ: statements labelled (I), (II), (III), (IV) about the\n            properties of that measure, with combination options\n            (\"Only (I) and (IV) are correct.\").\n      (iii) [3] a supplied data table with two filled rows and two blank rows the candidate must\n            complete; sub-parts (a) [1] compute the summary values, (b) [1] complete the table,\n            (c) [1] compute the final quantity from it.\n  Question 20 [2] — a short task on the same measure. CARRIES the internal choice:\n       (i) compute the result from a set of supplied summary figures\n                        OR\n       (ii) given two stated results, identify which one applies and justify it in one line.\n  Question 21 [4] — an applied question from this stream. CARRIES the internal choice:\n       (i) a stated real-world scenario with a supplied relation and a supplied cost, rate or\n           constraint; (a) [1] write the first derived function or quantity, (b) [1] write the\n           second, (c) [2] find the value that optimises or satisfies the stated goal\n                        OR\n       (ii) a stated aggregate quantity is given; (a) [1] recover the base quantity, (b) [1]\n            find its rate of change, (c) [1] find the related average rate, (d) [1] verify the\n            standard relation between the three.\n  Question 22 [4] — an extended applied word problem with two item types and two resource\n       constraints stated in words (time/cost, weight/space, area/budget, labour/material),\n       ending with a single instruction to formulate the problem and solve or justify it fully.\n       No sub-parts, no internal choice.\n\nInternal-choice tally for Section C: EXACTLY one 2-mark question and one 4-mark question.\n\n=== GLOBAL RULES ===\n- Question numbering is continuous 1 → 22 across all three sections. Never restart.\n- Marks are printed in square brackets right-aligned at the question or sub-part level: [1],\n  [2], [4], [6]. The subparts of Question 1 each carry [1].\n- Section B and Section C are ALTERNATIVES to each other, not sequential. They must be\n  independently complete, cover disjoint chapters, and total 15 marks each.\n- Internal choice appears in EXACTLY ten places in the whole paper: six in Section A\n  (2+2+2 by mark value), two in Section B, two in Section C. Verify before output.\n- The word OR is centred, bold, on its own line, between (i) and (ii). Both alternatives must\n  be worth the same marks and come from the same or adjacent chapters.\n- Sub-part labels are roman (i) (ii) (iii) …; options are lower-case (a) (b) (c) (d);\n  nested sub-parts inside a numbered part use (a) (b) (c).\n- Every question is self-contained: no question may depend on another question's answer, and\n  all constants, data, extracts and initial conditions must be supplied in the stem.\n- Real-world stems must name plausible people, businesses, places or objects and supply every\n  figure the candidate needs — no outside assumptions.\n- Numbers, where the subject uses them, must be chosen so answers come out clean (integers,\n  simple surds, simple multiples of π, or terminating decimals).\n- If this subject is quantitative, typeset the mathematics properly: stacked fractions, integrals\n  with limits, matrices and determinants in the correct brackets, vectors with over-arrows, unit\n  vectors with hats, Σ notation for sums, and the correct currency symbol. If it is not a\n  quantitative subject, ignore this rule entirely.\n- No two questions in the paper may test the same result, technique or extract.\n- Draw every chapter from the weighted topic list given above, in proportion to the stated\n  weights. Any chapter with a weight above zero must appear at least once.\n- Verify before output: subparts of Question 1 = 15; Section A questions = 14 and = 65 marks;\n  Section B = 4 questions and 15 marks; Section C = 4 questions and 15 marks;\n  total questions = 22; total marks = 80."
+  },
+  {
+    "id": "cbse12",
+    "version": 1,
+    "label": "CBSE Class 12",
+    "total_marks": 80,
+    "duration_minutes": 180,
+    "sections": [
+      {
+        "id": "A",
+        "title": "Section A",
+        "groups": [
+          {
+            "id": "main",
+            "count": 20,
+            "marks": 1,
+            "format": "mcq",
+            "label": "20 numbered blocks x 1 marks",
+            "internal_choices": 0,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      },
+      {
+        "id": "B",
+        "title": "Section B",
+        "groups": [
+          {
+            "id": "main",
+            "count": 5,
+            "marks": 2,
+            "format": "short_answer",
+            "label": "5 numbered blocks x 2 marks",
+            "internal_choices": 2,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      },
+      {
+        "id": "C",
+        "title": "Section C",
+        "groups": [
+          {
+            "id": "main",
+            "count": 6,
+            "marks": 3,
+            "format": "short_answer",
+            "label": "6 numbered blocks x 3 marks",
+            "internal_choices": 3,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      },
+      {
+        "id": "D",
+        "title": "Section D",
+        "groups": [
+          {
+            "id": "main",
+            "count": 4,
+            "marks": 5,
+            "format": "long_answer",
+            "label": "4 numbered blocks x 5 marks",
+            "internal_choices": 2,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      },
+      {
+        "id": "E",
+        "title": "Section E",
+        "groups": [
+          {
+            "id": "main",
+            "count": 3,
+            "marks": 4,
+            "format": "short_answer",
+            "label": "3 numbered blocks x 4 marks",
+            "internal_choices": 3,
+            "diagram_minimum": 0
+          }
+        ],
+        "attempt_count": null,
+        "choice_set": null
+      }
+    ],
+    "template": "Generate a complete CBSE Class 12 {SUBJECT} examination paper in the format below.\nOutput English only.\n\n=== HEADER ===\nPrint exactly:\n  {SUBJECT}\n  Time allowed : 3 hours                    Maximum Marks : 80\nInclude a Q.P. Code line and a Roll No. field placeholder at the top.\n\n=== GENERAL INSTRUCTIONS ===\nPrint the line \"Read the following instructions very carefully and strictly follow them :\"\nthen these nine roman-numbered instructions verbatim:\n  (i)   This question paper contains 38 questions. All questions are compulsory.\n  (ii)  This question paper is divided into five Sections – A, B, C, D and E.\n  (iii) In Section A, Questions no. 1 to 18 are multiple choice questions (MCQs) and\n        questions number 19 and 20 are Assertion-Reason based questions of 1 mark each.\n  (iv)  In Section B, Questions no. 21 to 25 are very short answer (VSA) type questions,\n        carrying 2 marks each.\n  (v)   In Section C, Questions no. 26 to 31 are short answer (SA) type questions,\n        carrying 3 marks each.\n  (vi)  In Section D, Questions no. 32 to 35 are long answer (LA) type questions\n        carrying 5 marks each.\n  (vii) In Section E, Questions no. 36 to 38 are case study based questions carrying\n        4 marks each.\n  (viii)There is no overall choice. However, an internal choice has been provided in\n        2 questions in Section B, 3 questions in Section C, 2 questions in Section D and\n        3 questions in Section E.\n  (ix)  Use of calculator is not allowed.\n\n=== SECTION A  (Questions 1–20, 20 marks) ===\nHeader line: \"SECTION A\"\nSub-line in italics: \"This section comprises 20 multiple choice questions (MCQs) of 1 mark each.\"\n\nQuestions 1 to 18 — MCQs, options labelled (A), (B), (C), (D).\n  - Stem always ends with a colon: \"… is :\" / \"… is equal to :\" / \"… is/are :\".\n  - Short numeric or one-word options are laid out TWO PER LINE: (A) … (B) … / (C) … (D) …\n    Long prose options are laid out one per line.\n  - Every MCQ must be a one-step solvable item — a value, a term, an interval, a date, a\n    classification, a cause, or a closed form. Never \"which of the following statements is\n    true\" essays.\n  - Distractors must be the results of plausible specific errors a student actually makes\n    (a sign slip, a confused pair of terms, a reversed cause and effect, an adjacent value),\n    not random filler.\n  - Distribute Questions 1 to 18 across the chapters in the weighted topic list given above, in\n    proportion to their stated weights, and print them in SYLLABUS ORDER — the order the\n    chapters are listed above — not in order of difficulty. No single chapter may supply more\n    than 3 of the 18.\n\nQuestions 19 and 20 — ASSERTION–REASON.\n  Before Question 19 print this lead-in paragraph in italics:\n    \"Questions number 19 and 20 are Assertion and Reason based questions. Two statements are\n     given, one labelled as Assertion (A) and the other labelled as Reason (R). Select the\n     correct answer from the codes (A), (B), (C) and (D) as given below.\"\n  Then these four codes verbatim, each on its own line:\n    (A) Both Assertion (A) and Reason (R) are true and Reason (R) is the correct explanation\n        of the Assertion (A).\n    (B) Both Assertion (A) and Reason (R) are true, but Reason (R) is not the correct\n        explanation of the Assertion (A).\n    (C) Assertion (A) is true, but Reason (R) is false.\n    (D) Assertion (A) is false, but Reason (R) is true.\n  Then Questions 19 and 20, each printed as two labelled lines:\n    \"Assertion (A) :   <a specific instance>\"\n    \"Reason (R) :      <the general theorem, law, principle or definition the instance is\n                        tested against>\"\n  The Reason must always be a general statement and the Assertion a particular case of it —\n  never two unrelated facts. The codes are NOT reprinted under each question.\n\n=== SECTION B  (Questions 21–25, 2 marks each, 10 marks) ===\nHeader: \"SECTION B\"\nSub-line: \"This section comprises 5 Very Short Answer (VSA) type questions of 2 marks each.\"\nEach question is a single self-contained task answerable in 2–4 lines. Typical verbs: \"Find\",\n\"Evaluate\", \"Show that\", \"Solve\", \"State and explain\", \"Give reasons for\", \"Distinguish between\".\nEXACTLY TWO of the five carry an internal choice, printed as:\n    21.  (a)  <question>\n                        OR\n         (b)  <alternative question of the same marks>\nThe word OR is centred, bold, on its own line. Both alternatives must come from the SAME or\nadjacent chapters and be of comparable length.\nThe remaining three questions have NO (a)/(b) labelling — they are printed as plain stems.\nThe five questions must come from five DIFFERENT chapters of the topic list.\n\n=== SECTION C  (Questions 26–31, 3 marks each, 18 marks) ===\nHeader: \"SECTION C\"\nSub-line: \"This section comprises 6 Short Answer (SA) type questions of 3 marks each.\"\nEach question requires 3–6 lines of working or writing. Typical tasks: a computation needing a\nchange of method partway through, a short derivation or proof, a cause-and-effect explanation,\na comparison of two related ideas, an interpretation of supplied data, or the deduction of a\nrelation between stated quantities.\nEXACTLY THREE of the six carry an internal choice in the (a) / OR / (b) form above.\nThe other three are printed as plain stems.\nThe six questions must come from six DIFFERENT chapters of the topic list, favouring the\nheavier-weighted ones.\n\n=== SECTION D  (Questions 32–35, 5 marks each, 20 marks) ===\nHeader: \"SECTION D\"\nSub-line: \"This section comprises 4 Long Answer (LA) type questions of 5 marks each.\"\nEach question is a multi-step problem or an extended written answer that has to be planned\nbefore it is written: a full derivation applied to a given case, a complete analysis of a\nsupplied scenario, a long structured explanation with examples, or a two-part task in which the\nsecond part depends on the first.\nEXACTLY TWO of the four carry an internal choice in the (a) / OR / (b) form above.\nThe four questions must come from the four heaviest-weighted chapters of the topic list — one\nchapter each, no chapter used twice.\n\n=== SECTION E  (Questions 36–38, 4 marks each, 12 marks) ===\nHeader: \"SECTION E\"\nSub-line: \"This section comprises 3 case-study based questions of 4 marks each.\"\nBefore each question print a centred label: \"Case Study – 1\", \"Case Study – 2\", \"Case Study – 3\".\n\nEach case study has this fixed anatomy:\n  1. A 40–120 word stem — a real-world situation, a short source extract, a described\n     experiment, a small data table, or a classroom scenario — that sets up the context and\n     defines every term, symbol and figure the sub-parts will use. For a theory-heavy chapter\n     the stem may instead state the definition, law or formula that the sub-parts apply.\n  2. The line: \"Based on the above information, answer the following questions :\"\n  3. THREE sub-parts, with marks printed in italics at the right margin:\n       (i)   ...........................................  1\n       (ii)  ...........................................  1\n       (iii) (a) .......................................  2\n                          OR\n       (iii) (b) .......................................  2\n     Marks are ALWAYS 1 + 1 + 2. The internal choice is ALWAYS on sub-part (iii) and ONLY on\n     (iii) — never on (i) or (ii). Both (iii)(a) and (iii)(b) must be worth 2 and test the same\n     skill on different data.\n  4. Sub-parts (i) and (ii) must be answerable in one or two lines and must not depend on\n     each other's answers; (iii) is the harder extension.\nAll three case studies carry the internal choice — none is exempt.\nUse three DIFFERENT chapters from the topic list for the three case studies, and pick chapters\nthat lend themselves to a real-world or source-based stem.\n\n=== GLOBAL RULES ===\n- Question numbering is continuous 1 → 38 across all five sections. Never restart.\n- Section headers are exactly \"SECTION A\" … \"SECTION E\", each followed by its italic\n  sub-line stating the count, type, and marks per question.\n- Marks are NOT printed next to questions in Sections A–D (the section sub-line carries them).\n  Marks ARE printed at the right of each sub-part in Section E only.\n- Internal choice count is FIXED and must be exactly: Section A – 0, Section B – 2,\n  Section C – 3, Section D – 2, Section E – 3. Ten OR blocks in the whole paper, no more,\n  no fewer. Verify this before output.\n- Option labels are capital (A) (B) (C) (D) in Section A; internal-choice labels are lower-case\n  (a) / (b); sub-part labels are roman (i) (ii) (iii).\n- Every question must be self-contained: no question may reference the answer to another\n  question, and no data, extract or constant may be assumed from outside the stem.\n- No two questions in the paper may test the same result, technique or extract.\n- Where the subject uses numbers, choose them so answers come out clean (integers, simple surds,\n  or simple multiples of π) — no unresolvable decimals.\n- If this subject is quantitative, typeset the mathematics properly: fractions stacked, integrals\n  with limits, matrices in square brackets, vectors with over-arrows and unit vectors with hats,\n  ℝ and ℕ for number sets, and Greek letters as parameters. If it is not a quantitative subject,\n  ignore this rule entirely.\n- Use of calculator is not allowed, so no question may require one.\n- Draw every chapter from the weighted topic list given above, in proportion to the stated\n  weights. Any chapter with a weight above zero must appear at least once.\n- Verify before output: Section A = 20 questions, B = 5, C = 6, D = 4, E = 3;\n  total questions = 38; marks = 20 + 10 + 18 + 20 + 12 = 80."
+  }
+]

@@ -1,0 +1,419 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --bg: #FAFAFA;
+    --surface: #FFFFFF;
+    --ink: #0A0A0A;
+    --ink-2: #525252;
+    --primary: #002FA7;
+    --primary-hover: #00207A;
+    --red: #E63946;
+    --yellow: #FFC300;
+    --border-subtle: #E5E5E5;
+    --success: #10B981;
+}
+
+html,
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+code,
+.mono,
+.font-mono {
+    font-family: "JetBrains Mono", monospace;
+}
+
+.font-display {
+    font-family: "Cabinet Grotesk", sans-serif;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+}
+
+.brand-mark {
+    font-family: "Cabinet Grotesk", sans-serif;
+    font-weight: 900;
+    letter-spacing: -0.005em;
+    font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
+}
+
+.brand-mark .accent {
+    color: #002fa7;
+    margin-left: 0.06em;
+}
+
+.font-heading {
+    font-family: "Cabinet Grotesk", sans-serif;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+}
+
+.overline {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    font-weight: 700;
+}
+
+/* Hard offset shadow interactions */
+.hard-shadow {
+    transition:
+        transform 0.15s ease,
+        box-shadow 0.15s ease,
+        background-color 0.15s ease;
+}
+.hard-shadow:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 0 #0a0a0a;
+}
+.hard-shadow:active {
+    transform: translate(0, 0);
+    box-shadow: 0 0 0 0 #0a0a0a;
+}
+
+.hard-shadow-static {
+    box-shadow: 4px 4px 0 0 #0a0a0a;
+}
+.hard-shadow-static-lg {
+    box-shadow: 8px 8px 0 0 rgba(10, 10, 10, 0.15);
+}
+
+/* Input + card resets */
+.qp-input {
+    @apply w-full border-2 border-black bg-white px-3 py-2 rounded-none focus:outline-none focus:ring-0;
+    font-family: "IBM Plex Sans", sans-serif;
+}
+.qp-input:focus {
+    border-color: var(--primary);
+}
+
+.qp-label {
+    @apply overline block mb-2;
+}
+
+.qp-card {
+    @apply bg-white border-2 border-black rounded-none p-6;
+}
+
+/* Buttons */
+.qp-btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 border-2 border-black font-bold uppercase tracking-wider text-sm rounded-none select-none;
+    font-family: "IBM Plex Sans", sans-serif;
+    transition:
+        transform 0.15s ease,
+        box-shadow 0.15s ease,
+        background-color 0.15s ease;
+}
+.qp-btn-primary {
+    background: var(--primary);
+    color: white;
+}
+.qp-btn-primary:hover:not(:disabled) {
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 0 #0a0a0a;
+}
+.qp-btn-primary:active:not(:disabled) {
+    transform: translate(0, 0);
+    box-shadow: none;
+}
+.qp-btn-secondary {
+    background: white;
+    color: var(--ink);
+}
+.qp-btn-secondary:hover:not(:disabled) {
+    background: #f2f2f2;
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 0 #0a0a0a;
+}
+.qp-btn-ghost {
+    @apply px-3 py-2 font-medium text-sm;
+    border: none;
+    background: transparent;
+    color: var(--ink);
+    text-transform: none;
+    letter-spacing: normal;
+}
+.qp-btn-ghost:hover {
+    background: #f2f2f2;
+}
+.qp-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Badge */
+.qp-badge {
+    @apply inline-flex items-center gap-1 border border-black px-2 py-0.5 text-xs uppercase bg-white;
+    font-family: "JetBrains Mono", monospace;
+    letter-spacing: 0.05em;
+}
+.qp-badge-blue {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+}
+.qp-badge-yellow {
+    background: var(--yellow);
+    color: var(--ink);
+    border-color: var(--ink);
+}
+.qp-badge-red {
+    background: var(--red);
+    color: white;
+    border-color: var(--ink);
+}
+.qp-badge-success {
+    background: var(--success);
+    color: white;
+    border-color: var(--ink);
+}
+
+/* Upload zone */
+.qp-drop {
+    @apply border-2 border-dashed border-black bg-neutral-50 p-12 text-center cursor-pointer flex flex-col items-center justify-center transition-colors;
+}
+.qp-drop:hover {
+    background: #f2f2f2;
+}
+.qp-drop.active {
+    background: #eef2ff;
+    border-color: var(--primary);
+}
+
+/* Table-like rows */
+.qp-row-border {
+    @apply border-b border-black;
+}
+
+/* Selection */
+::selection {
+    background: var(--yellow);
+    color: var(--ink);
+}
+
+/* Shadcn variables (keep light for components we use) */
+@layer base {
+    :root {
+        --background: 0 0% 98%;
+        --foreground: 0 0% 4%;
+        --card: 0 0% 100%;
+        --card-foreground: 0 0% 4%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 0 0% 4%;
+        --primary: 223 100% 33%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 0 0% 96%;
+        --secondary-foreground: 0 0% 9%;
+        --muted: 0 0% 96%;
+        --muted-foreground: 0 0% 32%;
+        --accent: 0 0% 96%;
+        --accent-foreground: 0 0% 4%;
+        --destructive: 356 78% 56%;
+        --destructive-foreground: 0 0% 98%;
+        --border: 0 0% 4%;
+        --input: 0 0% 4%;
+        --ring: 223 100% 33%;
+        --radius: 0px;
+    }
+}
+
+@layer base {
+    body {
+        @apply bg-background text-foreground;
+    }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+::-webkit-scrollbar-track {
+    background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+    background: var(--ink);
+}
+
+/* ---------------------------------------------------------------------------
+   Math fallback
+   ---------------------------------------------------------------------------
+   MathText renders this instead of KaTeX's red error markup when an expression
+   still will not parse (see components/MathText.jsx). It has to stay legible
+   rather than shout: by the time a teacher sees it the backend repair pass has
+   already tried and failed, so the useful thing is to show the source cleanly.
+   --------------------------------------------------------------------------- */
+.math-fallback {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    padding: 0 0.15em;
+    border-bottom: 1px dotted currentColor;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+pre.math-fallback {
+    display: block;
+    margin: 0.4em 0;
+    padding: 0.3em 0.5em;
+    border-bottom: none;
+    border-left: 2px solid currentColor;
+    overflow-x: auto;
+}
+
+/* ---------------------------------------------------------------------------
+   Print
+   ---------------------------------------------------------------------------
+   The question paper and answer key are saved as PDF by printing the live DOM
+   rather than by the backend ReportLab renderer, so the output keeps the app's
+   fonts and KaTeX math (as vector, not raster). See lib/print.js.
+
+   Note: the print layout viewport is the page content box (~182mm ≈ 690px),
+   which is below Tailwind's `md` breakpoint (768px) — `md:` variants therefore
+   do not apply here. The padding resets below make that mostly moot.
+   --------------------------------------------------------------------------- */
+@media print {
+    @page {
+        size: A4 portrait;
+        /* No vertical margin means the browser has no space for its automatic
+           header/footer (including the paper URL and ID). Keep side margins
+           on every sheet and add document spacing through main below. */
+        margin: 0 14mm;
+    }
+
+    /* --- Strip the application chrome --- */
+    .no-print {
+        display: none !important;
+    }
+    /* Header.jsx renders a <header>; without this the logo, nav and Logout
+       button print above the paper. */
+    header,
+    [data-sonner-toaster] {
+        display: none !important;
+    }
+
+    /* --- Reset the page shell so the document owns the sheet --- */
+    html,
+    body {
+        background: #fff !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    .App > div,
+    .min-h-screen {
+        min-height: 0 !important;
+        background: #fff !important;
+    }
+    main {
+        max-width: none !important;
+        margin: 0 !important;
+        padding: 14mm 0 !important;
+    }
+
+    /* --- The paper / answer key becomes the page itself --- */
+    [data-testid="paper-preview"],
+    [data-testid="solution-body"] {
+        max-width: none !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        /* Inherited, so this one declaration keeps the fills on badges, the
+           instructions box and the answer boxes. Without it browsers drop
+           background colours and the blue/red badges — white text on a
+           coloured fill — print white-on-white, i.e. invisible. */
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    /* --- Never reveal the correct answer on the question paper --- */
+    /* The correct option's row carries `text-green-800`. The adjacent "Correct"
+       chip is .no-print, but a text colour is not a background, so it survives
+       printing and tints the answer green on the student's copy. */
+    [data-testid="paper-preview"] [data-testid^="mcq-option-"] {
+        color: inherit !important;
+    }
+
+    /* --- Pagination --- */
+    li[data-testid^="question-item-"],
+    li[data-testid^="solution-item-"] {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+    /* Don't orphan a section heading at the foot of a page. */
+    section > h2 {
+        break-after: avoid;
+        page-break-after: avoid;
+    }
+    img[data-testid^="diagram-"] {
+        break-inside: avoid;
+        page-break-inside: avoid;
+        max-height: 90mm;
+    }
+
+    /* An unrenderable expression prints as its source rather than as a red
+       error. Black on white, no dotted rule — on paper the underline reads as
+       part of the maths. */
+    .math-fallback {
+        color: #000 !important;
+        border-bottom: none !important;
+        border-left: none !important;
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
+    /* --- Hide transient state that must not reach paper --- */
+    /* Empty dashed boxes for diagrams that are still generating or loading. */
+    [data-testid^="diagram-pending-"],
+    [data-testid="diagram-loading"],
+    /* SolutionView progress / error banners. The stale-banner is deliberately
+       kept, matching the note the backend answer-key PDF prints. */
+    [data-testid="generating-banner"],
+    [data-testid="partial-banner"],
+    [data-testid="failed-banner"] {
+        display: none !important;
+    }
+}
+/* Section allocation and backend summary panels. */
+.section-tabs { display:flex; flex-wrap:wrap; gap:4px; border-bottom:2px solid #111; }
+.section-tabs button { flex:1 1 110px; text-align:left; padding:10px; border:1px solid #d4d4d4; font-size:11px; }
+.section-tabs button small { display:block; margin-top:4px; }
+.section-tabs button.is-active { background:#111; color:#fff; }
+.section-topic-group { border:1px solid #aaa; padding:10px; margin:14px 0; min-width:0; }
+.section-topic-group legend { padding:0 5px; font-size:11px; font-weight:700; }
+.section-topic-row { padding:12px; border:1px solid #ddd; margin:8px 0; background:#fafafa; }
+.section-topic-row.is-selected { border-color:#222; background:#fff; }
+.section-topic-title { display:flex; align-items:flex-start; gap:10px; font-size:13px; }
+.section-topic-title input { margin-top:4px; accent-color:#002fa7; }
+.section-topic-title small { display:block; font-size:10px; color:#737373; margin-top:4px; overflow-wrap:anywhere; }
+.section-topic-controls { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-top:12px; }
+.section-topic-controls label { font-size:10px; display:flex; flex-direction:column; gap:4px; }
+.section-topic-controls label.diagram-toggle { flex-direction:row; align-items:center; }
+.section-topic-controls select,.section-topic-controls input[type=number] { border:1px solid #a3a3a3; padding:6px; background:#fff; font-size:11px; }
+.section-topic-controls input[type=number] { width:70px; }
+.blueprint-summary-facts>div { display:flex; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px solid #eee; font-size:11px; }
+.blueprint-summary-facts dt { color:#737373; }
+.blueprint-summary-facts dd { text-align:right; font-weight:600; max-width:65%; overflow-wrap:anywhere; }
+.summary-issues { list-style:disc; padding-left:18px; margin-top:12px; font-size:11px; color:#92400e; }
+.summary-issues li { margin:6px 0; }
+.paper-with-summary { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:24px; align-items:start; }
+.paper-summary { position:sticky; top:20px; min-width:0; }
+.paper-summary .qp-card { padding:20px; }
+.paper-summary h3 { font-size:11px; text-transform:uppercase; font-weight:700; margin-bottom:10px; }
+.paper-summary-totals { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:18px 0; text-align:center; }
+.paper-summary-totals strong,.paper-summary-totals small { display:block; }
+.paper-summary-totals strong { font-size:24px; }
+.paper-summary-totals small { font-size:10px; color:#737373; }
+.summary-meter { margin:12px 0; }
+.summary-meter>div { display:flex; justify-content:space-between; gap:8px; font-size:11px; }
+.summary-meter strong { white-space:nowrap; }
+.summary-meter progress { display:block; width:100%; height:6px; margin-top:6px; accent-color:#002fa7; }
+@media(max-width:1100px) { .paper-with-summary { grid-template-columns:minmax(0,1fr); } .paper-summary { position:static; } }
+@media print { .paper-with-summary { display:block!important; } .paper-summary { display:none!important; } }
