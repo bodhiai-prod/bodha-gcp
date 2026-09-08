@@ -170,7 +170,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
              patch.object(workers, "parse_instructions", AsyncMock()) as parse, \
              patch.object(workers, "complete_sections", AsyncMock(return_value={})), \
              patch.object(workers, "repair_sections", AsyncMock(return_value={})), \
-             patch.object(workers, "dedupe_sections", return_value={}), \
+             patch.object(workers, "dedupe_sections", AsyncMock(return_value={})), \
              patch.object(workers, "_auto_topup_if_short", AsyncMock()):
             await workers.generate_paper_background(paper_id="test", owner_id="teacher", subject="Physics", klass="12",
                 topics_weighted=[{"name": "Transformers", "weight": 5}], difficulty="medium", distribution={}, total_marks=6,

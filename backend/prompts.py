@@ -549,6 +549,45 @@ def render_precedence(klass: str, subject: str, spec: dict | None) -> str:
     )
 
 
+# Characters kept from each stem in the "do not repeat" list below.
+#
+# Both caps this replaced were silent. The old `[:60]` was a FRONT slice, so on
+# a paper longer than 60 questions it was questions 61+ -- the most recently
+# added, and the ones a top-up is likeliest to repeat -- that the model never
+# saw at all. The old `[:200]` cut a long word problem mid-sentence, so the
+# quantities that distinguish it from its near-twin fell off the end.
+#
+# Dropping a whole stem loses the question entirely; trimming one keeps its
+# opening clause, which is what identifies it. So every stem is now listed, and
+# each is trimmed harder to pay for it.
+STEM_CHARS = 120
+
+_AVOID_HEADER = (
+    "QUESTIONS ALREADY ON THIS PAPER (do NOT repeat or paraphrase any of these):"
+)
+
+
+def avoid_list_block(existing_questions: list | None, *, header: str = "") -> str:
+    """The "do NOT repeat these" block, listing EVERY question already written.
+
+    Shared by the top-up paths and by batched first-pass generation, which is
+    the point of hoisting it out of `qgen_prompt`: a batch that cannot see what
+    the batches before it wrote will re-ask their questions, and on a large
+    paper that is the single biggest source of duplicates.
+
+    `competitive_routes` built its own copy of this list with the same two caps
+    and slightly different wording. It calls this now instead, so there is one
+    place to get it right.
+    """
+    stems = []
+    for q in existing_questions or []:
+        text = " ".join(str(q).split())[:STEM_CHARS]
+        if text:
+            stems.append(f"- {text}")
+    if not stems:
+        return ""
+    return (header or _AVOID_HEADER) + "\n" + "\n".join(stems) + "\n\n"
+
 
 def qgen_prompt(
     subject: str,
@@ -737,15 +776,7 @@ def qgen_prompt(
             "already sum to the number being asked for. Set the 'topic' field of\n"
             "every new question to the topic name EXACTLY as spelled above.\n\n"
         )
-        stems = []
-        for q in (existing_questions or [])[:60]:
-            text = " ".join(str(q).split())[:200]
-            if text:
-                stems.append(f"- {text}")
-        existing_block = (
-            "QUESTIONS ALREADY ON THIS PAPER (do NOT repeat or paraphrase "
-            "any of these):\n" + "\n".join(stems) + "\n\n"
-        ) if stems else ""
+        existing_block = avoid_list_block(existing_questions)
         plural = "s" if topup_count != 1 else ""
         topup_block = (
             "TOP-UP REQUEST (HIGHEST PRIORITY — read this before "
@@ -758,6 +789,26 @@ def qgen_prompt(
             "marks value; the new questions do not need to sum to the "
             "paper's total marks.\n\n"
             + existing_block
+        )
+
+    # First-pass generation used to carry NO anti-duplication instruction at
+    # all: the avoid-list above was gated behind `topup_count > 0`, so on the
+    # initial call the model was never told not to repeat itself. That was
+    # survivable while a paper was one call of at most 25 questions. It is not
+    # survivable once a large paper is generated as several batches, because
+    # each batch is a separate call that cannot otherwise see the others.
+    #
+    # Placed at the FRONT for the same reason topup_block is: it is a hard
+    # constraint and the tail of this prompt is long.
+    batch_block = ""
+    if topup_count <= 0 and existing_questions:
+        batch_block = avoid_list_block(
+            existing_questions,
+            header=(
+                "ALREADY WRITTEN FOR THIS PAPER (earlier batches of the same "
+                "paper — do NOT repeat or paraphrase any of these, and do NOT "
+                "restate them in your reply):"
+            ),
         )
 
     # Rendered from the teacher's own words, and placed with the ladder
@@ -801,6 +852,7 @@ def qgen_prompt(
 
     return (
         f"{topup_block}"
+        f"{batch_block}"
         f"Generate an ORIGINAL question paper for Class {klass} - {subject}.\n"
         f"Topics to cover (with weightage — heavier topics get more questions):\n"
         f"{topics_block}\n\n"
@@ -1509,4 +1561,76 @@ def instruction_spec_prompt(text: str, *, context: dict | None = None) -> str:
         '"Use SI units throughout" ->\n'
         '  everything zero/empty, unparsed ["Use SI units throughout"]\n\n'
         f"=== TEACHER'S INSTRUCTIONS ===\n{text.strip()}\n=== END ==="
+    )
+
+
+# ---------------------------------------------------------------------------
+# Near-duplicate review — the third tier of question_dedupe
+# ---------------------------------------------------------------------------
+# question_dedupe scores with TF-IDF cosine, which is a LEXICAL measure: it
+# catches "the same question reworded" only while the rewording reuses most of
+# the same words. Measured against real pairs, that is not merely imperfect for
+# a paraphrase -- it is backwards. True paraphrases ("a car accelerates from
+# rest to 20 m/s in 5 s, find its acceleration" / "starting from standstill a
+# vehicle reaches 20 m/s after 5 s, what is its rate of change of velocity")
+# score 0.00-0.17, while genuinely DIFFERENT questions sharing a template
+# ("define electric potential and state its SI unit" / "define electric field
+# intensity and state its SI unit") score 0.51-0.71.
+#
+# So there is no similarity band that selects paraphrases: any threshold low
+# enough to include them is dominated by the pairs that must not be touched.
+# This tier therefore reads the whole paper at once rather than being handed
+# candidate pairs -- which is also far cheaper, one call per paper instead of
+# a judgement for each of n-squared pairs.
+QUESTION_DEDUPE_SYSTEM = (
+    "You find questions that repeat each other within a single exam paper.\n\n"
+    "Two questions are the SAME QUESTION when a student who can answer one can "
+    "answer the other with no additional knowledge and no additional work: the "
+    "same thing is asked, tested the same way, and reached by the same "
+    "reasoning. Wording, phrasing, names, order and surface context do not "
+    "matter -- a question rewritten from scratch in different words is still "
+    "the same question.\n\n"
+    "NOT the same question:\n"
+    "- Same topic or same formula, but a different quantity is being solved "
+    "for (area vs circumference; velocity vs acceleration; potential vs field "
+    "intensity).\n"
+    "- The same setup with genuinely different numbers that change the work.\n"
+    "- One asks to define or state, the other to apply, derive or explain.\n"
+    "- Different depth, difficulty, or number of steps required.\n"
+    "- Questions that merely share a sentence pattern or a stock opening.\n\n"
+    "Group a question with another ONLY when you are confident they are the "
+    "same question. Everything you group costs a teacher a question they will "
+    "not get back, and anything you leave alone is simply kept, so the safe "
+    "answer whenever you are unsure is to leave it out."
+)
+
+
+def question_dedupe_prompt(items: list) -> str:
+    """One call, the whole paper, asking which questions repeat each other.
+
+    Deliberately NOT chunked, unlike the batched calls in latex_repair and
+    question_repair. Splitting the list would leave each chunk unable to see
+    the others -- which is the exact blindness this tier exists to correct, and
+    the reason the duplicates got onto the paper in the first place.
+    """
+    payload = json.dumps(
+        [{"id": str(it.get("id", "")), "q": it.get("text", "")} for it in items],
+        ensure_ascii=False,
+        indent=1,
+    )
+    return (
+        "Below is every question on one exam paper. Identify the ones that "
+        "repeat each other.\n\n"
+        "Obvious word-for-word repeats have already been removed by an earlier "
+        "pass, so what is left for you is the harder case: two questions "
+        "written in completely different words that nonetheless ask the same "
+        "thing. Read for what is being ASKED, not for how it is phrased.\n\n"
+        "Return each set of repeats as one group of ids. A question that "
+        "repeats nothing appears in no group. Most papers have few groups or "
+        "none at all; returning an empty list is a valid and common answer.\n\n"
+        "Return ONLY strict JSON, using ids exactly as given:\n"
+        "{\n"
+        '  "duplicates": [ ["id1", "id7"], ["id3", "id4", "id9"] ]\n'
+        "}\n\n"
+        f"=== QUESTIONS ===\n{payload}\n=== END ==="
     )

@@ -187,3 +187,56 @@ def topic_shortfall(coverage: dict) -> dict:
         if gap > 0:
             out[name] = gap
     return out
+
+
+def partition_topics(topics: list, sizes: list) -> list:
+    """Give each batch its own slice of the topic list.
+
+    Every batch used to be handed the FULL topic list. Batches run
+    concurrently, so N independent calls each saw the same topics, the same
+    anchors and the same difficulty, and each independently decided its own
+    mix -- which is why a handful of topics ended up dominating and why the
+    same question came back from two batches at once. Splitting the list
+    fixes both: a topic belongs to one batch, and no two batches can write
+    about it in parallel.
+
+    Slices are sized by each batch's question count. Competitive requests
+    carry no weights, so the split is even -- which is the right default and
+    is what "distribute equally when nothing is adjusted" means here. When
+    there are fewer topics than batches the list cycles, so a small topic set
+    across many batches still spreads rather than starving the tail.
+
+    That cycling case is worth naming, because partitioning alone cannot fix
+    it: with fewer topics than batches, some batches MUST share a topic, and
+    two batches on one topic is exactly the condition that produced duplicates
+    in the first place. What covers it is not this function but cross-batch
+    visibility -- every batch after the first is handed the stems its
+    predecessors already wrote (`prompts.avoid_list_block`). Partitioning
+    reduces the collisions; the avoid-list is what catches the rest.
+
+    Lives here rather than in competitive_routes because the school path
+    batches large papers the same way now, and both import this module.
+    """
+    topics = [t for t in (topics or []) if str(t).strip()]
+    if not topics or not sizes:
+        return [list(topics) for _ in (sizes or [1])]
+    if len(topics) <= len(sizes):
+        return [[topics[i % len(topics)]] for i in range(len(sizes))]
+
+    total = sum(sizes) or 1
+    out: list = []
+    cursor = 0
+    for idx, n in enumerate(sizes):
+        remaining_batches = len(sizes) - idx
+        # At least one topic each, and never more than leaves the batches
+        # after this one empty-handed.
+        want = max(1, round(len(topics) * n / total))
+        want = min(want, len(topics) - cursor - (remaining_batches - 1))
+        want = max(1, want)
+        out.append(topics[cursor:cursor + want] or [topics[cursor % len(topics)]])
+        cursor += want
+    # Anything left over from rounding joins the last batch rather than being
+    # silently dropped -- an unassigned topic gets zero questions.
+    if cursor < len(topics):
+        out[-1].extend(topics[cursor:])
+    return out

@@ -25,18 +25,31 @@ Three layers, cheapest first:
    identical can dip under the plain threshold on the strength of the number
    alone.
 
-Nothing here raises and nothing calls a model -- a paper this cannot score is
-left exactly as it was found. It never drops more than MAX_DROP_RATIO of the
-paper either: if the matrix claims half the questions are duplicates, the
-threshold is wrong, and a half-length paper is worse than a repetitive one.
+3. ``_review_duplicates()`` -- the pairs the score could not call either way
+   go to a model, batched into one call. This is the only tier that costs
+   anything, it only ever sees the borderline band, and a paper with no
+   borderline pairs never makes the call. Cosine is a LEXICAL measure: it
+   catches a reword only while the rewording reuses most of the same words, so
+   a model that paraphrases well produces duplicates that are semantically
+   identical, lexically distinct, and invisible to tiers 1 and 2.
+
+Nothing here raises -- a paper this cannot score, or whose judge call fails, is
+left exactly as the lexical tiers found it. Scored drops never exceed
+MAX_DROP_RATIO of the paper either: if the matrix claims half the questions are
+duplicates, the threshold is wrong, and a half-length paper is worse than a
+repetitive one. Exact duplicates are exempt from that cap -- they involve no
+threshold and no judgement.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 
 from deps import logger, utcnow_iso
 from diagram_policy import plain_text
+from llm_adapter import chat_complete, parse_json_response
+from prompts import QUESTION_DEDUPE_SYSTEM, question_dedupe_prompt
 
 # latex_repair owns "what counts as the same number" -- it expands Unicode
 # digits before extracting, which a second implementation here would get wrong
@@ -69,6 +82,26 @@ MIN_CORPUS = 2
 # whether they are the same question. Short stems are compared for exact
 # equality instead -- see _classify.
 MIN_TOKENS = int(os.environ.get("QUESTION_DEDUPE_MIN_TOKENS", "5"))
+
+# --- tier 3: the model that reads the pairs the score could not call ---------
+# false keeps both free tiers and skips the model entirely, which is exactly
+# how this module behaved before the tier existed.
+LLM_ENABLED = os.environ.get(
+    "QUESTION_DEDUPE_LLM_ENABLED", "true"
+).strip().lower() not in ("false", "0", "no")
+# Blank means "reuse whatever chain TEXT_PROVIDER already serves". Set it only
+# to pin the judgement to a different (usually cheaper) model -- the job is a
+# yes/no over two short strings.
+LLM_MODEL = os.environ.get("QUESTION_DEDUPE_LLM_MODEL", "").strip()
+# Characters kept from each stem when the paper is sent for review. The judge
+# is reading for what a question ASKS, which its opening clause carries; the
+# full text of 200 questions would mostly be spent on restating quantities the
+# judgement does not turn on.
+LLM_STEM_CHARS = int(os.environ.get("QUESTION_DEDUPE_LLM_STEM_CHARS", "220"))
+# Budget for one judgement call. Enforced here rather than in chat_complete so
+# a slow judge can never hold a generation open longer than its own share; on
+# timeout the lexical verdict stands and the paper keeps both questions.
+LLM_TIMEOUT = float(os.environ.get("QUESTION_DEDUPE_LLM_TIMEOUT", "60"))
 # The vectoriser's own token rule: words of two characters or more. Single
 # digits are NOT tokens to it, which is worth knowing -- "mass 2 kg" and
 # "mass 4 kg" vectorise identically and are caught as a plain duplicate rather
@@ -148,8 +181,17 @@ def _over_represented(q: dict, coverage: dict | None) -> int:
     that already has too many questions is free -- the pair has to lose one
     either way -- and it is what makes deduping and rebalancing a single
     operation rather than two that fight each other.
+
+    Two coverage shapes reach here. `topic_balance.measure_coverage` keys
+    `per_topic` by topic NAME; `section_blueprints.allocation_coverage` keys the
+    same field by `allocation_id` and counts each question's allocation rather
+    than its topic. Looking up only by name meant every lookup missed on a
+    blueprint paper, this returned its defensive 0 for everything, and the
+    tie-break quietly degraded to "the later one loses" -- no error, no log, and
+    the rebalancing half of this pass simply stopped happening there.
     """
-    row = ((coverage or {}).get("per_topic") or {}).get(q.get("topic"))
+    rows = (coverage or {}).get("per_topic") or {}
+    row = rows.get(q.get("allocation_id")) or rows.get(q.get("topic"))
     if not isinstance(row, dict):
         return 0
     try:
@@ -164,6 +206,8 @@ def empty_stats(checked: int = 0) -> dict:
         "checked": checked,
         "dropped": 0,
         "capped": False,
+        "reviewed": 0,
+        "llm_dropped": 0,
         "reasons": {},
         "pairs": [],
         "at": utcnow_iso(),
@@ -230,6 +274,122 @@ def find_duplicates(
     return dropped, pairs
 
 
+async def _llm_judge(items: list) -> list:
+    """Which questions repeat each other? Returns a list of id groups.
+
+    Never raises and never partially applies: a failure returns [], which
+    leaves the paper exactly as the lexical tiers left it. Same contract as
+    latex_repair._llm_fix and question_repair._llm_complete, and for the same
+    reason -- this pass must not be able to fail a generation.
+
+    No inner retry loop. One reading is worth one attempt; a paper is not worth
+    holding open to re-ask a question whose answer defaults to "keep".
+    """
+    chain = [LLM_MODEL] if LLM_MODEL else None
+    try:
+        raw = await asyncio.wait_for(
+            chat_complete(
+                system_message=QUESTION_DEDUPE_SYSTEM,
+                user_text=question_dedupe_prompt(items),
+                provider_chain=chain,
+            ),
+            timeout=LLM_TIMEOUT,
+        )
+        data = parse_json_response(raw)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[dedupe] judge call failed, keeping lexical verdict: {e}")
+        return []
+    known = {it["id"] for it in items}
+    groups = []
+    for group in (data.get("duplicates") if isinstance(data, dict) else None) or []:
+        if not isinstance(group, (list, tuple)):
+            continue
+        # Ids the model invented are dropped rather than guessed at, and a
+        # "group" of one repeats nothing.
+        ids = [str(g) for g in group if str(g) in known]
+        if len(ids) >= 2:
+            groups.append(ids)
+    return groups
+
+
+async def _review_duplicates(
+    ordered: list,
+    *,
+    drop_ids: set,
+    coverage: dict | None,
+    protected: int,
+    limit: int,
+    ref: str = "",
+) -> tuple:
+    """Tier 3. Returns (extra_drop_ids, extra_pairs, reviewed_count).
+
+    Reads every question the lexical tiers left standing, in one call. A pair
+    of questions that share no vocabulary is invisible to a cosine score, so
+    there is no cheap way to shortlist candidates first -- see the note above
+    QUESTION_DEDUPE_SYSTEM for the measurements behind that.
+
+    `limit` caps what this tier may drop, for the same reason the lexical cap
+    exists: a model reading too eagerly can lose a paper exactly as fast as a
+    mis-set threshold, and it costs more to find out.
+    """
+    survivors = [
+        (idx, q) for idx, q in enumerate(ordered)
+        if q.get("id") is not None and q.get("id") not in drop_ids
+    ]
+    if len(survivors) < MIN_CORPUS:
+        return set(), [], 0
+
+    index_of = {q["id"]: idx for idx, q in survivors}
+    items = [
+        {"id": str(q["id"]), "text": _normalise(q.get("question") or "")[:LLM_STEM_CHARS]}
+        for _, q in survivors
+    ]
+    groups = await _llm_judge(items)
+
+    extra_ids: set = set()
+    extra_pairs: list = []
+    for group in groups:
+        # _llm_judge already drops ids that are not on the paper, so this is
+        # belt and braces -- but a group naming something the lexical tiers
+        # removed must narrow the group, never raise.
+        group = [qid for qid in group if qid in index_of]
+        if len(group) < 2:
+            continue
+        # Keep exactly one of each group. Protected questions (a top-up's
+        # existing paper) can never be the one that goes, and past that the
+        # keeper is whichever the topic quotas need most -- the same rule the
+        # lexical tiers use, so the two cannot disagree about who wins.
+        ranked = sorted(
+            group,
+            key=lambda qid: (
+                index_of[qid] >= protected,
+                _over_represented(ordered[index_of[qid]], coverage),
+                index_of[qid],
+            ),
+        )
+        keeper = ranked[0]
+        for qid in ranked[1:]:
+            if index_of[qid] < protected:
+                continue  # never shrink the paper a top-up is extending
+            if qid in extra_ids:
+                continue
+            if len(extra_ids) >= limit:
+                logger.warning(
+                    f"[dedupe] {ref or '-'} judge hit its {limit}-drop budget; "
+                    "it is reading too eagerly, or the paper really is that "
+                    "repetitive"
+                )
+                return extra_ids, extra_pairs, len(items)
+            extra_ids.add(qid)
+            extra_pairs.append({
+                "kept": keeper,
+                "dropped": qid,
+                "score": None,
+                "reason": "semantic_duplicate",
+            })
+    return extra_ids, extra_pairs, len(items)
+
+
 def _apply(sections: list, drop_ids: set) -> None:
     for s in sections or []:
         s["questions"] = [
@@ -238,7 +398,7 @@ def _apply(sections: list, drop_ids: set) -> None:
         ]
 
 
-def dedupe_sections(
+async def dedupe_sections(
     sections: list,
     *,
     ref: str = "",
@@ -278,17 +438,52 @@ def dedupe_sections(
     # paper, not to stop small papers being deduped at all -- and a plain
     # int() of the ratio is zero for anything under four questions, which
     # silently disabled the whole feature on short papers and top-ups.
+    # What the valve is actually protecting against is a mis-set THRESHOLD --
+    # a score low enough to call unrelated questions duplicates would otherwise
+    # gut a paper. An exact duplicate involves no threshold and no judgement:
+    # the two stems are the same string after normalisation. Rationing those
+    # meant a large paper shipped verbatim repeats, which is the one outcome
+    # nobody would choose, so they are now dropped unconditionally and only the
+    # scored pairs are rationed.
+    #
+    # This is what stopped the cap from binding on large papers. At 25 questions
+    # the 25% allowance was 6 and was rarely reached; at 80 it is 20, and a
+    # narrow topic list crosses that easily -- everything past it stayed on the
+    # paper with nothing but a `capped` flag to say so.
     limit = max(1, int(len(fresh) * MAX_DROP_RATIO))
     ranked = sorted(pairs, key=lambda p: -p["score"])
-    if len(drop_idx) > limit:
+    exact = [p for p in ranked if p["reason"] == "exact_duplicate"]
+    scored = [p for p in ranked if p["reason"] != "exact_duplicate"]
+    if len(scored) > limit:
         stats["capped"] = True
         logger.warning(
-            f"[dedupe] {ref or '-'} {len(drop_idx)} of {len(fresh)} flagged, "
-            f"capping at {limit} -- threshold is probably wrong"
+            f"[dedupe] {ref or '-'} {len(scored)} scored duplicates of "
+            f"{len(fresh)} fresh, capping at {limit} -- threshold is "
+            f"probably wrong ({len(exact)} exact duplicates dropped regardless)"
         )
-        ranked = ranked[:limit]
+        scored = scored[:limit]
+    ranked = exact + scored
 
     drop_ids = {p["dropped"] for p in ranked if p["dropped"]}
+
+    # Tier 3 reads what the free tiers left standing. Runs before _apply so the
+    # whole pass is still one edit to the paper, and gets its own drop budget
+    # rather than sharing the lexical one -- the two fail in different ways, and
+    # a shared allowance would let either mask the other.
+    if LLM_ENABLED:
+        extra_ids, extra_pairs, reviewed = await _review_duplicates(
+            ordered,
+            drop_ids=drop_ids,
+            coverage=coverage,
+            protected=len(existing),
+            limit=limit,
+            ref=ref,
+        )
+        stats["reviewed"] = reviewed
+        stats["llm_dropped"] = len(extra_ids)
+        drop_ids |= extra_ids
+        ranked = ranked + extra_pairs
+
     _apply(sections, drop_ids)
 
     stats["dropped"] = len(drop_ids)
@@ -298,10 +493,11 @@ def dedupe_sections(
         if p["dropped"] in drop_ids:
             reasons[p["reason"]] = reasons.get(p["reason"], 0) + 1
     stats["reasons"] = reasons
-    if drop_ids:
+    if drop_ids or stats["reviewed"]:
         logger.info(
             f"[dedupe] {ref or '-'} checked={stats['checked']} "
             f"dropped={stats['dropped']} "
+            f"reviewed={stats['reviewed']} llm={stats['llm_dropped']} "
             f"reasons={','.join(f'{k}={v}' for k, v in sorted(reasons.items()))}"
         )
     return stats
