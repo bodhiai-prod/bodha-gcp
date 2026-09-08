@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
+import PaperSummary from "@/components/PaperSummary";
 import { toast } from "sonner";
 import {
   Star,
@@ -131,6 +132,7 @@ export default function PaperView() {
         total_marks: Number(draft.total_marks),
         sections: draft.sections.map((s) => ({
           title: s.title,
+          section_id: s.section_id || null,
           questions: s.questions,
         })),
       };
@@ -354,7 +356,7 @@ export default function PaperView() {
   return (
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
-      <main className="max-w-5xl mx-auto p-6 md:p-12" data-testid="paper-view-page">
+      <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="paper-view-page">
         {topup?.status === "generating" && (
           <div
             className="no-print mb-6 border-2 border-black bg-blue-50 p-4 flex items-center gap-3"
@@ -524,6 +526,7 @@ export default function PaperView() {
           </div>
         </div>
 
+        <div className="paper-with-summary">
         {/* Paper */}
         <div
           className="bg-white border-2 border-black p-8 md:p-12 hard-shadow-static-lg"
@@ -857,6 +860,8 @@ export default function PaperView() {
           <div className="text-center mt-8 pt-4 border-t-2 border-black font-mono text-xs text-neutral-500">
             — End of Paper —
           </div>
+        </div>
+        <PaperSummary paper={paper} editing={editing} />
         </div>
       </main>
     </div>

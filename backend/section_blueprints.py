@@ -1,0 +1,347 @@
+"""Structured board contracts, allocation validation and observable summaries.
+
+No database or model dependencies: the preview and worker use the same rules.
+Counts refer to numbered question blocks; subparts and OR alternatives stay in
+their parent question and do not add to the attemptable marks.
+"""
+from collections import Counter
+from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
+import re
+
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Literal
+
+
+class BlueprintGroup(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    label: str = ""
+    count: int = Field(strict=True, ge=1, le=200)
+    marks: int = Field(strict=True, ge=1, le=200)
+    format: Literal["mcq", "short_answer", "long_answer", "fill_blank", "true_false"]
+    diagram_minimum: int = Field(default=0, ge=0, le=200)
+    internal_choices: int | None = Field(default=None, ge=0, le=200)
+
+
+class BlueprintSection(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    title: str
+    groups: list[BlueprintGroup] = Field(min_length=1, max_length=30)
+    attempt_count: int | None = None
+    choice_set: str | None = None
+
+
+class BlueprintStructure(BaseModel):
+    label: str
+    total_marks: int = Field(strict=True, ge=1, le=1000)
+    duration_minutes: int = Field(strict=True, ge=1, le=1440)
+    sections: list[BlueprintSection] = Field(min_length=1, max_length=30)
+
+
+class Allocation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_id: str
+    group_id: str
+    textbook_id: str
+    topic_id: str
+    count: int = Field(strict=True, ge=1, le=200)
+    difficulty: Literal["easy", "medium", "hard"] | None = None
+    diagrams: bool = False
+
+
+def catalog():
+    return json.loads(Path(__file__).with_name("blueprint_catalog.json").read_text(encoding="utf-8"))
+
+
+def topic_id(book_id, name, parent=""):
+    return hashlib.sha256(json.dumps([book_id, parent, name], ensure_ascii=False).encode()).hexdigest()[:24]
+
+
+def topic_catalog(book):
+    rows = []
+    for topic in book.get("topics") or []:
+        name = topic.get("name", "")
+        if not name:
+            continue
+        for child, parent in [(name, "")] + [(s, name) for s in topic.get("subtopics", []) if isinstance(s, str)]:
+            rows.append({"topic_id": topic_id(book["id"], child, parent), "name": child,
+                         "parent_topic": parent, "textbook_id": book["id"],
+                         "source_chunks": topic.get("source_chunks", []),
+                         "book_label": book.get("original_filename", book["id"])})
+    return rows
+
+
+def section_key(value):
+    match = re.search(r"section\s*[-–—−:]?\s*([a-z0-9]+)", str(value), re.I)
+    return match.group(1).upper() if match else str(value).strip().upper()
+
+
+def blueprint_errors(bp):
+    errors, section_ids = [], set()
+    if not isinstance(bp, dict) or not isinstance(bp.get("sections"), list) or not bp["sections"]:
+        return ["Blueprint must define at least one section."]
+    for section in bp["sections"]:
+        sid = section.get("id")
+        if not sid or sid in section_ids:
+            errors.append("Section identifiers must be unique and nonempty.")
+        section_ids.add(sid)
+        groups, seen = section.get("groups") or [], set()
+        if not groups:
+            errors.append(f"Section {sid} has no question groups.")
+        for group in groups:
+            if not group.get("id") or group["id"] in seen:
+                errors.append(f"Section {sid}: group identifiers must be unique.")
+            seen.add(group.get("id"))
+            for key in ("count", "marks"):
+                if type(group.get(key)) is not int or not 1 <= group[key] <= 200:
+                    errors.append(f"Section {sid}: {key} must be a positive integer, at most 200.")
+            if group.get("format") not in ("mcq", "short_answer", "long_answer", "fill_blank", "true_false"):
+                errors.append(f"Section {sid}: specify a supported question format.")
+        attempt = section.get("attempt_count")
+        if attempt is not None and (type(attempt) is not int or attempt < 1 or
+                attempt > sum(g.get("count", 0) for g in groups)):
+            errors.append(f"Section {sid}: invalid attempt count.")
+        if attempt and len({g.get("marks") for g in groups}) != 1:
+            errors.append(f"Section {sid}: optional questions must have equal marks.")
+    if errors:
+        return errors
+    if sum(g["count"] for s in bp["sections"] for g in s["groups"]) > 200:
+        errors.append("Blueprint exceeds 200 numbered questions.")
+    choices = {}
+    for section in bp["sections"]:
+        if section.get("choice_set"):
+            choices.setdefault(section["choice_set"], []).append(section_marks(section))
+    if any(len(set(values)) != 1 for values in choices.values()):
+        errors.append("Alternative sections must have equal attemptable marks.")
+    actual = attemptable_marks(bp["sections"])
+    if actual != bp.get("total_marks"):
+        errors.append(f"Template offers {actual} attemptable marks but declares {bp.get('total_marks')}; correct the blueprint before allocation.")
+    return errors
+
+
+def section_marks(section):
+    groups = section.get("groups", [])
+    if section.get("attempt_count"):
+        return section["attempt_count"] * groups[0]["marks"]
+    return sum(g["count"] * g["marks"] for g in groups)
+
+
+def attemptable_marks(sections):
+    total, seen = 0, set()
+    for section in sections:
+        choice = section.get("choice_set")
+        if choice and choice in seen:
+            continue
+        seen.add(choice)
+        total += section_marks(section)
+    return total
+
+
+def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram_count=None):
+    errors = blueprint_errors(bp)
+    if errors:
+        return {}, errors
+    if bp["total_marks"] != total_marks:
+        errors.append(f"Paper marks must match this blueprint ({bp['total_marks']}).")
+    topics = {(r["textbook_id"], r["topic_id"]): r for b in books for r in topic_catalog(b)}
+    groups = {(s["id"], g["id"]): g for s in bp["sections"] for g in s["groups"]}
+    counts, seen, resolved = Counter(), set(), []
+    for raw in allocations:
+        a = raw.model_dump() if isinstance(raw, Allocation) else dict(raw)
+        pair = (a["section_id"], a["group_id"])
+        key = (*pair, a["textbook_id"], a["topic_id"])
+        topic = topics.get((a["textbook_id"], a["topic_id"]))
+        if pair not in groups or not topic or key in seen:
+            errors.append("An assignment has a stale section/topic or is duplicated. Review the section editor.")
+            continue
+        seen.add(key)
+        counts[pair] += a["count"]
+        resolved.append({**a, **topic, "difficulty": a.get("difficulty") or difficulty,
+                         "marks": groups[pair]["marks"], "format": groups[pair]["format"],
+                         "allocation_id": hashlib.sha256(json.dumps(key).encode()).hexdigest()[:24]})
+    for pair, group in groups.items():
+        if counts[pair] != group["count"]:
+            errors.append(f"Section {pair[0]} / {group.get('label', pair[1])}: assigned {counts[pair]} of {group['count']} questions.")
+        if group.get("diagram_minimum", 0) > sum(a["count"] for a in resolved if (a["section_id"], a["group_id"]) == pair and a["diagrams"]):
+            errors.append(f"Section {pair[0]} / {pair[1]}: this template requires at least {group['diagram_minimum']} diagram question(s); enable diagrams on an allocation.")
+    minimum = sum(bool(a["diagrams"]) for a in resolved)
+    maximum = sum(a["count"] for a in resolved if a["diagrams"])
+    if diagram_count is not None and not minimum <= diagram_count <= maximum:
+        errors.append(f"Supplied diagrams must be between {minimum} and {maximum} for these assignments.")
+    # These optional streams are explicitly disjoint in the existing ISC prose.
+    if bp.get("id") == "isc12":
+        identities = lambda sid: {(a["textbook_id"], a["parent_topic"] or a["name"]) for a in resolved if a["section_id"] == sid}
+        if identities("B") & identities("C"):
+            errors.append("ISC optional Sections B and C require disjoint chapters.")
+    spec = {"compiled": True, "blueprint": deepcopy(bp), "section_allocations": resolved,
+            "total_questions": sum(g["count"] for g in groups.values()),
+            "total_marks": sum(g["count"] * g["marks"] for g in groups.values()),
+            "attemptable_marks": bp["total_marks"], "topic_difficulty": {},
+            "topic_counts": {}, "format_counts": {}, "type_counts": {}}
+    if diagram_count is not None:
+        spec["diagram_count"] = diagram_count
+    return spec, errors
+
+
+def allocation_prompt(spec):
+    if not spec.get("section_allocations"):
+        return ""
+    bp = spec["blueprint"]
+    return ("\nSECTION ALLOCATION CONTRACT: The following rows replace all global topic weights and "
+            "topic difficulty defaults. Use exactly the section titles in the blueprint below. "
+            "Keep compound subparts and OR alternatives in ONE numbered question. Each question must "
+            "return allocation_id, textbook_id, topic_id, group_id and topic (the topic name), "
+            "and each section must return section_id. Copy these identifiers exactly. "
+            "Each row requires its count of questions with its marks, format and difficulty. "
+            "diagrams=true requires at least one necessary supplied diagram in the row; false forbids "
+            "supplied diagrams. diagram_minimum_satisfied=true makes diagrams optional for that top-up row. Follow existing diagram_spec requirements. Explicit Additional Instructions "
+            "and per-question overrides take precedence over conflicting row fields. "
+            "Return internal_choice_count (integer, number of OR blocks) on every question.\n" +
+            json.dumps({"sections": bp["sections"], "allocations": spec["section_allocations"]}, ensure_ascii=False) + "\n")
+
+
+def allocation_misses(sections, spec):
+    rows = spec.get("section_allocations")
+    if not rows:
+        return []
+    misses, found, index = [], {}, 0
+    by_id = {a["allocation_id"]: a for a in rows}
+    overrides = {o["n"]: o for o in spec.get("question_overrides", [])}
+    for section in sections or []:
+        sid = section.get("section_id") or section_key(section.get("title", ""))
+        for q in section.get("questions", []):
+            index += 1
+            row = by_id.get(q.get("allocation_id"))
+            if not row:
+                misses.append(f"Question {index}: missing or unknown section allocation identity.")
+                continue
+            found.setdefault(row["allocation_id"], []).append(q)
+            if sid != row["section_id"] or section_key(section.get("title", sid)) != section_key(row["section_id"]):
+                misses.append(f"Question {index}: must be in Section {row['section_id']}.")
+            if any(q.get(k) != row[k] for k in ("textbook_id", "topic_id", "group_id")) or q.get("topic") != row["name"]:
+                misses.append(f"Question {index}: textbook/topic/group identity mismatch.")
+            if q.get("marks") != row["marks"] or q.get("format") != row["format"]:
+                misses.append(f"Question {index}: expected {row['marks']} marks, {row['format']}.")
+            section_level = next((v for k, v in spec.get("section_difficulty", {}).items() if section_key(k) == section_key(sid)), None)
+            level = overrides.get(index, {}).get("difficulty") or section_level or spec.get("format_difficulty", {}).get(q.get("format")) or row["difficulty"]
+            if q.get("difficulty") != level:
+                misses.append(f"Question {index}: expected difficulty {level}.")
+    for row in rows:
+        qs = found.get(row["allocation_id"], [])
+        label = f"Section {row['section_id']} / {row['name']}"
+        if len(qs) != row["count"]:
+            misses.append(f"{label}: expected {row['count']} questions, got {len(qs)}.")
+        if not spec.get("diagram_override"):
+            diagrams = sum(bool(q.get("needs_diagram")) for q in qs)
+            if row["diagrams"] and not diagrams and not row.get("diagram_minimum_satisfied"):
+                misses.append(f"{label}: requires at least one supplied diagram.")
+            if not row["diagrams"] and diagrams:
+                misses.append(f"{label}: supplied diagrams are disabled.")
+    if not spec.get("is_topup"):
+        for section in spec["blueprint"]["sections"]:
+            for group in section["groups"]:
+                group_qs = [q for a in rows if a["section_id"] == section["id"] and a["group_id"] == group["id"] for q in found.get(a["allocation_id"], [])]
+                wanted = group.get("internal_choices")
+                if wanted is not None and (any(type(q.get("internal_choice_count")) is not int for q in group_qs) or sum(q.get("internal_choice_count", 0) for q in group_qs if type(q.get("internal_choice_count")) is int) != wanted):
+                    misses.append(f"Section {section['id']} / {group['id']}: expected {wanted} internal OR choices.")
+    return misses
+
+
+def apply_allocation_overrides(spec, overrides):
+    """Layer recognized prose fields without creating contradictory global quotas."""
+    result = deepcopy(spec)
+    result["instruction_overrides"] = overrides
+    for key in ("section_difficulty", "question_overrides", "format_difficulty", "allow_out_of_syllabus", "unparsed"):
+        if overrides.get(key):
+            result[key] = deepcopy(overrides[key])
+    for row in result["section_allocations"]:
+        level = overrides.get("difficulty")
+        for name, value in overrides.get("topic_difficulty", {}).items():
+            if name.casefold() in (row["name"].casefold(), f"{row['parent_topic']} > {row['name']}".casefold()):
+                level = value
+        section_level = next((v for k, v in overrides.get("section_difficulty", {}).items() if section_key(k) == section_key(row["section_id"])), None)
+        row["difficulty"] = section_level or level or row["difficulty"]
+        diagram_rule = next((v for k, v in overrides.get("section_diagrams", {}).items() if section_key(k) == section_key(row["section_id"])), None)
+        if diagram_rule is not None:
+            row["diagrams"] = diagram_rule
+    if overrides.get("diagram_count") is not None:
+        result["diagram_count"] = overrides["diagram_count"]
+        result["diagram_override"] = True
+    conflicts = []
+    if overrides.get("total_questions") and overrides["total_questions"] != result["total_questions"]:
+        conflicts.append("Additional Instructions changes the question total. Update and analyze the blueprint to this total, then reassign topics.")
+    formats = Counter()
+    for row in result["section_allocations"]:
+        formats[row["format"]] += row["count"]
+    if overrides.get("format_counts") and dict(formats) != overrides["format_counts"]:
+        conflicts.append("Additional Instructions changes the section formats. Update the blueprint and allocations to match the requested formats.")
+    return result, conflicts
+
+
+def remaining_allocations(spec, sections, count):
+    result = deepcopy(spec)
+    result["is_topup"] = True
+    existing = Counter(q.get("allocation_id") for s in sections for q in s.get("questions", []))
+    diagrams = Counter(q.get("allocation_id") for s in sections for q in s.get("questions", []) if q.get("needs_diagram"))
+    rows, left = [], count
+    for original in spec.get("section_allocations", []):
+        row = dict(original)
+        row["count"] = min(left, max(0, row["count"] - existing[row["allocation_id"]]))
+        if row["count"]:
+            # Already satisfied minima become optional, not a prohibition.
+            if diagrams[row["allocation_id"]] and row["diagrams"]:
+                row["diagram_minimum_satisfied"] = True
+            rows.append(row)
+            left -= row["count"]
+    result["section_allocations"] = rows
+    result["total_questions"] = sum(r["count"] for r in rows)
+    result["total_marks"] = sum(r["count"] * r["marks"] for r in rows)
+    return result
+
+
+def allocation_coverage(sections, spec):
+    """Coverage uses allocation identities; repeated names never collapse."""
+    actual = Counter(q.get("allocation_id") for s in sections for q in s.get("questions", []))
+    rows = {a["allocation_id"]: {"target": a["count"], "actual": actual[a["allocation_id"]]} for a in spec["section_allocations"]}
+    return {"per_topic": rows, "under": [k for k, v in rows.items() if v["actual"] < v["target"]],
+            "over": [k for k, v in rows.items() if v["actual"] > v["target"]], "unmatched": actual.get(None, 0)}
+
+
+def paper_summary(paper):
+    sections = paper.get("sections") or []
+    qs = [q for s in sections for q in s.get("questions", [])]
+    spec = paper.get("generation_requirements") or {}
+    bp = spec.get("blueprint")
+    def marks(q):
+        try:
+            return max(0, float(q.get("marks") or 0))
+        except (ValueError, TypeError):
+            return 0
+    offered = sum(marks(q) for q in qs)
+    def mix(field, known):
+        return [{"key": key, "count": sum(1 for q in qs if (q.get(field) if q.get(field) in known else "unspecified") == key),
+                 "marks": sum(marks(q) for q in qs if (q.get(field) if q.get(field) in known else "unspecified") == key)} for key in [*known, "unspecified"]]
+    misses = allocation_misses(sections, spec)
+    actual_sections = []
+    for s in sections:
+        actual_sections.append({"id": s.get("section_id") or section_key(s.get("title", "")), "title": s.get("title", ""),
+                                "count": len(s.get("questions", [])), "marks": sum(marks(q) for q in s.get("questions", []))})
+    # Attemptable marks are only known when every offered section has its structure.
+    attemptable = None
+    if bp and not misses:
+        attemptable = bp["total_marks"]
+    return {"question_count": len(qs), "target_question_count": spec.get("total_questions") or paper.get("target_question_count"),
+            "target_marks": paper.get("total_marks"), "offered_marks": offered, "attemptable_marks": attemptable,
+            "duration_minutes": paper.get("duration_minutes"), "sections": actual_sections,
+            "difficulty": mix("difficulty", ["easy", "medium", "hard"]),
+            "cognitive": mix("type", ["information", "concept", "application"]),
+            "diagrams": {"requested": sum(bool(q.get("needs_diagram")) for q in qs),
+                         "ready": sum(bool(q.get("diagram_path")) for q in qs),
+                         "failed": sum(q.get("diagram_status") == "failed" for q in qs),
+                         "pending": sum(q.get("diagram_status") == "pending" for q in qs)},
+            "internal_choices": sum(q.get("internal_choice_count", 0) for q in qs if type(q.get("internal_choice_count")) is int),
+            "choices_unspecified": sum(type(q.get("internal_choice_count")) is not int for q in qs),
+            "blueprint": {"id": bp["id"], "label": bp.get("label"), "version": bp["version"]} if bp else None,
+            "mismatches": misses, "status": "Needs review" if misses else paper.get("generation_status", "ready")}

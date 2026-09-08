@@ -181,8 +181,17 @@ def _over_represented(q: dict, coverage: dict | None) -> int:
     that already has too many questions is free -- the pair has to lose one
     either way -- and it is what makes deduping and rebalancing a single
     operation rather than two that fight each other.
+
+    Two coverage shapes reach here. `topic_balance.measure_coverage` keys
+    `per_topic` by topic NAME; `section_blueprints.allocation_coverage` keys the
+    same field by `allocation_id` and counts each question's allocation rather
+    than its topic. Looking up only by name meant every lookup missed on a
+    blueprint paper, this returned its defensive 0 for everything, and the
+    tie-break quietly degraded to "the later one loses" -- no error, no log, and
+    the rebalancing half of this pass simply stopped happening there.
     """
-    row = ((coverage or {}).get("per_topic") or {}).get(q.get("topic"))
+    rows = (coverage or {}).get("per_topic") or {}
+    row = rows.get(q.get("allocation_id")) or rows.get(q.get("topic"))
     if not isinstance(row, dict):
         return 0
     try:

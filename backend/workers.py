@@ -26,6 +26,7 @@ from prompts import (
 )
 from instruction_spec import parse_instructions, verify as verify_instructions
 from generation_requirements import compile_requirements, remaining_requirements
+from section_blueprints import allocation_coverage
 from question_dedupe import dedupe_sections
 from question_repair import complete_sections
 from storage import APP_NAME, put_object
@@ -412,7 +413,7 @@ async def generate_paper_background(
         instruction_spec=instruction_spec, blueprint_spec=blueprint_spec,
         has_blueprint=bool(section_blueprint.strip()),
     )
-    if spec.get("total_questions"):
+    if spec.get("total_questions") and not spec.get("section_allocations"):
         spec["topic_counts"] = resolve_shares(topics_weighted, spec["total_questions"])
     await db.papers.update_one({"id": paper_id}, {"$set": {"generation_requirements": spec}})
     # Hoisted above the generation call because the batching decision needs it.
@@ -442,9 +443,16 @@ async def generate_paper_background(
     )
     # Below the threshold this is exactly the call it always was -- one request,
     # no extra latency, no behaviour change for the papers that already work.
-    # A blueprint is never batched: it states its own structure in prose we do
-    # not parse, so we have no honest way to split it.
-    batched = target_q > SCHOOL_BATCH_THRESHOLD and not (section_blueprint or "").strip()
+    #
+    # A blueprint paper is never batched, section allocations or not. The
+    # blueprint fixes per-section structure that batch slicing has no way to
+    # honour: splitting a paper by topic would cut across the very sections the
+    # allocation contract is defined in terms of.
+    batched = (
+        target_q > SCHOOL_BATCH_THRESHOLD
+        and not (section_blueprint or "").strip()
+        and not spec.get("section_allocations")
+    )
     prompt = None if batched else qgen_prompt(**prompt_kwargs)
     try:
         if batched:
@@ -477,20 +485,21 @@ async def generate_paper_background(
     sections = data.get("sections") or []
     coercions: dict = {}
     _normalise_paper_questions(sections, difficulty, coercions)
-    measure_coverage(sections, topics_weighted, spec.get("total_questions") or derive_target_question_count(total_marks))
+    (allocation_coverage(sections, spec) if spec.get("section_allocations") else measure_coverage(sections, topics_weighted, spec.get("total_questions") or derive_target_question_count(total_marks)))
     # One bounded correction attempt for a complete but noncompliant paper.
     # Truncated papers use the existing top-up path instead.
     initial_check = verify_instructions(sections, spec)
     # `prompt is not None` excludes batched papers. The correction regenerates
     # the WHOLE paper in a single call, which is the exact thing that truncates
-    # at this size -- retrying it would reintroduce the salvage-and-top-up chain
-    # that batching exists to remove. A batched paper that misses its counts
-    # goes to the top-up path instead, which asks only for the gap.
+    # at that size -- retrying it would reintroduce the salvage-and-top-up chain
+    # batching exists to remove. A batched paper that misses its counts goes to
+    # the top-up path instead, which asks only for the gap.
     #
-    # `spec["total_questions"] > 0` excludes blueprint papers, where the compiled
-    # spec deliberately sets it to 0: `count_questions(...) >= 0` is always true,
-    # so every blueprint paper with any unmet check was making a second
-    # full-paper call.
+    # `spec["total_questions"] > 0` excludes plain blueprint papers, where the
+    # compiled spec sets it to 0 on purpose: `count_questions(...) >= 0` is
+    # always true, so every such paper with any unmet check was making a second
+    # full-paper call. A blueprint WITH allocations has a real total and is
+    # still corrected, which is what its own tests expect.
     if (
         prompt is not None
         and spec.get("total_questions")
@@ -507,7 +516,7 @@ async def generate_paper_background(
             corrected_data = parse_json_response(corrected_raw)
             corrected = corrected_data.get("sections") or []
             _normalise_paper_questions(corrected, difficulty)
-            measure_coverage(corrected, topics_weighted, spec.get("total_questions") or derive_target_question_count(total_marks))
+            (allocation_coverage(corrected, spec) if spec.get("section_allocations") else measure_coverage(corrected, topics_weighted, spec.get("total_questions") or derive_target_question_count(total_marks)))
             if corrected and len(verify_instructions(corrected, spec)["misses"]) < len(initial_check["misses"]):
                 data, sections = corrected_data, corrected
         except Exception as exc:
@@ -529,24 +538,33 @@ async def generate_paper_background(
     # to the topic with too many is the one to lose. This first pass is also
     # what canonicalises each question's topic label, which everything below
     # counts on. Then measure again, because the answer changed.
+    #
     # `target_q` was resolved before generation, from the same spec the prompt
     # was built from -- measuring against anything else scores the paper on a
     # target the model was never given.
     #
-    # Except under a blueprint, where there is no such number to reuse. The
-    # compiled spec sets total_questions to 0 there on purpose, so target_q
-    # fell through to the marks-derived guess -- and the prompt no longer even
-    # states per-topic counts under a blueprint, it states percentages. Scoring
-    # a 38-question blueprint paper against a guess of 16 marked nearly every
-    # topic `over`, which is exactly what dedupe reads to choose WHICH of a
-    # duplicate pair to drop, and what topic_shortfall reads to drive the
-    # top-up. Counting what actually came back is the honest denominator.
+    # Except under a plain blueprint, where there is no such number to reuse:
+    # the compiled spec sets total_questions to 0 there on purpose, so target_q
+    # falls through to the marks-derived guess, and the prompt states per-topic
+    # PERCENTAGES rather than counts. Scoring a 38-question blueprint paper
+    # against a guess of 16 marked nearly every topic `over`. Counting what came
+    # back is the honest denominator. A blueprint carrying section allocations
+    # does not need any of this -- allocation_coverage scores against the
+    # allocation rows themselves, which is a better answer than either.
     coverage_target = target_q
     if (section_blueprint or "").strip():
         coverage_target = count_questions(sections) or target_q
-    coverage = measure_coverage(sections, topics_weighted, coverage_target)
+    coverage = (
+        allocation_coverage(sections, spec)
+        if spec.get("section_allocations")
+        else measure_coverage(sections, topics_weighted, coverage_target)
+    )
     dedupe_stats = await dedupe_sections(sections, ref=paper_id, coverage=coverage)
-    coverage = measure_coverage(sections, topics_weighted, coverage_target)
+    coverage = (
+        allocation_coverage(sections, spec)
+        if spec.get("section_allocations")
+        else measure_coverage(sections, topics_weighted, coverage_target)
+    )
 
     # Check and repair the LaTeX before anything downstream reads it. Runs
     # ahead of apply_diagram_policy so diagram_policy.plain_text() flattens
@@ -559,7 +577,7 @@ async def generate_paper_background(
     # the answer — then mark what survives pending so the UI can show
     # "generating" placeholders.
     pending_count = apply_diagram_policy(sections, ref=paper_id,
-        max_diagrams=spec.get("diagram_count", 5))
+        max_diagrams=spec.get("diagram_count", spec.get("total_questions", 200) if spec.get("section_allocations") else 5))
     for s in sections:
         for q in s.get("questions", []):
             q["diagram_status"] = "pending" if q.get("needs_diagram") else "none"
@@ -582,15 +600,21 @@ async def generate_paper_background(
             # A stated count makes the target knowable, which is what
             # re-enables auto-top-up and the missing-questions banner for
             # instruction-driven papers -- both were dead while this was 0.
-            #
-            # STATED, not merely resolved. compile_requirements always produces
-            # a total, falling back to a guess derived from total_marks, and
-            # writing that guess here overwrote the real target the paper was
-            # created with -- so a complete paper could be declared short of a
-            # number nobody ever asked for and top itself up to reach it.
             **(
+                # STATED, not merely resolved. compile_requirements always
+                # produces a total, falling back to a guess derived from
+                # total_marks, and writing that guess here overwrote the real
+                # target the paper was created with -- so a complete paper could
+                # be declared short of a number nobody asked for and top itself
+                # up to reach it. An allocation spec never passes through
+                # compile_requirements, and its total comes straight from the
+                # blueprint's group counts, so it is stated by construction.
                 {"target_question_count": target_q}
-                if spec.get("total_questions") and spec.get("total_questions_stated")
+                if spec.get("total_questions")
+                and (
+                    spec.get("total_questions_stated")
+                    or spec.get("section_allocations")
+                )
                 else {}
             ),
         }},
@@ -699,11 +723,12 @@ def merge_topup_sections(existing: list, new: list, limit: int = 0) -> list:
         if not incoming:
             continue
         key = (sec.get("title") or "").strip().lower()
-        target = by_title.get(key)
+        target = next((s for s in merged if sec.get("section_id") and s.get("section_id") == sec["section_id"]), None) or by_title.get(key)
         if target is not None:
             target["questions"].extend(incoming)
         else:
             fresh = {
+                **{k: v for k, v in sec.items() if k != "questions"},
                 "title": sec.get("title") or "Additional Questions",
                 "questions": incoming,
             }
@@ -919,6 +944,11 @@ async def generate_missing_questions_background(
                 has_blueprint=bool(p.get("section_blueprint")),
             )
         topup_spec = remaining_requirements(legacy_spec, existing_sections, count)
+        if legacy_spec.get("section_allocations"):
+            count = topup_spec["total_questions"]
+            topic_targets = None
+            if not count:
+                raise RuntimeError("All configured section allocations are already filled. Edit the blueprint before adding questions.")
         prompt = qgen_prompt(
             subject=p.get("subject", ""),
             klass=p.get("class_name", ""),
@@ -972,7 +1002,7 @@ async def generate_missing_questions_background(
         await dedupe_sections(new_sections, ref=paper_id, against=existing_sections)
         await repair_sections(new_sections, ref=paper_id)
         pending_count = apply_diagram_policy(new_sections, ref=paper_id,
-            max_diagrams=topup_spec.get("diagram_count", max(0, 5 - sum(
+            max_diagrams=topup_spec.get("diagram_count", count if legacy_spec.get("section_allocations") else max(0, 5 - sum(
                 bool(q.get("needs_diagram")) for s in existing_sections for q in s.get("questions", [])
             ))))
         for s in new_sections:

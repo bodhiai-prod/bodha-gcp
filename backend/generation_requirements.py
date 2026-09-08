@@ -114,13 +114,17 @@ def remaining_requirements(spec, sections, count):
         for override in spec.get("question_overrides", [])
         if offset < override["n"] <= offset + count
     ]
+    if spec.get("section_allocations"):
+        from section_blueprints import remaining_allocations
+        remaining = remaining_allocations(remaining, sections, count)
     return remaining
 
 
 def check_ui_requirements(sections, spec):
     """Check observable requirements; this does not judge pedagogical quality."""
     questions = [q for s in sections or [] for q in s.get("questions", [])]
-    misses = []
+    from section_blueprints import allocation_misses
+    misses = allocation_misses(sections, spec)
     actual_types = Counter(q.get("type", "") for q in questions)
     actual_topics = Counter(q.get("topic", "") for q in questions)
     for topic, count in spec.get("topic_counts", {}).items():

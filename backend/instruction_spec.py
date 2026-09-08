@@ -170,6 +170,7 @@ def normalise(raw: dict | None) -> dict:
 
     spec["format_counts"] = _clean_format_counts(raw.get("format_counts"))
     spec["section_difficulty"] = _clean_section_difficulty(raw.get("section_difficulty"))
+    spec["section_diagrams"] = {str(k): v for k, v in (raw.get("section_diagrams") or {}).items() if isinstance(v, bool)} if isinstance(raw.get("section_diagrams", {}), dict) else {}
     spec["topic_difficulty"] = _clean_section_difficulty(raw.get("topic_difficulty"))
     spec["format_difficulty"] = _clean_section_difficulty(raw.get("format_difficulty"))
     level = str(raw.get("difficulty") or "").lower()
@@ -230,7 +231,9 @@ async def parse_instructions(
         logger.warning(
             f"[spec] {ref or '-'} parse failed, instructions stay prose-only: {e}"
         )
-        return empty_spec()
+        fallback = empty_spec()
+        fallback["unparsed"] = ["Additional Instructions could not be parsed; they will still be sent verbatim to generation."]
+        return fallback
 
     spec = normalise(data if isinstance(data, dict) else None)
     if not is_empty(spec):

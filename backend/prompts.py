@@ -16,8 +16,9 @@ def topic_extract_prompt(subject: str, klass: str, text_excerpt: str) -> str:
         "Identify ALL main topics and their subtopics. Return ONLY strict JSON of the form:\n"
         "{\n  \"topics\": [ { \"name\": \"Topic Name\", \"subtopics\": [\"Subtopic 1\", ...] } ]\n}\n\n"
         "Rules:\n"
-        "- Aim for 8 to 18 top-level topics (one per chapter when the content "
-        "shows a table of contents or chapter headings). Each topic should have 2-6 subtopics.\n"
+        "- Include every evidenced chapter and subtopic in this excerpt. Use one main topic "
+        "per chapter when headings or a table of contents identify it. Do not pad short excerpts "
+        "to a target count, or truncate long lists.\n"
         "- The content may include a table-of-contents page (chapter numbers + "
         "page ranges). USE the chapter list there as the authoritative list of "
         "main topics, plus any additional chapters revealed in body text.\n"
@@ -512,7 +513,8 @@ def render_spec(spec: dict, *, total_marks: int = 0) -> str:
     for extra in spec.get("unparsed") or []:
         lines.append(f"- {extra}")
 
-    return "\n".join(lines) + "\n\n"
+    from section_blueprints import allocation_prompt
+    return "\n".join(lines) + "\n\n" + allocation_prompt(spec)
 
 
 def render_precedence(klass: str, subject: str, spec: dict | None) -> str:
@@ -526,7 +528,7 @@ def render_precedence(klass: str, subject: str, spec: dict | None) -> str:
         "PRECEDENCE — when two instructions conflict, the FIRST that applies wins:\n"
         "  1. The per-question overrides above\n"
         "  2. Explicit additional instructions (override only conflicting fields)\n"
-        "  3. The paper blueprint / exam format\n"
+        "  3. The paper blueprint / exam format and its structured section allocations\n"
         "  4. Resolved form requirements: exact counts, topic/subtopic difficulty, marks and diagrams\n"
         "  5. Engine defaults\n\n"
     )
@@ -665,6 +667,8 @@ def qgen_prompt(
         shares,
         proportional=has_blueprint and not spec_total and not topic_targets,
     )
+    if spec.get("section_allocations"):
+        topics_block = "Use only the textbook topics in the SECTION ALLOCATION CONTRACT below. Do not apply global topic weights."
     topic_difficulty_lines = [
         f"- {name}: {level}"
         for name, level in (spec.get("topic_difficulty") or {}).items()
@@ -1514,6 +1518,7 @@ def instruction_spec_prompt(text: str, *, context: dict | None = None) -> str:
         '  "format_difficulty": {},\n'
         '  "diagram_count": null,\n'
         '  "section_difficulty": { "Section A": "hard" },\n'
+        '  "section_diagrams": { "Section B": true },\n'
         '  "question_overrides": [ { "n": 23, "difficulty": "hard", "note": "" } ],\n'
         '  "allow_out_of_syllabus": false,\n'
         '  "unparsed": [ "any instruction that fits no field above" ]\n'
@@ -1535,6 +1540,7 @@ def instruction_spec_prompt(text: str, *, context: dict | None = None) -> str:
         "- difficulty: only an explicit whole-paper difficulty, mapped to easy/medium/hard. "
         "Simple means easy; Moderate means medium; Challenging means hard.\n"
         "- topic_difficulty: explicit topic/subtopic levels, keyed by the teacher's topic name.\n"
+        "- section_diagrams: only explicitly named sections; true requires supplied diagrams, false forbids them. Omit unspecified sections.\n"
         "- format_difficulty: levels for a whole format, e.g. {'mcq':'hard'} for hard MCQs.\n"
         "- diagram_count: exact number of supplied diagrams requested; 0 for no diagrams, "
         "null when unspecified. Do not count questions asking students to draw a figure.\n"

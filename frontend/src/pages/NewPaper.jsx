@@ -1,10 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { BLUEPRINT_PRESETS, fillBlueprint } from "@/lib/blueprints";
 import { buildTopicPayload, topicKey } from "@/lib/topicDifficulty";
 import { apportionCounts } from "@/lib/questionCounts";
 import Header from "@/components/Header";
+import SectionBlueprintEditor from "@/components/SectionBlueprintEditor";
+import ConfigurationSummary from "@/components/ConfigurationSummary";
+import { retainCompatibleAllocations } from "@/lib/sectionBlueprint";
+import useConfigurationPreview from "@/hooks/useConfigurationPreview";
 import { toast } from "sonner";
 import {
   Sparkle,
@@ -14,6 +19,7 @@ import {
   Square,
   X as XIcon,
   Plus,
+  CaretDown,
 } from "@phosphor-icons/react";
 
 const DIFFICULTIES = ["easy", "medium", "hard"];
@@ -42,12 +48,17 @@ export default function NewPaper() {
   const [info, setInfo] = useState(40);
   const [concept, setConcept] = useState(40);
   const [selectedTopics, setSelectedTopics] = useState([]);
+  const [expandedTopics, setExpandedTopics] = useState({});
   // Scoped by book and parent so similarly named subtopics stay independent.
   const [topicDifficulties, setTopicDifficulties] = useState({});
   const [generating, setGenerating] = useState(false);
   const [extractingId, setExtractingId] = useState(null);
   const [customInstructions, setCustomInstructions] = useState("");
   const [sectionBlueprint, setSectionBlueprint] = useState("");
+  const [blueprintCatalog, setBlueprintCatalog] = useState([]);
+  const [blueprint, setBlueprint] = useState(null);
+  const [allocations, setAllocations] = useState([]);
+  const [analyzing, setAnalyzing] = useState(false);
   // Format mix: array of { key, label, value, custom }
   const [formats, setFormats] = useState(
     DEFAULT_FORMATS.map((f) => ({ ...f, value: f.default, custom: false }))
@@ -87,7 +98,8 @@ export default function NewPaper() {
   );
 
   useEffect(() => {
-    api.get("/textbooks").then((r) => setTextbooks(r.data));
+    api.get("/textbooks").then((r) => setTextbooks(r.data)).catch(() => toast.error("Could not load textbooks. Reload to retry."));
+    api.get("/paper-blueprints").then(r => setBlueprintCatalog(r.data)).catch(() => toast.error("Could not load board templates. Reload to retry."));
   }, []);
 
   // Load detail (topics) for every selected textbook not yet in cache.
@@ -114,6 +126,7 @@ export default function NewPaper() {
   const removeTextbook = (id) => {
     setSelectedTbIds((curr) => curr.filter((x) => x !== id));
     setSelectedTopics((curr) => curr.filter((t) => t.textbook_id !== id));
+    setAllocations(curr => curr.filter(a => a.textbook_id !== id));
   };
 
   const toggleTopic = (bookId, name, parent = "") => {
@@ -155,15 +168,19 @@ export default function NewPaper() {
   const extractTopicsFor = async (id) => {
     setExtractingId(id);
     try {
-      const { data } = await api.post(`/textbooks/${id}/extract-topics`);
+      const { data } = await api.post(`/textbooks/${id}/extract-topics?background=true`);
+      if (data.status === "running") {
+        setTbDetails(curr => ({ ...curr, [id]: { ...curr[id], topic_extraction: data.topic_extraction } }));
+        return;
+      }
       setTbDetails((curr) => ({
         ...curr,
-        [id]: { ...(curr[id] || {}), topics: data.topics },
+        [id]: { ...(curr[id] || {}), topics: data.topics, topic_catalog: data.topic_catalog },
       }));
       toast.success("Topics extracted");
+      setExtractingId(null);
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Failed");
-    } finally {
       setExtractingId(null);
     }
   };
@@ -210,7 +227,9 @@ export default function NewPaper() {
     if (selectedTbIds.length === 0)
       return toast.error("Select at least one textbook");
     if (!title) return toast.error("Title required");
-    if (selectedTopics.length === 0)
+    if (sectionBlueprint.trim() && !blueprint) return toast.error("Analyze your blueprint before generating.");
+    if (blueprint && (previewLoading || previewError || !preview?.valid || preview.requestKey !== requestKey)) return toast.error("Resolve the blueprint allocation errors before generating.");
+    if (!blueprint && selectedTopics.length === 0)
       return toast.error("Select at least one topic");
     if (!promptOverride && (!Number.isInteger(effectiveQuestionCount) || effectiveQuestionCount < 1 || effectiveQuestionCount > 200))
       return toast.error("Choose between 1 and 200 questions");
@@ -253,6 +272,9 @@ export default function NewPaper() {
         format_distribution: fmtPayload,
         custom_instructions: customInstructions.trim() || null,
         section_blueprint: sectionBlueprint.trim() || null,
+        blueprint_id: blueprint?.id || null,
+        blueprint_version: blueprint?.version || null,
+        section_topic_allocations: blueprint ? allocations : null,
       });
       toast.success("Generation started — opening paper…");
       navigate(`/papers/${data.id}`);
@@ -265,14 +287,65 @@ export default function NewPaper() {
 
   // Preset buttons drop a board blueprint into the textarea, with {SUBJECT}
   // resolved from the same "first selected textbook" the generate call uses.
-  const applyPreset = (template) => {
-    const first = tbDetails[selectedTbIds[0]] || {};
-    setSectionBlueprint(fillBlueprint(template, { subject: first.subject }));
-    if (!first.subject)
-      toast.message(
-        "Pick a textbook first to auto-fill the subject, or replace {SUBJECT} by hand."
-      );
+  const adoptBlueprint = next => {
+    setAllocations(curr => retainCompatibleAllocations(curr, blueprint, next, selectedTbIds));
+    setBlueprint(next);
+    setTotalMarks(next.total_marks);
+    setDuration(next.duration_minutes);
   };
+  const applyPreset = preset => {
+    const next = blueprintCatalog.find(bp => bp.id === preset.id);
+    if (!next) return toast.error("Board catalog unavailable. Reload to retry.");
+    adoptBlueprint(next);
+    setSectionBlueprint(fillBlueprint(next.template, { subject: tbDetails[selectedTbIds[0]]?.subject }));
+  };
+  const editBlueprint = text => {
+    setSectionBlueprint(text);
+    setBlueprint(null);
+    setAllocations([]);
+  };
+  const analyzeBlueprint = async () => {
+    setAnalyzing(true);
+    try {
+      const { data } = await api.post("/paper-blueprints/analyze", { text: sectionBlueprint });
+      adoptBlueprint(data);
+      toast.success("Blueprint analyzed. Review the section groups and assign topics.");
+    } catch (err) { toast.error(err?.response?.data?.detail || "Blueprint analysis failed. Retry after clarifying the section counts and marks."); }
+    finally { setAnalyzing(false); }
+  };
+  useEffect(() => {
+    if (!extractingId) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const { data } = await api.get(`/textbooks/${extractingId}`);
+        if (cancelled) return;
+        setTbDetails(curr => ({ ...curr, [extractingId]: data }));
+        const status = data.topic_extraction?.status;
+        if (status === "ready" || status === "failed") {
+          setExtractingId(null);
+          if (status === "failed") toast.error(data.topic_extraction.error || "Topic extraction failed. Retry.");
+          else toast.success("Textbook topics refreshed.");
+        }
+      } catch { if (!cancelled) { setExtractingId(null); toast.error("Could not read extraction progress. Refresh the textbook and retry."); } }
+    };
+    const timer = setInterval(poll, 2000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [extractingId]);
+  const requestKey = JSON.stringify({
+    title, subject: tbDetails[selectedTbIds[0]]?.subject || "", class_name: tbDetails[selectedTbIds[0]]?.class_name || "",
+    textbook_ids: selectedTbIds, topics: buildTopicPayload(selectedTopics, topicDifficulties, difficulty),
+    difficulty, duration_minutes: Number(duration), total_marks: Number(totalMarks),
+    total_questions: promptOverride ? null : effectiveQuestionCount,
+    format_counts: !promptOverride && formatMode === "counts" ? exactFormatCounts : null,
+    diagram_count: diagramCount === "" ? null : Number(diagramCount),
+    distribution: { information: info, concept, application },
+    format_distribution: !promptOverride && formatMode === "percentages" ? Object.fromEntries(formats.filter(f => f.value > 0).map(f => [f.key, f.value])) : null,
+    custom_instructions: customInstructions.trim() || null, section_blueprint: sectionBlueprint.trim() || null,
+    blueprint_id: blueprint?.id || null, blueprint_version: blueprint?.version || null,
+    section_topic_allocations: blueprint ? allocations : null,
+  });
+  const { preview, loading: previewLoading, error: previewError } = useConfigurationPreview(requestKey);
 
   const anyTopics = selectedTbIds.some(
     (id) => (tbDetails[id]?.topics || []).length > 0
@@ -292,8 +365,7 @@ export default function NewPaper() {
         <form onSubmit={onGenerate} className="grid grid-cols-1 lg:grid-cols-5 gap-6 md:gap-8">
           {/* Left: Metadata + distribution */}
           <div className="lg:col-span-3 space-y-6">
-            <div className="qp-card">
-              <div className="overline mb-4">// METADATA</div>
+            <ExpandableCard id="metadata" title="Paper details" summary={`${selectedTbIds.length} textbooks · ${totalMarks} marks · ${duration} minutes`} defaultOpen>
               <div className="mb-4">
                 <label className="qp-label">Paper title</label>
                 <input
@@ -433,13 +505,9 @@ export default function NewPaper() {
                   ))}
                 </div>
               </div>
-            </div>
+            </ExpandableCard>
 
-            <div
-              className={`qp-card ${promptOverride ? "opacity-50 pointer-events-none" : ""}`}
-              data-testid="distribution-card"
-              aria-disabled={promptOverride}
-            >
+            <ExpandableCard id="distribution" title="Question distribution" summary={promptOverride ? "Controlled by paper blueprint" : `${info}% direct · ${concept}% concept · ${application}% application`} disabled={promptOverride}>
               <div className="flex items-center justify-between mb-4">
                 <div className="overline">// QUESTION DISTRIBUTION</div>
                 {promptOverride ? (
@@ -490,13 +558,9 @@ export default function NewPaper() {
               <p className="text-xs text-neutral-500 font-mono mt-3">
                 Application is auto-adjusted so total stays at 100%.
               </p>
-            </div>
+            </ExpandableCard>
 
-            <div
-              className={`qp-card ${promptOverride ? "opacity-50 pointer-events-none" : ""}`}
-              data-testid="format-mix-card"
-              aria-disabled={promptOverride}
-            >
+            <ExpandableCard id="format-mix" title="Question format mix" summary={promptOverride ? "Controlled by paper blueprint" : `${effectiveQuestionCount} questions · ${formats.filter(f => (formatQuestionCounts[f.key] || 0) > 0).length} active formats`} disabled={promptOverride}>
               <div className="flex items-center justify-between mb-2">
                 <div className="overline">// QUESTION FORMAT MIX</div>
                 {promptOverride ? (
@@ -611,10 +675,9 @@ export default function NewPaper() {
                   <Plus size={14} weight="bold" /> Add
                 </button>
               </div>
-            </div>
+            </ExpandableCard>
 
-            <div className="qp-card" data-testid="blueprint-card">
-              <div className="overline mb-2">// PAPER BLUEPRINT (OPTIONAL)</div>
+            <ExpandableCard id="blueprint" title="Paper blueprint" summary={sectionBlueprint.trim() ? "Custom blueprint applied" : "Optional · Choose a preset or define sections"}>
               <p className="text-xs text-neutral-500 font-mono mb-3">
                 Paste your board&rsquo;s exact section pattern. When set, this
                 <b> overrides </b> the Question Distribution and Question Format
@@ -627,7 +690,7 @@ export default function NewPaper() {
                   <button
                     key={preset.id}
                     type="button"
-                    onClick={() => applyPreset(preset.template)}
+                    onClick={() => applyPreset(preset)}
                     className="qp-btn qp-btn-secondary text-xs"
                     data-testid={preset.testId}
                   >
@@ -637,7 +700,7 @@ export default function NewPaper() {
                 {sectionBlueprint && (
                   <button
                     type="button"
-                    onClick={() => setSectionBlueprint("")}
+                    onClick={() => editBlueprint("")}
                     className="qp-btn qp-btn-secondary text-xs"
                     data-testid="blueprint-clear"
                   >
@@ -647,7 +710,7 @@ export default function NewPaper() {
               </div>
               <textarea
                 value={sectionBlueprint}
-                onChange={(e) => setSectionBlueprint(e.target.value)}
+                onChange={(e) => editBlueprint(e.target.value)}
                 rows={8}
                 className="qp-input font-mono text-xs"
                 placeholder={`Example:
@@ -661,12 +724,11 @@ Section B (40 marks) - Attempt any FOUR of the following SIX questions
                 spellCheck={false}
                 data-testid="blueprint-input"
               />
-            </div>
+            </ExpandableCard>
 
-            <div className="qp-card" data-testid="custom-instructions-card">
-              <div className="overline mb-2">
-                // ADDITIONAL INSTRUCTIONS FOR THE AI
-              </div>
+            {sectionBlueprint.trim() && !blueprint && <button type="button" onClick={analyzeBlueprint} disabled={analyzing} className="qp-btn qp-btn-secondary" data-testid="analyze-blueprint">{analyzing ? "Analyzing blueprint…" : "Analyze blueprint"}</button>}
+            <SectionBlueprintEditor blueprint={blueprint} bookIds={selectedTbIds} details={tbDetails} allocations={allocations} onChange={setAllocations} difficulty={difficulty} extractingId={extractingId} onExtract={extractTopicsFor} />
+            <ExpandableCard id="custom-instructions" title="Additional instructions" summary={customInstructions.trim() ? customInstructions.trim() : "Optional · Refine how questions are generated"}>
               <p className="text-xs text-neutral-500 font-mono mb-3">
                 Optional. Your form settings already define the paper. Add only
                 refinements or exceptions here; an explicit instruction overrides
@@ -688,13 +750,13 @@ Make Q23 as hard as possible`}
                 spellCheck={false}
                 data-testid="custom-instructions-input"
               />
-            </div>
+            </ExpandableCard>
           </div>
 
           {/* Right: Topics + submit */}
           <div className="lg:col-span-2 space-y-6">
-            <div className="qp-card">
-              <div className="overline mb-4">// TOPICS &amp; DIFFICULTY</div>
+            <ConfigurationSummary preview={preview?.requestKey === requestKey ? preview : null} loading={previewLoading} error={previewError} />
+            {!blueprint && <ExpandableCard id="topics" title="Topic selection (no blueprint)" summary={`${selectedTopics.length} selected · Default: ${DIFFICULTY_LABELS[difficulty]}`} defaultOpen>
 
               {selectedTbIds.length === 0 && (
                 <div className="text-sm text-neutral-500">
@@ -796,6 +858,11 @@ Make Q23 as hard as possible`}
                             </span>
                           </button>
                           {topics.map((t, i) => {
+                            const expansionKey = topicKey(bookId, t.name);
+                            const expanded = !!expandedTopics[expansionKey];
+                            const selectedSubtopics = (t.subtopics || []).filter((name) =>
+                              selectedTopics.some((topic) => topic.key === topicKey(bookId, name, t.name))
+                            ).length;
                             const items = [
                               { name: t.name, isTopic: true },
                               ...((t.subtopics || []).map((s) => ({
@@ -820,6 +887,8 @@ Make Q23 as hard as possible`}
                                   return (
                                     <div
                                       key={j}
+                                      hidden={!it.isTopic && !expanded}
+                                      style={!it.isTopic && !expanded ? { display: "none" } : undefined}
                                       className={`flex flex-wrap items-center gap-2 p-2 ${
                                         j !== items.length - 1
                                           ? "border-b border-neutral-200"
@@ -872,6 +941,19 @@ Make Q23 as hard as possible`}
                                     </div>
                                   );
                                 })}
+                                {items.length > 1 && (
+                                  <button
+                                    type="button"
+                                    aria-expanded={expanded}
+                                    aria-label={`${expanded ? "Collapse" : "Expand"} subtopics for ${t.name}`}
+                                    onClick={() => setExpandedTopics((curr) => ({ ...curr, [expansionKey]: !curr[expansionKey] }))}
+                                    className="flex w-full items-center justify-between gap-2 border-t border-neutral-200 px-3 py-2 text-xs font-bold text-[#002FA7] hover:bg-blue-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#002FA7]"
+                                    data-testid={`topic-expand-${bookId}-${i}`}
+                                  >
+                                    <span>{expanded ? "Show less" : "Expand more"} · {items.length - 1} subtopics ({selectedSubtopics} selected)</span>
+                                    <CaretDown size={16} className={`shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
+                                  </button>
+                                )}
                               </div>
                             );
                           })}
@@ -881,7 +963,7 @@ Make Q23 as hard as possible`}
                   );
                 })}
               </div>
-            </div>
+            </ExpandableCard>}
 
             <button
               type="submit"
@@ -901,6 +983,38 @@ Make Q23 as hard as possible`}
 }
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v)));
+
+function ExpandableCard({ id, title, summary, defaultOpen = false, disabled = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="qp-card" data-testid={`${id}-card`}>
+      <button
+        type="button"
+        className="flex w-full items-start justify-between gap-4 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#002FA7]"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls={`${id}-settings`}
+        data-testid={`${id}-expand`}
+      >
+        <span className="min-w-0">
+          <span className="block font-bold text-sm uppercase tracking-wider">{title}</span>
+          <span className="mt-2 block text-xs text-neutral-500 break-words line-clamp-2">{summary}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-1 text-xs font-bold text-[#002FA7]">
+          <span>{open ? "Show less" : "Expand more"}</span>
+          <CaretDown size={16} className={`transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
+        </span>
+      </button>
+      <div id={`${id}-settings`} hidden={!open} className="mt-5 border-t border-neutral-200 pt-5"
+        onInvalidCapture={() => flushSync(() => setOpen(true))}>
+        <fieldset disabled={disabled} className={`min-w-0 ${disabled ? "opacity-50" : ""}`}>
+          <legend className="sr-only">{title}</legend>
+          {children}
+        </fieldset>
+      </div>
+    </section>
+  );
+}
 
 // Scale a group of format values to an exact integer total. Existing ratios
 // are preserved where possible; if every value is zero, the space is shared
