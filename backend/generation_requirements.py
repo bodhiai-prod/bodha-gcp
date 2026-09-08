@@ -53,6 +53,19 @@ def compile_requirements(*, total_marks, distribution, format_distribution,
     if explicit_formats:
         spec["format_counts"] = dict(explicit_formats)
         spec["total_questions"] = sum(explicit_formats.values())
+    # Whether `total` is a number the teacher actually stated -- the form's
+    # question count, explicit format counts, or a count parsed out of the
+    # instructions -- or the marks-derived guess below.
+    #
+    # The distinction matters because the guess must never overwrite the target
+    # stored when the paper was created. It did, and that turned a complete
+    # 1-question paper into one that looked 4 short: the auto top-up then fired
+    # to "fix" a paper that was already right, and a top-up is a separate call
+    # that can only see part of what it must avoid -- one of the places
+    # duplicates get in.
+    spec["total_questions_stated"] = bool(
+        spec.get("total_questions") or total_questions
+    )
     total = spec.get("total_questions") or (
         0 if has_blueprint else total_questions or max(5, min(25, total_marks // 3))
     )

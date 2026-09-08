@@ -29,6 +29,7 @@ from llm_adapter import chain_for_exam, chat_complete, parse_json_response
 from pdf_utils import chunk_text, extract_text
 from prompts import (
     QPAPER_EXTRACT_SYSTEM,
+    avoid_list_block,
     qpaper_extract_prompt,
     competitive_qgen_prompt,
     competitive_system_for_exam,
@@ -38,10 +39,11 @@ from question_dedupe import dedupe_sections
 from question_repair import complete_sections, validate_question
 from rag import top_k_similar, difficulty_distribution
 from storage import APP_NAME, put_object
-from topic_balance import measure_coverage
+from topic_balance import measure_coverage, partition_topics as _partition_topics
 from token_usage import tag
 from workers import (
     count_questions,
+    flatten_question_texts,
     generate_diagrams_background,
     merge_topup_sections,
     paper_target_count,
@@ -510,46 +512,26 @@ def _normalise_questions(
     return [q for s in sections for q in s.get("questions", [])]
 
 
-def _partition_topics(topics: list, sizes: list) -> list:
-    """Give each batch its own slice of the topic list.
+def _truncate_sections(sections: list, total: int) -> int:
+    """Keep the first `total` questions across `sections`, in place.
 
-    Every batch used to be handed the FULL topic list. Batches run
-    concurrently, so N independent calls each saw the same topics, the same
-    anchors and the same difficulty, and each independently decided its own
-    mix -- which is why a handful of topics ended up dominating and why the
-    same question came back from two batches at once. Splitting the list
-    fixes both: a topic belongs to one batch, and no two batches can write
-    about it in parallel.
-
-    Slices are sized by each batch's question count. Competitive requests
-    carry no weights, so the split is even -- which is the right default and
-    is what "distribute equally when nothing is adjusted" means here. When
-    there are fewer topics than batches the list cycles, so a small topic set
-    across many batches still spreads rather than starving the tail.
+    Returns how many were dropped. Batches over-produce, and something has to
+    cut them back; the only thing that matters is that this runs AFTER the
+    dedupe pass, so what gets cut is surplus rather than the unique question a
+    duplicate happened to be sitting in front of.
     """
-    topics = [t for t in (topics or []) if str(t).strip()]
-    if not topics or not sizes:
-        return [list(topics) for _ in (sizes or [1])]
-    if len(topics) <= len(sizes):
-        return [[topics[i % len(topics)]] for i in range(len(sizes))]
-
-    total = sum(sizes) or 1
-    out: list = []
-    cursor = 0
-    for idx, n in enumerate(sizes):
-        remaining_batches = len(sizes) - idx
-        # At least one topic each, and never more than leaves the batches
-        # after this one empty-handed.
-        want = max(1, round(len(topics) * n / total))
-        want = min(want, len(topics) - cursor - (remaining_batches - 1))
-        want = max(1, want)
-        out.append(topics[cursor:cursor + want] or [topics[cursor % len(topics)]])
-        cursor += want
-    # Anything left over from rounding joins the last batch rather than being
-    # silently dropped -- an unassigned topic gets zero questions.
-    if cursor < len(topics):
-        out[-1].extend(topics[cursor:])
-    return out
+    if total <= 0:
+        return 0
+    kept = 0
+    dropped = 0
+    for s in sections or []:
+        questions = s.get("questions") or []
+        room = max(0, total - kept)
+        if len(questions) > room:
+            dropped += len(questions) - room
+            s["questions"] = questions[:room]
+        kept += len(s.get("questions") or [])
+    return dropped
 
 
 async def _generate_one_batch(
@@ -628,19 +610,12 @@ async def generate_missing_competitive_questions(paper_id: str, count: int) -> N
         rag_dist = difficulty_distribution(anchors)
 
         existing_sections = p.get("sections") or []
-        already_asked = [
-            q.get("question", "")
-            for s in existing_sections
-            for q in (s.get("questions") or [])
-            if q.get("question")
-        ]
-        avoid = ""
-        if already_asked:
-            stems = "\n".join(f"- {' '.join(a.split())[:200]}" for a in already_asked[:60])
-            avoid = (
-                "\n\nThese questions are ALREADY on this paper. Do NOT repeat or "
-                "paraphrase any of them:\n" + stems
-            )
+        already_asked = flatten_question_texts(existing_sections)
+        # Built by prompts.avoid_list_block rather than here. This used to be a
+        # second copy of that list with the same two silent caps -- the first 60
+        # stems only, each cut at 200 characters -- so on a long paper the model
+        # was never shown the questions it was most likely to repeat.
+        avoid = "\n\n" + avoid_list_block(already_asked) if already_asked else ""
 
         num_batches = max(1, (count + batch_size - 1) // batch_size)
         sizes = [count // num_batches] * num_batches
@@ -717,7 +692,7 @@ async def generate_missing_competitive_questions(paper_id: str, count: int) -> N
             raise RuntimeError("The model returned no usable questions.")
 
         # Compare against the whole paper, and let only the NEW questions lose.
-        dedupe_sections(new_sections, ref=paper_id, against=existing_sections)
+        await dedupe_sections(new_sections, ref=paper_id, against=existing_sections)
         await repair_sections(new_sections, ref=paper_id)
         pending_count = apply_diagram_policy(new_sections, ref=paper_id)
         for s in new_sections:
@@ -849,8 +824,13 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
                 "within a few minutes."
             )
 
-        # Truncate to the prescribed total in case batches over-produced.
-        all_questions = all_questions[:total_q]
+        # NOT truncated to total_q here, deliberately. Cutting first meant a
+        # duplicate sitting inside the first total_q displaced a unique question
+        # that was then thrown away unseen; dedupe dropped the duplicate a moment
+        # later and the paper ended up short, which fired a top-up to regenerate
+        # what had just been discarded. Over-production is now carried as far as
+        # the dedupe pass and cut afterwards, so the questions that survive are
+        # the ones that were actually worth keeping.
 
         # Group into 1 section labelled with the exam (we keep the section
         # blueprint simple; teachers can re-section in the editor if needed).
@@ -886,12 +866,17 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
     # they cannot see each other's output, so only this can.
     topics_weighted = [{"name": t, "weight": 5} for t in (req.topics or [])]
     coverage = measure_coverage(sections, topics_weighted, total_q)
-    dedupe_stats = dedupe_sections(sections, ref=paper_id, coverage=coverage)
+    dedupe_stats = await dedupe_sections(sections, ref=paper_id, coverage=coverage)
+
+    # NOW cut to the prescribed total, with the duplicates already gone -- see
+    # the note where the batches are collected. Over-production that survived
+    # dedupe is genuine surplus and is what should be trimmed.
+    _truncate_sections(sections, total_q)
 
     # Finish the questions that arrived incomplete, including the ones strict
-    # MCQ mode had to reject. The cap at the top of this function ran before
-    # those rejections, so the paper is short by exactly the number dropped
-    # and there is room for every one that can be recovered.
+    # MCQ mode had to reject. Both the dedupe pass and the cut above ran before
+    # this, so the paper is short by exactly the number lost and there is room
+    # for every one that can be recovered.
     completeness_stats = await _complete_and_gate(
         sections,
         ref=paper_id,

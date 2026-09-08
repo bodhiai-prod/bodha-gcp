@@ -29,7 +29,7 @@ from generation_requirements import compile_requirements, remaining_requirements
 from question_dedupe import dedupe_sections
 from question_repair import complete_sections
 from storage import APP_NAME, put_object
-from topic_balance import measure_coverage, topic_shortfall
+from topic_balance import measure_coverage, partition_topics, topic_shortfall
 from token_usage import tag
 
 
@@ -220,6 +220,151 @@ def _normalise_paper_questions(
 # ---------------------------------------------------------------------------
 # Question paper generation
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Batched generation — large papers
+# ---------------------------------------------------------------------------
+# The school path made ONE call for the whole paper. That was fine while a
+# paper was at most 25 questions, which is where derive_target_question_count
+# capped it. Once an explicit total_questions (up to 200) could be requested,
+# the same single call had to fit a paper several times that size into
+# BEDROCK_MAX_TOKENS -- so it truncated, parse_json_response salvaged whatever
+# was complete, the paper saved short, and the auto top-up refilled it from a
+# separate call that could only ever see part of what it had to avoid. Every
+# step of that chain is somewhere a duplicate gets in.
+#
+# Batching removes the truncation, and -- because each batch gets its own slice
+# of the topic list plus the stems every earlier batch wrote -- removes the
+# reason two calls would write the same question in the first place.
+SCHOOL_BATCH_THRESHOLD = int(os.environ.get("SCHOOL_BATCH_THRESHOLD", "25"))
+SCHOOL_BATCH_SIZE = int(os.environ.get("SCHOOL_BATCH_SIZE", "20"))
+# Batches inside one wave run together and cannot see each other; only their
+# disjoint topic slices keep them apart. Waves are what carry the avoid-list
+# forward, so this is a duplication/throughput trade, not just a rate limit.
+SCHOOL_BATCH_CONCURRENCY = int(os.environ.get("SCHOOL_BATCH_CONCURRENCY", "3"))
+
+
+def _batch_sizes(total: int, batch_size: int) -> list:
+    """Split `total` questions into near-equal batches of at most `batch_size`."""
+    num = max(1, (total + batch_size - 1) // max(1, batch_size))
+    sizes = [total // num] * num
+    for i in range(total - sum(sizes)):
+        sizes[i] += 1
+    return [n for n in sizes if n > 0]
+
+
+def _merge_batch_sections(merged: dict, order: list, sections: list) -> None:
+    """Fold one batch's sections into the accumulator, keyed by section title.
+
+    Merging by title rather than concatenating is what lets a batched paper
+    keep the multi-section structure a single call would have produced -- two
+    batches that both wrote a "Section A" contribute to one heading, not two.
+    """
+    for sec in sections or []:
+        title = str(sec.get("title") or "").strip() or "Section A"
+        if title not in merged:
+            merged[title] = {"title": title, "questions": []}
+            order.append(title)
+        merged[title]["questions"].extend(
+            q for q in (sec.get("questions") or []) if isinstance(q, dict)
+        )
+
+
+async def _generate_paper_in_batches(
+    *,
+    ref: str,
+    target_q: int,
+    topics_weighted: list,
+    spec: dict,
+    total_marks: int,
+    system_message: str,
+    prompt_kwargs: dict,
+) -> dict:
+    """Generate a large paper as several smaller calls.
+
+    Returns the same {"instructions", "sections"} shape one call returns, so
+    everything downstream -- completion, dedupe, LaTeX repair, the diagram
+    policy -- is unchanged and does not know the difference.
+
+    A failed batch costs its own questions and nothing else; the paper comes
+    back short and the existing top-up path fills it, which is strictly better
+    than losing the whole paper to one bad response.
+    """
+    sizes = _batch_sizes(target_q, SCHOOL_BATCH_SIZE)
+    names = [
+        str(t.get("name", "")).strip()
+        for t in topics_weighted or []
+        if str(t.get("name", "")).strip()
+    ]
+    weight_of = {
+        str(t.get("name", "")).strip(): t.get("weight", 5)
+        for t in topics_weighted or []
+    }
+    topic_sets = partition_topics(names, sizes)
+
+    merged: dict = {}
+    order: list = []
+    instructions = ""
+    failures = 0
+
+    for start in range(0, len(sizes), SCHOOL_BATCH_CONCURRENCY):
+        wave = list(range(start, min(start + SCHOOL_BATCH_CONCURRENCY, len(sizes))))
+        # Snapshot once per wave: every batch in it sees everything the waves
+        # before wrote. Batches inside a wave still cannot see each other --
+        # that is exactly what their disjoint topic slices are for.
+        sections_so_far = [merged[t] for t in order]
+        written = [
+            q.get("question", "")
+            for s in sections_so_far
+            for q in s["questions"]
+            if q.get("question")
+        ]
+
+        async def _run(idx: int, _seen=written, _so_far=sections_so_far) -> dict:
+            batch_topics = [
+                {"name": n, "weight": weight_of.get(n, 5)} for n in topic_sets[idx]
+            ] or list(topics_weighted or [])
+            # Reuses the top-up apportioner: it already knows how to take a
+            # compiled spec plus what exists and produce the quotas for the
+            # next `n` questions only, which is precisely what a batch is.
+            batch_spec = remaining_requirements(spec, _so_far, sizes[idx])
+            kwargs = dict(prompt_kwargs)
+            kwargs.update(
+                topics_weighted=batch_topics,
+                total_marks=max(1, round(total_marks * sizes[idx] / max(1, target_q))),
+                total_questions=sizes[idx],
+                existing_questions=_seen,
+                spec=batch_spec,
+            )
+            raw = await chat_complete(
+                system_message=system_message, user_text=qgen_prompt(**kwargs)
+            )
+            return parse_json_response(raw)
+
+        results = await _asyncio.gather(
+            *[_run(i) for i in wave], return_exceptions=True
+        )
+        for r in results:
+            if isinstance(r, Exception):
+                failures += 1
+                logger.warning(f"[batch] {ref or '-'} batch failed: {r}")
+                continue
+            if not instructions:
+                instructions = (r or {}).get("instructions", "") or ""
+            _merge_batch_sections(merged, order, (r or {}).get("sections"))
+
+    produced = sum(len(merged[t]["questions"]) for t in order)
+    if not produced:
+        raise RuntimeError(
+            "Every generation batch failed - the upstream provider is not "
+            "responding right now. Try again in a few minutes."
+        )
+    logger.info(
+        f"[batch] {ref or '-'} batches={len(sizes)} produced={produced} "
+        f"target={target_q} failed={failures}"
+    )
+    return {"instructions": instructions, "sections": [merged[t] for t in order]}
+
+
 async def generate_paper_background(
     paper_id: str,
     owner_id: str,
@@ -270,7 +415,13 @@ async def generate_paper_background(
     if spec.get("total_questions"):
         spec["topic_counts"] = resolve_shares(topics_weighted, spec["total_questions"])
     await db.papers.update_one({"id": paper_id}, {"$set": {"generation_requirements": spec}})
-    prompt = qgen_prompt(
+    # Hoisted above the generation call because the batching decision needs it.
+    # Same number the prompt is built from, or the coverage check below would
+    # measure the paper against a target the model was never given.
+    target_q = int(spec.get("total_questions") or 0) or (
+        derive_target_question_count(total_marks)
+    )
+    prompt_kwargs = dict(
         subject=subject,
         klass=klass,
         topics_weighted=topics_weighted,
@@ -285,15 +436,33 @@ async def generate_paper_background(
         section_blueprint=section_blueprint or "",
         spec=spec,
     )
+    system_message = (
+        "You create original, high-quality exam questions in strict JSON. "
+        "Never copy textbook content."
+    )
+    # Below the threshold this is exactly the call it always was -- one request,
+    # no extra latency, no behaviour change for the papers that already work.
+    # A blueprint is never batched: it states its own structure in prose we do
+    # not parse, so we have no honest way to split it.
+    batched = target_q > SCHOOL_BATCH_THRESHOLD and not (section_blueprint or "").strip()
+    prompt = None if batched else qgen_prompt(**prompt_kwargs)
     try:
-        raw = await chat_complete(
-            system_message=(
-                "You create original, high-quality exam questions in strict JSON. "
-                "Never copy textbook content."
-            ),
-            user_text=prompt,
-        )
-        data = parse_json_response(raw)
+        if batched:
+            data = await _generate_paper_in_batches(
+                ref=paper_id,
+                target_q=target_q,
+                topics_weighted=topics_weighted,
+                spec=spec,
+                total_marks=total_marks,
+                system_message=system_message,
+                prompt_kwargs=prompt_kwargs,
+            )
+        else:
+            raw = await chat_complete(
+                system_message=system_message,
+                user_text=prompt,
+            )
+            data = parse_json_response(raw)
     except Exception as e:  # noqa: BLE001
         logger.exception("Question generation failed")
         await db.papers.update_one(
@@ -312,7 +481,22 @@ async def generate_paper_background(
     # One bounded correction attempt for a complete but noncompliant paper.
     # Truncated papers use the existing top-up path instead.
     initial_check = verify_instructions(sections, spec)
-    if not initial_check["honoured"] and count_questions(sections) >= spec.get("total_questions", 0):
+    # `prompt is not None` excludes batched papers. The correction regenerates
+    # the WHOLE paper in a single call, which is the exact thing that truncates
+    # at this size -- retrying it would reintroduce the salvage-and-top-up chain
+    # that batching exists to remove. A batched paper that misses its counts
+    # goes to the top-up path instead, which asks only for the gap.
+    #
+    # `spec["total_questions"] > 0` excludes blueprint papers, where the compiled
+    # spec deliberately sets it to 0: `count_questions(...) >= 0` is always true,
+    # so every blueprint paper with any unmet check was making a second
+    # full-paper call.
+    if (
+        prompt is not None
+        and spec.get("total_questions")
+        and not initial_check["honoured"]
+        and count_questions(sections) >= spec["total_questions"]
+    ):
         try:
             corrected_raw = await chat_complete(
                 system_message="Create original exam questions in strict JSON. Satisfy the resolved requirements exactly.",
@@ -345,14 +529,24 @@ async def generate_paper_background(
     # to the topic with too many is the one to lose. This first pass is also
     # what canonicalises each question's topic label, which everything below
     # counts on. Then measure again, because the answer changed.
-    # Same number the prompt was built from, or the coverage check measures
-    # the paper against a target the model was never given.
-    target_q = int(spec.get("total_questions") or 0) or (
-        derive_target_question_count(total_marks)
-    )
-    coverage = measure_coverage(sections, topics_weighted, target_q)
-    dedupe_stats = dedupe_sections(sections, ref=paper_id, coverage=coverage)
-    coverage = measure_coverage(sections, topics_weighted, target_q)
+    # `target_q` was resolved before generation, from the same spec the prompt
+    # was built from -- measuring against anything else scores the paper on a
+    # target the model was never given.
+    #
+    # Except under a blueprint, where there is no such number to reuse. The
+    # compiled spec sets total_questions to 0 there on purpose, so target_q
+    # fell through to the marks-derived guess -- and the prompt no longer even
+    # states per-topic counts under a blueprint, it states percentages. Scoring
+    # a 38-question blueprint paper against a guess of 16 marked nearly every
+    # topic `over`, which is exactly what dedupe reads to choose WHICH of a
+    # duplicate pair to drop, and what topic_shortfall reads to drive the
+    # top-up. Counting what actually came back is the honest denominator.
+    coverage_target = target_q
+    if (section_blueprint or "").strip():
+        coverage_target = count_questions(sections) or target_q
+    coverage = measure_coverage(sections, topics_weighted, coverage_target)
+    dedupe_stats = await dedupe_sections(sections, ref=paper_id, coverage=coverage)
+    coverage = measure_coverage(sections, topics_weighted, coverage_target)
 
     # Check and repair the LaTeX before anything downstream reads it. Runs
     # ahead of apply_diagram_policy so diagram_policy.plain_text() flattens
@@ -388,9 +582,15 @@ async def generate_paper_background(
             # A stated count makes the target knowable, which is what
             # re-enables auto-top-up and the missing-questions banner for
             # instruction-driven papers -- both were dead while this was 0.
+            #
+            # STATED, not merely resolved. compile_requirements always produces
+            # a total, falling back to a guess derived from total_marks, and
+            # writing that guess here overwrote the real target the paper was
+            # created with -- so a complete paper could be declared short of a
+            # number nobody ever asked for and top itself up to reach it.
             **(
                 {"target_question_count": target_q}
-                if spec.get("total_questions")
+                if spec.get("total_questions") and spec.get("total_questions_stated")
                 else {}
             ),
         }},
@@ -769,7 +969,7 @@ async def generate_missing_questions_background(
         # A top-up is the likeliest place to re-ask an existing question: the
         # prompt lists only the first 60 stems, truncated, as things to avoid.
         # Compare against the whole paper, and let only the NEW questions lose.
-        dedupe_sections(new_sections, ref=paper_id, against=existing_sections)
+        await dedupe_sections(new_sections, ref=paper_id, against=existing_sections)
         await repair_sections(new_sections, ref=paper_id)
         pending_count = apply_diagram_policy(new_sections, ref=paper_id,
             max_diagrams=topup_spec.get("diagram_count", max(0, 5 - sum(
