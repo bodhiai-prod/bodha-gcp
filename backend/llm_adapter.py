@@ -107,10 +107,10 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 # different vendors on purpose: the Bedrock pair currently has the same id in
 # both slots, which makes its fallback a no-op retry rather than a real one.
 OPENROUTER_TEXT_MODEL_DEFAULT = os.environ.get(
-    "OPENROUTER_TEXT_MODEL_DEFAULT", "openai/gpt-5.6"
+    "OPENROUTER_TEXT_MODEL_DEFAULT", "z-ai/glm-5.3-flash"
 )
 OPENROUTER_TEXT_MODEL_FALLBACK = os.environ.get(
-    "OPENROUTER_TEXT_MODEL_FALLBACK", "anthropic/claude-opus-5"
+    "OPENROUTER_TEXT_MODEL_FALLBACK", "google/gemini-3.8-flash"
 )
 # Deliberately BELOW chat_complete's per-call budget (see _text_timeout): we
 # want a slow call to surface as a real HTTP error — recorded, attributed to a

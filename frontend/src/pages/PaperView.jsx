@@ -20,6 +20,7 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import MathText from "@/components/MathText";
+import MatchTheFollowing from "@/components/MatchTheFollowing";
 import QuestionDiagram from "@/components/QuestionDiagram";
 import { printDocument, diagramsReady } from "@/lib/print";
 
@@ -32,6 +33,13 @@ const typeBadge = (t) => {
 const TYPE_OPTIONS = ["information", "concept", "application"];
 const DIFF_OPTIONS = ["easy", "medium", "hard"];
 
+const instructionLines = (instructions = "") =>
+  instructions
+    .split(/\r?\n/)
+    .flatMap(line => line.split(/\s*(?=(?:\([ivxlcdm]+\)|\d+[.)]|[-•])\s)/i))
+    .map(line => line.trim())
+    .filter(Boolean);
+
 export default function PaperView() {
   const { id } = useParams();
   const [paper, setPaper] = useState(null);
@@ -40,6 +48,7 @@ export default function PaperView() {
   const [saving, setSaving] = useState(false);
   const [topupCount, setTopupCount] = useState(0);
   const [queuing, setQueuing] = useState(false);
+  const [cancellingGeneration, setCancellingGeneration] = useState(false);
 
   const load = async () => {
     const { data } = await api.get(`/papers/${id}`);
@@ -85,6 +94,19 @@ export default function PaperView() {
       await load();
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Could not retry");
+    }
+  };
+
+  const cancelGeneration = async () => {
+    setCancellingGeneration(true);
+    try {
+      const { data } = await api.post(`/papers/${id}/cancel-generation`);
+      setPaper(current => ({ ...current, ...data }));
+      toast.success("Paper generation cancelled");
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not cancel generation");
+    } finally {
+      setCancellingGeneration(false);
     }
   };
 
@@ -239,6 +261,9 @@ export default function PaperView() {
   }
 
   if (paper.generation_status === "pending") {
+    const generatedCount = (paper.sections || []).reduce((total, section) => total + (section.questions || []).length, 0) || paper.generation_progress?.completed || 0;
+    const configuredCount = paper.generation_progress?.total || paper.target_question_count || paper.generation_requirements?.total_questions || paper.total_questions || 0;
+    const progressPercent = configuredCount > 0 ? Math.min(100, Math.round(generatedCount / configuredCount * 100)) : 0;
     return (
       <div className="min-h-screen bg-[#FAFAFA]">
         <Header />
@@ -269,10 +294,22 @@ export default function PaperView() {
               This usually takes 20-90 seconds. The page will refresh
               automatically when it&rsquo;s ready.
             </p>
+            <div className="generation-progress" aria-live="polite">
+              <div className="generation-progress-heading"><span>Questions generated</span><strong>{configuredCount > 0 ? `${generatedCount} / ${configuredCount}` : `${generatedCount} generated`}</strong></div>
+              <progress value={generatedCount} max={configuredCount || 1} aria-label="Paper generation progress" />
+              <span className="generation-progress-percent">{configuredCount > 0 ? `${progressPercent}% complete` : "Preparing question count…"}</span>
+            </div>
+            <button type="button" onClick={cancelGeneration} disabled={cancellingGeneration} className="qp-btn qp-btn-secondary mt-6" data-testid="cancel-paper-generation">
+              <X size={16} weight="bold" /> {cancellingGeneration ? "Cancelling…" : "Cancel generation"}
+            </button>
           </div>
         </main>
       </div>
     );
+  }
+
+  if (paper.generation_status === "cancelled") {
+    return <div className="min-h-screen bg-[#FAFAFA]"><Header /><main className="max-w-3xl mx-auto p-6 md:p-12" data-testid="paper-cancelled-page"><Link to="/" className="qp-btn-ghost inline-flex items-center gap-2 mb-8"><ArrowLeft size={16} weight="bold" /> Dashboard</Link><div className="border border-neutral-200 bg-white rounded-2xl p-10 text-center"><h1 className="text-2xl font-semibold text-neutral-900 mb-2">Generation cancelled</h1><p className="text-neutral-600">No generated paper was saved. You can restart this paper with the same configuration.</p><button type="button" onClick={regenerateAll} className="qp-btn qp-btn-primary mt-6"><ArrowClockwise size={16} weight="bold" /> Restart generation</button></div></main></div>;
   }
 
   if (paper.generation_status === "failed") {
@@ -605,10 +642,10 @@ export default function PaperView() {
             />
           ) : (
             view.instructions && (
-              <div className="mb-6 border border-neutral-300 bg-neutral-50 p-4 text-sm">
-                <span className="font-bold">Instructions: </span>
-                {view.instructions}
-              </div>
+              <section className="paper-instructions mb-6 border border-neutral-300 bg-neutral-50 p-4 text-sm" aria-label="Paper instructions">
+                <h2 className="font-bold mb-2">Instructions</h2>
+                <div>{instructionLines(view.instructions).map((line, index) => <div key={`${line}-${index}`} className="paper-instruction-line"><MathText text={line} /></div>)}</div>
+              </section>
             )
           )}
 
@@ -757,9 +794,9 @@ export default function PaperView() {
                               className="mt-1"
                             />
                           )}
-                          <span className="flex-1">
-                            <MathText text={q.question} />
-                          </span>
+                          <div className="flex-1">
+                            <MatchTheFollowing text={q.question} />
+                          </div>
                           <span className="font-mono font-bold text-sm shrink-0">
                             [{q.marks}]
                           </span>

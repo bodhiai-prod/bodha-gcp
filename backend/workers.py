@@ -474,7 +474,7 @@ async def generate_paper_background(
     except Exception as e:  # noqa: BLE001
         logger.exception("Question generation failed")
         await db.papers.update_one(
-            {"id": paper_id},
+            {"id": paper_id, "generation_status": "pending"},
             {"$set": {
                 "generation_status": "failed",
                 "generation_error": str(e)[:500],
@@ -483,6 +483,13 @@ async def generate_paper_background(
         return
 
     sections = data.get("sections") or []
+    # Publish the only truthful question count available once the model output
+    # has been parsed. A single provider response moves from 0 straight to this
+    # value; the UI continues to poll it while the finishing checks run.
+    await db.papers.update_one({"id": paper_id, "generation_status": "pending"}, {"$set": {
+        "generation_progress.completed": count_questions(sections),
+        "generation_progress.total": target_q,
+    }})
     coercions: dict = {}
     _normalise_paper_questions(sections, difficulty, coercions)
     (allocation_coverage(sections, spec) if spec.get("section_allocations") else measure_coverage(sections, topics_weighted, spec.get("total_questions") or derive_target_question_count(total_marks)))
@@ -582,8 +589,14 @@ async def generate_paper_background(
         for q in s.get("questions", []):
             q["diagram_status"] = "pending" if q.get("needs_diagram") else "none"
 
+    # Cancellation is cooperative: do not publish a response that finished
+    # after its owner cancelled the job.
+    still_pending = await db.papers.find_one({"id": paper_id, "generation_status": "pending"}, {"_id": 0, "id": 1})
+    if not still_pending:
+        logger.info("Paper generation cancelled before publish: %s", paper_id)
+        return
     await db.papers.update_one(
-        {"id": paper_id},
+        {"id": paper_id, "generation_status": "pending"},
         {"$set": {
             "instructions": data.get("instructions", ""),
             "sections": sections,
@@ -591,6 +604,9 @@ async def generate_paper_background(
             "diagrams_pending": pending_count,
             "generation_status": "ready",
             "generation_error": None,
+            "generation_progress.completed": count_questions(sections),
+            "generation_progress.total": target_q,
+            "generation_progress.status": "ready",
             "recovered_from_truncation": bool(data.get("_recovered_from_truncation")),
             "latex_check": latex_stats,
             "completeness_check": completeness_stats,
