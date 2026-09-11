@@ -107,7 +107,7 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 # different vendors on purpose: the Bedrock pair currently has the same id in
 # both slots, which makes its fallback a no-op retry rather than a real one.
 OPENROUTER_TEXT_MODEL_DEFAULT = os.environ.get(
-    "OPENROUTER_TEXT_MODEL_DEFAULT", "z-ai/glm-5.3-flash"
+    "OPENROUTER_TEXT_MODEL_DEFAULT", "google/gemini-3.5-flash-lite"
 )
 OPENROUTER_TEXT_MODEL_FALLBACK = os.environ.get(
     "OPENROUTER_TEXT_MODEL_FALLBACK", "google/gemini-3.8-flash"
@@ -127,7 +127,7 @@ OPENROUTER_TEXT_TEMPERATURE = float(
 )
 
 OPENROUTER_IMAGE_MODEL = os.environ.get(
-    "OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image"
+    "OPENROUTER_IMAGE_MODEL", "google/gemini-3.1-flash-lite-image"
 )
 # The Gemini image endpoints accept aspect_ratio, n and input_references, and
 # nothing else — no negative_prompt, no output_format, no seed. "1:1" gives the
