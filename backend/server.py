@@ -1046,6 +1046,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "diagrams_pending": 0,
         "generation_status": "pending",
         "generation_error": None,
+        "generation_progress": {"completed": 0, "total": (resolved or {}).get("total_questions") or requested_count or 0},
         "created_at": utcnow_iso(),
         "is_deleted": False,
     }
@@ -1196,6 +1197,14 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
+    textbook_ids = p.get("textbook_ids") or ([p["textbook_id"]] if p.get("textbook_id") else [])
+    textbook_rows = await db.textbooks.find(
+        {"id": {"$in": textbook_ids}, "is_deleted": False},
+        {"_id": 0, "id": 1, "original_filename": 1},
+    ).to_list(len(textbook_ids))
+    textbook_names = {row["id"]: row.get("original_filename") or row["id"] for row in textbook_rows}
+    # Preserve the paper's original ingestion order rather than database order.
+    p["source_textbooks"] = [textbook_names[textbook_id] for textbook_id in textbook_ids if textbook_id in textbook_names]
     from instruction_spec import verify
     p["summary"] = paper_summary(p)
     checks = verify(p.get("sections") or [], p.get("generation_requirements") or {})
@@ -1261,6 +1270,7 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
         {"$set": {
             "generation_status": "pending",
             "generation_error": None,
+            "generation_progress": {"completed": 0, "total": (p.get("generation_requirements") or {}).get("total_questions") or p.get("target_question_count") or 0},
             "sections": [],
             "diagrams_pending": 0,
             "question_count": 0,
@@ -1296,6 +1306,29 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
         )
     )
     return {"id": paper_id, "generation_status": "pending"}
+
+
+@api_router.post("/papers/{paper_id}/cancel-generation")
+async def cancel_paper_generation(paper_id: str, user: dict = Depends(get_current_user)):
+    """Cooperatively stop an in-flight paper job.
+
+    An upstream model request cannot be forcibly interrupted, but the worker
+    checks this state before publishing its result, so a cancelled draft can
+    never replace the user's cancelled paper.
+    """
+    p = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if p["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if p.get("generation_status") != "pending":
+        raise HTTPException(status_code=409, detail="Generation is no longer in progress")
+    await db.papers.update_one({"id": paper_id, "generation_status": "pending"}, {"$set": {
+        "generation_status": "cancelled",
+        "generation_error": None,
+        "generation_progress.status": "cancelled",
+    }})
+    return {"id": paper_id, "generation_status": "cancelled"}
 
 
 @api_router.get("/papers/{paper_id}/pdf")

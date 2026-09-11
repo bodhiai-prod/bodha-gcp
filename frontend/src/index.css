@@ -283,9 +283,9 @@ pre.math-fallback {
 @media print {
     @page {
         size: A4 portrait;
-        /* No vertical margin means the browser has no space for its automatic
-           header/footer (including the paper URL and ID). Keep side margins
-           on every sheet and add document spacing through main below. */
+        /* Zero vertical page margins suppress the browser's automatic URL,
+           title and page-number footer. Document padding below supplies the
+           readable top/bottom whitespace instead. */
         margin: 0 14mm;
     }
 
@@ -315,7 +315,9 @@ pre.math-fallback {
     main {
         max-width: none !important;
         margin: 0 !important;
-        padding: 14mm 0 !important;
+        padding: 12mm 0 16mm !important;
+        -webkit-box-decoration-break: clone;
+        box-decoration-break: clone;
     }
 
     /* --- The paper / answer key becomes the page itself --- */
@@ -345,6 +347,27 @@ pre.math-fallback {
     li[data-testid^="question-item-"],
     li[data-testid^="solution-item-"] {
         break-inside: avoid;
+        break-inside: avoid-page;
+        page-break-inside: avoid;
+    }
+    /* Keep a section heading with its first question/answer. Individual
+       question blocks can still flow onto later pages, which prevents a
+       long section from creating an otherwise empty sheet. */
+    [data-testid="paper-preview"] section > h2,
+    [data-testid="solution-body"] section > h2 {
+        break-after: avoid;
+        break-after: avoid-page;
+        page-break-after: avoid;
+    }
+    [data-testid^="mcq-options-"],
+    [data-testid^="answer-"] {
+        break-inside: avoid;
+        break-inside: avoid-page;
+        page-break-inside: avoid;
+    }
+    .match-following-table tr {
+        break-inside: avoid;
+        break-inside: avoid-page;
         page-break-inside: avoid;
     }
     /* Don't orphan a section heading at the foot of a page. */
@@ -383,13 +406,27 @@ pre.math-fallback {
 }
 /* Section allocation and backend summary panels. */
 .section-tabs { display:flex; flex-wrap:wrap; gap:4px; border-bottom:2px solid #111; }
+.new-paper-steps { display:flex; flex-wrap:wrap; gap:6px; margin:-20px 0 28px; }
+.new-paper-steps button { border:1px solid #a3a3a3; padding:9px 14px; background:#fff; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+.new-paper-steps button.is-active { border-color:#002fa7; background:#002fa7; color:#fff; }
 .section-tabs button { flex:1 1 110px; text-align:left; padding:10px; border:1px solid #d4d4d4; font-size:11px; }
 .section-tabs button small { display:block; margin-top:4px; }
 .section-tabs button.is-active { background:#111; color:#fff; }
+.blueprint-book-tabs { border-bottom-color:#002fa7; }
+.blueprint-book-tabs button.is-active { background:#002fa7; }
+.section-navigation { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:14px 0; }
+.section-navigation button:disabled { cursor:not-allowed; opacity:.45; }
 .section-topic-group { border:1px solid #aaa; padding:10px; margin:14px 0; min-width:0; }
 .section-topic-group legend { padding:0 5px; font-size:11px; font-weight:700; }
+.section-topic-group.is-complete { border-color:#15803d; }
+.section-assignment-counter { display:inline-flex; align-items:baseline; gap:2px; margin-left:4px; color:#b45309; font-size:14px; font-variant-numeric:tabular-nums; }
+.section-assignment-counter strong { font-size:20px; line-height:1; }
+.section-topic-group.is-complete .section-assignment-counter { color:#15803d; }
+.section-assignment-limit { margin:4px 0 8px; color:#166534; font-size:11px; font-weight:600; }
 .section-topic-row { padding:12px; border:1px solid #ddd; margin:8px 0; background:#fafafa; }
 .section-topic-row.is-selected { border-color:#222; background:#fff; }
+.section-topic-row input[type=checkbox]:disabled { cursor:not-allowed; opacity:.4; }
+.section-topic-inherited-count { margin-top:8px; color:#166534; font-size:11px; font-weight:600; }
 .section-topic-title { display:flex; align-items:flex-start; gap:10px; font-size:13px; }
 .section-topic-title input { margin-top:4px; accent-color:#002fa7; }
 .section-topic-title small { display:block; font-size:10px; color:#737373; margin-top:4px; overflow-wrap:anywhere; }
@@ -398,15 +435,38 @@ pre.math-fallback {
 .section-topic-controls label.diagram-toggle { flex-direction:row; align-items:center; }
 .section-topic-controls select,.section-topic-controls input[type=number] { border:1px solid #a3a3a3; padding:6px; background:#fff; font-size:11px; }
 .section-topic-controls input[type=number] { width:70px; }
+.blueprint-unit { border:1px solid #ddd; margin:8px 0; background:#fafafa; }
+.blueprint-unit > .section-topic-row { border:0; margin:0; }
+.blueprint-unit-toggle { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; border-top:1px solid #ddd; padding:8px 12px; color:#002fa7; background:#fff; font-size:11px; font-weight:700; text-align:left; }
+.blueprint-subtopics { border-top:1px solid #ddd; padding:0 8px 8px 24px; background:#fff; }
+.blueprint-subtopics .section-topic-row { margin:8px 0 0; background:#fff; }
+/* Keep the chapter picker compact: roughly five collapsed chapters stay in view.
+   Expanded subtopics remain in the same scroll context, so moving to later
+   chapters never requires collapsing the current chapter first. */
+.chapter-selection-scroll { height:430px; overflow-y:auto; overscroll-behavior:contain; padding-right:4px; scrollbar-gutter:stable; }
+.blueprint-chapter-scroll { margin-top:6px; }
 .blueprint-summary-facts>div { display:flex; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px solid #eee; font-size:11px; }
 .blueprint-summary-facts dt { color:#737373; }
 .blueprint-summary-facts dd { text-align:right; font-weight:600; max-width:65%; overflow-wrap:anywhere; }
+.review-topic-list { border-top:1px solid #e5e5e5; }
+.review-topic-list > div { display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid #e5e5e5; font-size:12px; }
+.review-topic-list span { overflow-wrap:anywhere; }
+.review-topic-list strong { white-space:nowrap; }
+.review-section-list { border-top:1px solid #e5e5e5; }
+.review-section-composition { padding:11px 0; border-bottom:1px solid #e5e5e5; }
+.review-section-heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; font-size:12px; }
+.review-section-heading span { color:#525252; font-size:11px; font-weight:600; white-space:nowrap; }
+.review-section-composition .review-topic-list { margin-top:8px; border-top:0; padding-left:12px; }
 .summary-issues { list-style:disc; padding-left:18px; margin-top:12px; font-size:11px; color:#92400e; }
 .summary-issues li { margin:6px 0; }
 .paper-with-summary { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:24px; align-items:start; }
 .paper-summary { position:sticky; top:20px; min-width:0; }
 .paper-summary .qp-card { padding:20px; }
 .paper-summary h3 { font-size:11px; text-transform:uppercase; font-weight:700; margin-bottom:10px; }
+.paper-summary-books { margin:0; padding-left:20px; color:#525252; font-size:12px; }
+.paper-summary-books.is-single { list-style:disc; }
+.paper-summary-books.is-multiple { list-style:decimal; }
+.paper-summary-books li + li { margin-top:5px; }
 .paper-summary-totals { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:18px 0; text-align:center; }
 .paper-summary-totals strong,.paper-summary-totals small { display:block; }
 .paper-summary-totals strong { font-size:24px; }
@@ -415,5 +475,19 @@ pre.math-fallback {
 .summary-meter>div { display:flex; justify-content:space-between; gap:8px; font-size:11px; }
 .summary-meter strong { white-space:nowrap; }
 .summary-meter progress { display:block; width:100%; height:6px; margin-top:6px; accent-color:#002fa7; }
+.generation-progress { max-width:440px; margin:24px auto 0; text-align:left; }
+.generation-progress-heading { display:flex; justify-content:space-between; gap:12px; font-size:13px; }
+.generation-progress-heading strong { font-variant-numeric:tabular-nums; }
+.generation-progress progress { display:block; width:100%; height:10px; margin:8px 0 6px; accent-color:#002fa7; }
+.generation-progress-percent { color:#737373; font-size:11px; }
+.paper-instruction-line { line-height:1.6; }
+.paper-instruction-line + .paper-instruction-line { margin-top:6px; }
+.match-following { width:100%; }
+.match-following-prompt { margin-bottom:12px; }
+.match-following-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+.match-following-table th,.match-following-table td { border:1px solid #111; padding:8px 10px; text-align:left; vertical-align:top; overflow-wrap:anywhere; }
+.match-following-table thead th { background:#f5f5f5; font-weight:700; text-align:center; }
+.match-following-table .match-following-number { width:42px; text-align:center; }
+.match-following-tail { margin-top:12px; white-space:pre-wrap; }
 @media(max-width:1100px) { .paper-with-summary { grid-template-columns:minmax(0,1fr); } .paper-summary { position:static; } }
 @media print { .paper-with-summary { display:block!important; } .paper-summary { display:none!important; } }

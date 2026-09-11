@@ -14,6 +14,7 @@ import {
   Image as ImageIcon,
 } from "@phosphor-icons/react";
 import MathText from "@/components/MathText";
+import MatchTheFollowing from "@/components/MatchTheFollowing";
 import QuestionDiagram from "@/components/QuestionDiagram";
 import { printDocument, diagramsReady } from "@/lib/print";
 
@@ -165,6 +166,10 @@ export default function SolutionView() {
       toast.error("Diagrams are still loading — try again in a moment");
       return;
     }
+    const answeredIds = new Set((paper.solution?.sections || []).flatMap(section => (section.answers || []).filter(answer => answer.answer).map(answer => answer.question_id)));
+    const unanswered = (paper.sections || []).flatMap(section => section.questions || []).filter(question => question.question && !answeredIds.has(question.id)).length;
+    const generating = paper.solution?.status === "generating";
+    if ((generating || unanswered > 0) && !window.confirm(`${generating ? "Answer-key generation is still in progress" : `${unanswered} answer${unanswered === 1 ? " is" : "s are"} still missing`}. Download the incomplete answer key anyway? Selecting Cancel keeps generation running.`)) return;
     printDocument(`${paper.title} - Solution`);
   };
 
@@ -459,9 +464,9 @@ export default function SolutionView() {
                       >
                         <div className="flex items-start gap-2">
                           <span className="font-bold">Q{qNum}.</span>
-                          <span className="flex-1">
-                            <MathText text={q.question} />
-                          </span>
+                          <div className="flex-1">
+                            <MatchTheFollowing text={q.question} />
+                          </div>
                           <span className="font-mono font-bold text-sm shrink-0">
                             [{q.marks}]
                           </span>

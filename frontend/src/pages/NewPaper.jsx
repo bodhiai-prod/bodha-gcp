@@ -59,6 +59,7 @@ export default function NewPaper() {
   const [blueprint, setBlueprint] = useState(null);
   const [allocations, setAllocations] = useState([]);
   const [analyzing, setAnalyzing] = useState(false);
+  const [step, setStep] = useState(0);
   // Format mix: array of { key, label, value, custom }
   const [formats, setFormats] = useState(
     DEFAULT_FORMATS.map((f) => ({ ...f, value: f.default, custom: false }))
@@ -350,6 +351,39 @@ export default function NewPaper() {
   const anyTopics = selectedTbIds.some(
     (id) => (tbDetails[id]?.topics || []).length > 0
   );
+  const topicOverview = useMemo(() => {
+    if (blueprint) {
+      return allocations.reduce((rows, allocation) => {
+        const topic = tbDetails[allocation.textbook_id]?.topic_catalog?.find(item => item.topic_id === allocation.topic_id);
+        const label = topic?.parent_topic ? `${topic.parent_topic} › ${topic.name}` : topic?.name || allocation.topic_id;
+        rows[label] = (rows[label] || 0) + allocation.count;
+        return rows;
+      }, {});
+    }
+    return selectedTopics.reduce((rows, topic) => {
+      const label = topic.parent_topic ? `${topic.parent_topic} › ${topic.name}` : topic.name;
+      rows[label] = (rows[label] || 0) + 1;
+      return rows;
+    }, {});
+  }, [allocations, blueprint, selectedTopics, tbDetails]);
+  const sectionTopicOverview = useMemo(() => {
+    if (!blueprint) return [];
+    return blueprint.sections.map(section => {
+      const topics = allocations.filter(allocation => allocation.section_id === section.id).reduce((rows, allocation) => {
+        const topic = tbDetails[allocation.textbook_id]?.topic_catalog?.find(item => item.topic_id === allocation.topic_id);
+        const label = topic?.parent_topic ? `${topic.parent_topic} › ${topic.name}` : topic?.name || allocation.topic_id;
+        rows[label] = (rows[label] || 0) + allocation.count;
+        return rows;
+      }, {});
+      return {
+        id: section.id,
+        title: section.title,
+        assigned: Object.values(topics).reduce((total, count) => total + count, 0),
+        target: section.groups.reduce((total, group) => total + group.count, 0),
+        topics: Object.entries(topics),
+      };
+    });
+  }, [allocations, blueprint, tbDetails]);
 
   return (
     <div className="min-h-screen bg-[#FAFAFA]">
@@ -361,10 +395,14 @@ export default function NewPaper() {
           <br />
           <span className="text-[#002FA7]">generator.</span>
         </h1>
+        <nav className="new-paper-steps" aria-label="Paper creation steps">
+          {["Setup", "Questions", "Review"].map((label, index) => <button key={label} type="button" className={step === index ? "is-active" : ""} aria-current={step === index ? "step" : undefined} onClick={() => setStep(index)}>{index + 1}. {label}</button>)}
+        </nav>
 
         <form onSubmit={onGenerate} className="grid grid-cols-1 lg:grid-cols-5 gap-6 md:gap-8">
           {/* Left: Metadata + distribution */}
           <div className="lg:col-span-3 space-y-6">
+            {step === 0 && <>
             <ExpandableCard id="metadata" title="Paper details" summary={`${selectedTbIds.length} textbooks · ${totalMarks} marks · ${duration} minutes`} defaultOpen>
               <div className="mb-4">
                 <label className="qp-label">Paper title</label>
@@ -485,26 +523,6 @@ export default function NewPaper() {
                 </div>
               </div>
 
-              <div className="mt-4">
-                <label className="qp-label">Difficulty</label>
-                <div className="grid grid-cols-3 border-2 border-black">
-                  {DIFFICULTIES.map((d, i) => (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => setDifficulty(d)}
-                      data-testid={`difficulty-${d}-button`}
-                      className={`py-3 font-bold uppercase tracking-wider text-sm transition-colors ${
-                        difficulty === d
-                          ? "bg-black text-white"
-                          : "bg-white hover:bg-neutral-100"
-                      } ${i !== 2 ? "border-r-2 border-black" : ""}`}
-                    >
-                      {DIFFICULTY_LABELS[d]}
-                    </button>
-                  ))}
-                </div>
-              </div>
             </ExpandableCard>
 
             <ExpandableCard id="distribution" title="Question distribution" summary={promptOverride ? "Controlled by paper blueprint" : `${info}% direct · ${concept}% concept · ${application}% application`} disabled={promptOverride}>
@@ -559,7 +577,9 @@ export default function NewPaper() {
                 Application is auto-adjusted so total stays at 100%.
               </p>
             </ExpandableCard>
+            </>}
 
+            {step === 1 && <>
             <ExpandableCard id="format-mix" title="Question format mix" summary={promptOverride ? "Controlled by paper blueprint" : `${effectiveQuestionCount} questions · ${formats.filter(f => (formatQuestionCounts[f.key] || 0) > 0).length} active formats`} disabled={promptOverride}>
               <div className="flex items-center justify-between mb-2">
                 <div className="overline">// QUESTION FORMAT MIX</div>
@@ -751,10 +771,33 @@ Make Q23 as hard as possible`}
                 data-testid="custom-instructions-input"
               />
             </ExpandableCard>
+            </>}
+
+            {step === 2 && <section className="qp-card" data-testid="paper-review">
+              <h2 className="font-bold uppercase tracking-wide text-sm">Paper overview</h2>
+              <p className="text-xs text-neutral-500 mt-2 mb-4">Review the overall composition before generating the paper.</p>
+              <dl className="blueprint-summary-facts">
+                <div><dt>Title</dt><dd>{title || "Untitled paper"}</dd></div>
+                <div><dt>Textbooks</dt><dd>{selectedTbIds.length}</dd></div>
+                <div><dt>Marks / duration</dt><dd>{totalMarks} marks · {duration} min</dd></div>
+                <div><dt>Question target</dt><dd>{promptOverride ? "Defined by blueprint" : effectiveQuestionCount}</dd></div>
+                <div><dt>Difficulty</dt><dd>{DIFFICULTY_LABELS[difficulty]}</dd></div>
+                <div><dt>Blueprint</dt><dd>{blueprint?.label || "No blueprint"}</dd></div>
+              </dl>
+              <h3 className="text-xs font-bold uppercase mt-5 mb-2">Topic-wise composition</h3>
+              {Object.keys(topicOverview).length ? <div className="review-topic-list">{Object.entries(topicOverview).map(([topic, count]) => <div key={topic}><span>{topic}</span><strong>{count} {blueprint ? "questions" : "selected"}</strong></div>)}</div> : <p className="text-sm text-neutral-500">Choose topics in the persistent panel to see their composition here.</p>}
+              {blueprint && <><h3 className="text-xs font-bold uppercase mt-5 mb-2">Section-wise topic composition</h3><div className="review-section-list">{sectionTopicOverview.map(section => <section key={section.id} className="review-section-composition"><div className="review-section-heading"><strong>{section.title}</strong><span>{section.assigned}/{section.target} questions</span></div>{section.topics.length ? <div className="review-topic-list">{section.topics.map(([topic, count]) => <div key={topic}><span>{topic}</span><strong>{count} questions</strong></div>)}</div> : <p className="text-xs text-neutral-500 py-2">No topics assigned to this section.</p>}</section>)}</div></>}
+            </section>}
           </div>
 
           {/* Right: Topics + submit */}
           <div className="lg:col-span-2 space-y-6">
+            {step !== 2 && <section className="qp-card" data-testid="persistent-difficulty-card">
+              <h2 className="font-bold uppercase text-sm tracking-wide mb-4">Difficulty</h2>
+              <div className="grid grid-cols-3 border-2 border-black">
+                {DIFFICULTIES.map((d, i) => <button key={d} type="button" onClick={() => setDifficulty(d)} data-testid={`difficulty-${d}-button`} className={`py-3 font-bold uppercase tracking-wider text-sm transition-colors ${difficulty === d ? "bg-black text-white" : "bg-white hover:bg-neutral-100"} ${i !== 2 ? "border-r-2 border-black" : ""}`}>{DIFFICULTY_LABELS[d]}</button>)}
+              </div>
+            </section>}
             <ConfigurationSummary preview={preview?.requestKey === requestKey ? preview : null} loading={previewLoading} error={previewError} />
             {!blueprint && <ExpandableCard id="topics" title="Topic selection (no blueprint)" summary={`${selectedTopics.length} selected · Default: ${DIFFICULTY_LABELS[difficulty]}`} defaultOpen>
 
@@ -771,7 +814,11 @@ Make Q23 as hard as possible`}
                 </p>
               )}
 
-              <div className="space-y-5 max-h-[520px] overflow-auto pr-1">
+              <div
+                className="chapter-selection-scroll space-y-5"
+                aria-label="Chapters and subtopics"
+                data-testid="topic-selection-scroll"
+              >
                 {selectedTbIds.map((bookId) => {
                   const detail = tbDetails[bookId];
                   const tb = textbooks.find((t) => t.id === bookId);
@@ -965,16 +1012,7 @@ Make Q23 as hard as possible`}
               </div>
             </ExpandableCard>}
 
-            <button
-              type="submit"
-              disabled={generating}
-              className="qp-btn qp-btn-primary w-full text-base py-4"
-              data-testid="generate-paper-button"
-            >
-              <Sparkle size={18} weight="bold" />
-              {generating ? "Generating..." : "Generate Question Paper"}
-              <ArrowRight size={16} weight="bold" />
-            </button>
+            {step < 2 ? <button type="button" onClick={() => setStep(current => current + 1)} className="qp-btn qp-btn-primary w-full text-base py-4" data-testid="save-next-button">Save &amp; next<ArrowRight size={16} weight="bold" /></button> : <button type="submit" disabled={generating} className="qp-btn qp-btn-primary w-full text-base py-4" data-testid="generate-paper-button"><Sparkle size={18} weight="bold" />{generating ? "Generating..." : "Save and generate"}<ArrowRight size={16} weight="bold" /></button>}
           </div>
         </form>
       </main>

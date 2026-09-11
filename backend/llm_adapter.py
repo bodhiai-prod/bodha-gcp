@@ -107,10 +107,10 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 # different vendors on purpose: the Bedrock pair currently has the same id in
 # both slots, which makes its fallback a no-op retry rather than a real one.
 OPENROUTER_TEXT_MODEL_DEFAULT = os.environ.get(
-    "OPENROUTER_TEXT_MODEL_DEFAULT", "openai/gpt-5.6"
+    "OPENROUTER_TEXT_MODEL_DEFAULT", "google/gemini-3.5-flash-lite"
 )
 OPENROUTER_TEXT_MODEL_FALLBACK = os.environ.get(
-    "OPENROUTER_TEXT_MODEL_FALLBACK", "anthropic/claude-opus-5"
+    "OPENROUTER_TEXT_MODEL_FALLBACK", "google/gemini-3.8-flash"
 )
 # Deliberately BELOW chat_complete's per-call budget (see _text_timeout): we
 # want a slow call to surface as a real HTTP error — recorded, attributed to a
@@ -127,7 +127,7 @@ OPENROUTER_TEXT_TEMPERATURE = float(
 )
 
 OPENROUTER_IMAGE_MODEL = os.environ.get(
-    "OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image"
+    "OPENROUTER_IMAGE_MODEL", "google/gemini-3.1-flash-lite-image"
 )
 # The Gemini image endpoints accept aspect_ratio, n and input_references, and
 # nothing else — no negative_prompt, no output_format, no seed. "1:1" gives the
