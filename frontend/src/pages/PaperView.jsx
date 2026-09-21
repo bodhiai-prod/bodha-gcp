@@ -22,6 +22,7 @@ import {
 import MathText from "@/components/MathText";
 import QuestionDiagram from "@/components/QuestionDiagram";
 import { printDocument, diagramsReady } from "@/lib/print";
+import { canRegenerate, regeneratingId } from "@/lib/regenerate";
 
 const typeBadge = (t) => {
   if (t === "information") return "qp-badge qp-badge-blue";
@@ -40,6 +41,10 @@ export default function PaperView() {
   const [saving, setSaving] = useState(false);
   const [topupCount, setTopupCount] = useState(0);
   const [queuing, setQueuing] = useState(false);
+  // The question whose regenerate button was just clicked. Covers the gap
+  // before the reload brings back paper.regen, which is the real source of
+  // truth for the spinner.
+  const [regenId, setRegenId] = useState(null);
 
   const load = async () => {
     const { data } = await api.get(`/papers/${id}`);
@@ -73,6 +78,15 @@ export default function PaperView() {
     if (!paper || editing) return;
     if (paper.topup?.status !== "generating") return;
     const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [paper, editing]); // eslint-disable-line
+
+  // Poll while one question is being rewritten. Faster than the top-up's 4s:
+  // this is a single LLM call and the teacher is watching that one line.
+  useEffect(() => {
+    if (!paper || editing) return;
+    if (paper.regen?.status !== "generating") return;
+    const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, [paper, editing]); // eslint-disable-line
 
@@ -217,6 +231,24 @@ export default function PaperView() {
     }
   };
 
+  // Replace one question with a different one in the same slot. The backend
+  // runs it in the background and reports through paper.regen, so this only
+  // starts the job; the polling effect above brings the new question in.
+  const regenerateQuestion = async (qid) => {
+    setRegenId(qid);
+    try {
+      await api.post(`/papers/${id}/question/${qid}/regenerate`);
+      toast.success("Rewriting this question — your other questions stay as they are");
+      // A reload rather than a local patch: the server recomputes `summary` on
+      // every GET, so splicing sections here would leave the side panel stale.
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not regenerate this question");
+    } finally {
+      setRegenId(null);
+    }
+  };
+
   // Saved via the browser's print engine rather than the backend renderer, so
   // the PDF keeps the fonts and KaTeX math shown on screen.
   const download = () => {
@@ -346,6 +378,11 @@ export default function PaperView() {
   const topup = paper.topup;
   const isPartial = paper.recovered_from_truncation || missingCount > 0;
   const busy = queuing || topup?.status === "generating";
+  // Which question the server is rewriting, and whether the button is offered
+  // at all. Both rules live in lib/regenerate so they stay testable and cannot
+  // drift from the endpoint's own guards.
+  const regenLiveId = regenId || regeneratingId(paper);
+  const regenAllowed = canRegenerate({ paper, editing, regenId });
   // What the input shows, what the button says, and what gets sent — one
   // value, so a paper with no reliable target still asks for something.
   const topupValue = topupCount || missingCount || 1;
@@ -389,6 +426,24 @@ export default function PaperView() {
             <p className="text-xs text-red-700 mt-2">
               Nothing was lost — every question below is still here. Try again
               when the provider settles.
+            </p>
+          </div>
+        )}
+
+        {paper.regen?.status === "failed" && (
+          <div
+            className="no-print mb-6 border-2 border-[#E63946] bg-red-50 p-4"
+            data-testid="regen-failed-banner"
+          >
+            <div className="font-bold uppercase tracking-wider text-sm text-red-900">
+              Could not regenerate that question
+            </div>
+            <p className="text-sm text-red-800 mt-1 font-mono break-words">
+              {paper.regen.error || "The AI provider did not respond."}
+            </p>
+            <p className="text-xs text-red-700 mt-2">
+              Nothing was lost — the original question is still on the paper. Try
+              again, or edit it by hand.
             </p>
           </div>
         )}
@@ -839,6 +894,22 @@ export default function PaperView() {
                           title="Save to question bank"
                         >
                           <BookmarkSimple size={14} weight="bold" />
+                        </button>
+                        {/* Read mode only — the edit branch returns above. That
+                            is deliberate: `draft` holds unsaved changes that the
+                            next save would write over a server-side rewrite. */}
+                        <button
+                          onClick={() => regenerateQuestion(q.id)}
+                          disabled={!regenAllowed}
+                          className="qp-btn qp-btn-secondary text-xs"
+                          data-testid={`regenerate-question-${q.id}`}
+                          title="Replace with a different question in the same slot"
+                        >
+                          <ArrowClockwise
+                            size={14}
+                            weight="bold"
+                            className={regenLiveId === q.id ? "animate-spin" : ""}
+                          />
                         </button>
                       </div>
                     </li>

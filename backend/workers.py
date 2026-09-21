@@ -7,6 +7,7 @@ the API endpoints in `server.py`.
 from __future__ import annotations
 
 import asyncio as _asyncio
+import copy
 import os
 import uuid
 from typing import Optional
@@ -19,15 +20,18 @@ from latex_repair import repair_answers, repair_sections, repair_text
 from llm_adapter import chat_complete, generate_diagram, parse_json_response
 from prompts import (
     derive_target_question_count,
+    regen_question_prompt,
     resolve_shares,
     qgen_prompt,
     solution_prompt,
+    REGEN_SYSTEM,
     SOLUTION_SYSTEM,
+    STEM_CHARS,
 )
 from instruction_spec import parse_instructions, verify as verify_instructions
 from generation_requirements import compile_requirements, remaining_requirements
 from section_blueprints import allocation_coverage
-from question_dedupe import dedupe_sections
+from question_dedupe import dedupe_sections, is_duplicate
 from question_repair import complete_sections
 from storage import APP_NAME, put_object
 from topic_balance import measure_coverage, partition_topics, topic_shortfall
@@ -68,6 +72,19 @@ async def load_paper_feedback_hints(user_id: str, subject: str, class_name: str)
             q = (e.get("revised") or "")[:150]
             if q:
                 lines.append(f"- TEACHER ADDED style: '{q}' (prefer similar)")
+        elif kind == "regenerate_question":
+            # A regenerate is a deliberate rejection of one question with its
+            # slot kept -- not a deletion, so it gets its own wording. Without
+            # this branch the row would still occupy one of the eight slots the
+            # query returns and contribute nothing, displacing one that would.
+            orig = (e.get("original") or "")[:150]
+            new_q = (e.get("revised") or "")[:150]
+            if orig:
+                lines.append(
+                    f"- TEACHER REGENERATED away from: '{orig}'"
+                    + (f"  →  accepted instead: '{new_q}'" if new_q
+                       else " (avoid similar)")
+                )
     return "\n".join(lines[:10])
 
 
@@ -173,12 +190,18 @@ def _flag(flags: Optional[dict], q: dict, reason: str) -> None:
 
 
 def _normalise_paper_questions(
-    sections: list, difficulty: str, flags: Optional[dict] = None
+    sections: list, difficulty: str, flags: Optional[dict] = None,
+    assign_ids: bool = True,
 ) -> None:
     """Stamp ids and fill in the defaults every question is expected to have.
 
     Shared by first-pass generation and the top-up worker so the two cannot
     drift apart on MCQ handling or default marks. Mutates in place.
+
+    `assign_ids` off keeps whatever id a question already carries. The single-
+    question regeneration path needs that: the replacement occupies the slot the
+    old question held, and its id is what ties it to the answer key, the diagram
+    it may already own and the star a teacher put on it.
 
     When `flags` is passed it collects question_id -> [reason] for every
     value this function had to invent. The coercion below is lossy on
@@ -188,7 +211,8 @@ def _normalise_paper_questions(
     """
     for s in sections:
         for q in s.get("questions", []):
-            q["id"] = str(uuid.uuid4())
+            if assign_ids or not q.get("id"):
+                q["id"] = str(uuid.uuid4())
             q.setdefault("important", False)
             q.setdefault("marks", 2)
             q.setdefault("type", "concept")
@@ -1025,6 +1049,360 @@ async def generate_missing_questions_background(
     except Exception as e:  # noqa: BLE001
         logger.exception("Question top-up failed")
         await _fail_topup(paper_id, str(e))
+
+
+# ---------------------------------------------------------------------------
+# Single-question regeneration — replace one question, keep its slot
+# ---------------------------------------------------------------------------
+# A teacher who dislikes one question in twenty had two options: throw the whole
+# paper away (`/regenerate`) or rewrite it by hand. This replaces exactly one,
+# locked to the slot the old question occupied -- same section, marks, format,
+# type, difficulty, topic, and on a blueprint paper the same allocation row.
+#
+# The rule that keeps the duplication fix intact: the replacement is checked
+# against every OTHER question on the paper by the same question_dedupe
+# constants a generated question faces, and every version this slot has already
+# shown the teacher goes into the prompt's avoid list, so clicking the button
+# repeatedly cannot cycle back to something already rejected.
+REGEN_MAX_ATTEMPTS = int(os.environ.get("REGEN_MAX_ATTEMPTS", "3"))
+# Past versions remembered per question. Five is plenty of rope for a teacher
+# clicking through options and costs ~650 bytes on the question, against a 16 MB
+# document limit.
+REGEN_HISTORY_MAX = 5
+# Everything about a question that describes its SLOT rather than its wording.
+# The model is never asked for any of these -- they are copied from the question
+# being replaced, which is the only way to be sure section_blueprints'
+# allocation checks still pass: the old question already satisfied them.
+PRESERVED_SLOT_FIELDS = (
+    "id", "topic", "type", "format", "difficulty", "marks", "important",
+    "allocation_id", "textbook_id", "topic_id", "group_id",
+    "internal_choice_count",
+)
+# What the model IS asked for -- the stem and the things that follow from it.
+_CANDIDATE_FIELDS = (
+    "question", "options", "correct_option", "needs_diagram", "diagram_spec",
+)
+# Disjoint on purpose: the replacement is built by merging the model's fields
+# over the slot's, and that merge IS the re-stamp. Adding a field to both lists
+# would silently let the model set a slot value.
+assert not set(PRESERVED_SLOT_FIELDS) & set(_CANDIDATE_FIELDS)
+
+
+class RegenerationFailed(Exception):
+    """No replacement could be found that is not already on the paper."""
+
+
+def _find_question(sections: list, question_id: str) -> tuple:
+    """(section, index, question) for `question_id`, or (None, -1, None)."""
+    for s in sections or []:
+        for i, q in enumerate(s.get("questions") or []):
+            if isinstance(q, dict) and q.get("id") == question_id:
+                return s, i, q
+    return None, -1, None
+
+
+def _slot_of(question: dict) -> dict:
+    """The fixed shape of the slot this question occupies."""
+    return {k: question.get(k) for k in PRESERVED_SLOT_FIELDS if k in question}
+
+
+def _extract_candidate(data) -> dict:
+    """Pull one question object out of whatever shape the model replied with.
+
+    The prompt asks for a bare object. Models sometimes wrap it in the paper
+    shape they have seen a thousand times, or nest it under "question" -- both
+    are recoverable, and losing a good question to a wrapper would just spend
+    another attempt.
+    """
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if not isinstance(data, dict):
+        raise RuntimeError("The model returned no usable question.")
+    if isinstance(data.get("sections"), list):
+        for s in data["sections"]:
+            for q in (s or {}).get("questions") or []:
+                if isinstance(q, dict) and str(q.get("question") or "").strip():
+                    return q
+        raise RuntimeError("The model returned no usable question.")
+    inner = data.get("question")
+    if isinstance(inner, dict):
+        data = inner
+    if not str(data.get("question") or "").strip():
+        raise RuntimeError("The model returned no usable question.")
+    return data
+
+
+def _regen_history(old: list | None, entries: list) -> list:
+    """The slot's rejected-versions list, newest last and capped.
+
+    Holds both the versions a teacher clicked away from and the candidates the
+    duplicate check turned down: click three must avoid click two's rejects
+    exactly as much as click one's output.
+    """
+    out = list(old or [])
+    for text in entries:
+        stem = " ".join(str(text or "").split())[:STEM_CHARS]
+        if stem and stem not in out:
+            out.append(stem)
+    return out[-REGEN_HISTORY_MAX:]
+
+
+async def regenerate_question(
+    paper: dict,
+    question_id: str,
+    *,
+    context_excerpt: str = "",
+    feedback_hints: str = "",
+) -> dict:
+    """Produce a replacement for one question, in the same slot.
+
+    Returns {"sections", "question", "old_text", "attempts", "diagram_pending"}.
+    Takes a paper dict and RETURNS new sections without touching the database,
+    which is what lets the tests run without Mongo and keeps the write in one
+    place in the caller.
+
+    Raises RegenerationFailed when every attempt came back as something the
+    paper already has; the caller must then write nothing at all.
+    """
+    paper_id = paper.get("id", "")
+    sections = copy.deepcopy(paper.get("sections") or [])
+    section, index, old = _find_question(sections, question_id)
+    if old is None:
+        raise RegenerationFailed("Question not found on this paper.")
+
+    slot = _slot_of(old)
+    old_text = old.get("question") or ""
+    difficulty = str(slot.get("difficulty") or paper.get("difficulty") or "medium")
+    # Everything the replacement must not collide with. The old question is not
+    # in here -- it is leaving -- but its text is in `rejected` below, because
+    # returning the question the teacher just rejected is the one answer that is
+    # certainly wrong.
+    rest = [
+        q
+        for s in sections
+        for q in (s.get("questions") or [])
+        if isinstance(q, dict) and q.get("id") != question_id
+    ]
+    other_texts = [q.get("question", "") for q in rest if q.get("question")]
+    # Everything this slot has already produced, oldest first: the versions
+    # stored from previous clicks, the one on the paper right now, and anything
+    # this run has had to throw away. Kept uncapped for the prompt -- the stored
+    # cap is about document size, and quietly reusing it here would start
+    # hiding rejects from the model mid-retry.
+    prior: list = list(old.get("regen_history") or [])
+    rejected_now: list = []
+
+    candidate = None
+    attempts = 0
+    for attempt in range(1, REGEN_MAX_ATTEMPTS + 1):
+        attempts = attempt
+        prompt = regen_question_prompt(
+            subject=paper.get("subject", ""),
+            klass=paper.get("class_name", ""),
+            slot=slot,
+            context_excerpt=context_excerpt,
+            feedback_hints=feedback_hints,
+            custom_instructions=paper.get("custom_instructions") or "",
+            other_questions=other_texts,
+            rejected=prior + ([old_text] if old_text else []) + rejected_now,
+            attempt=attempt,
+        )
+        raw = await chat_complete(system_message=REGEN_SYSTEM, user_text=prompt)
+        fresh = _extract_candidate(parse_json_response(raw))
+
+        # Build the replacement from the slot outward: the slot's values first
+        # (so the normaliser's MCQ branch sees the right format, and so the id,
+        # marks, topic and allocation row are the old question's), then only the
+        # fields the model was actually asked for. Anything else it sent --
+        # a topic it preferred, marks it thought better of -- is dropped here
+        # rather than corrected later.
+        cand = {**slot, **{k: fresh[k] for k in _CANDIDATE_FIELDS if k in fresh}}
+
+        coercions: dict = {}
+        holder = [{"title": section.get("title", ""), "questions": [cand]}]
+        _normalise_paper_questions(holder, difficulty, coercions, assign_ids=False)
+        await complete_sections(
+            holder,
+            ref=paper_id,
+            context={
+                "subject": paper.get("subject", ""),
+                "klass": paper.get("class_name", ""),
+                "difficulty": difficulty,
+            },
+            flags=coercions,
+        )
+        cand = holder[0]["questions"][0]
+
+        duplicate, reason = await is_duplicate(
+            cand, rest, topic=str(slot.get("topic") or ""), ref=paper_id
+        )
+        if not duplicate:
+            candidate = cand
+            break
+        logger.info(
+            f"[regen] {paper_id} attempt {attempt}/{REGEN_MAX_ATTEMPTS} rejected "
+            f"({reason})"
+        )
+        rejected_now.append(cand.get("question") or "")
+
+    if candidate is None:
+        raise RegenerationFailed(
+            "Every rewrite came back too close to a question already on this "
+            "paper. Nothing was changed."
+        )
+
+    # After the gate, not before: a repair call spent on a question about to be
+    # thrown away is the reason dedupe_sections documents this same ordering.
+    await repair_sections([{"questions": [candidate]}], ref=paper_id)
+
+    # The slot's figure budget, and nothing more. On a blueprint paper
+    # allocation_misses complains BOTH ways -- a row that requires a diagram and
+    # a row that forbids one -- so matching whatever the old question had is the
+    # only setting that cannot introduce a mismatch.
+    candidate.pop("diagram_path", None)
+    apply_diagram_policy(
+        [{"questions": [candidate]}],
+        ref=paper_id,
+        max_diagrams=1 if old.get("needs_diagram") else 0,
+    )
+    diagram_pending = bool(candidate.get("needs_diagram"))
+    candidate["diagram_status"] = "pending" if diagram_pending else "none"
+    # Dropping diagram_path (above) is what makes the picture update at all:
+    # generate_diagrams_for_paper skips any question that already has one, and
+    # on the front end QuestionDiagram only refetches because losing the path
+    # unmounts the <img>. The S3 key is the question id, so the new render
+    # overwrites the old file rather than orphaning it.
+
+    candidate["regen_history"] = _regen_history(prior, [old_text] + rejected_now)
+    section["questions"][index] = candidate
+
+    return {
+        "sections": sections,
+        "question": candidate,
+        "old_text": old_text,
+        "attempts": attempts,
+        "diagram_pending": diagram_pending,
+    }
+
+
+def _invalidate_solution(paper: dict, question_id: str, targeted: bool) -> dict | None:
+    """Blank the one answer a regenerated question just made wrong.
+
+    reconcile_solution_shell derives "missing" from blank answers on questions
+    that still have text, so blanking this one is exactly what lets
+    POST /solution/generate-missing refill it alone. Rebuilding the shell here
+    would do more and could reorder it.
+
+    `targeted` off when a solution job is live: that job rewrites the whole
+    document and would put the old answer straight back, so the paper is only
+    marked stale and the teacher is shown the existing banner.
+    """
+    solution = paper.get("solution")
+    if not solution:
+        return None
+    solution = copy.deepcopy(solution)
+    solution["is_stale"] = True
+    if not targeted:
+        return solution
+    for sec in solution.get("sections") or []:
+        for answer in sec.get("answers") or []:
+            if answer.get("question_id") != question_id:
+                continue
+            if answer.get("answer"):
+                solution["completed"] = max(0, int(solution.get("completed") or 0) - 1)
+            answer["answer"] = ""
+    if solution.get("status") == "ready":
+        solution["status"] = "partial"
+    return solution
+
+
+async def regenerate_question_background(
+    paper_id: str,
+    owner_id: str,
+    question_id: str,
+    context_excerpt: str = "",
+    feedback_hints: str = "",
+    solution_is_live: bool = False,
+) -> None:
+    """Regenerate one question and write the result. One write, on success only.
+
+    Best-effort by construction, like the top-up: the paper is already saved and
+    on screen, so anything that goes wrong here leaves it exactly as it was, with
+    a failure recorded in `regen` for the UI to explain.
+    """
+    tag("paper_regen", paper_id)
+    try:
+        p = await db.papers.find_one(
+            {"id": paper_id, "is_deleted": False}, {"_id": 0}
+        )
+        if not p:
+            return
+        result = await regenerate_question(
+            p,
+            question_id,
+            context_excerpt=context_excerpt,
+            feedback_hints=feedback_hints,
+        )
+
+        update = {
+            "sections": result["sections"],
+            "regen": {
+                "status": "ready",
+                "question_id": question_id,
+                "finished_at": utcnow_iso(),
+            },
+        }
+        if result["diagram_pending"]:
+            update["diagrams_pending"] = sum(
+                1
+                for s in result["sections"]
+                for q in (s.get("questions") or [])
+                if q.get("diagram_status") == "pending"
+            )
+        solution = _invalidate_solution(p, question_id, targeted=not solution_is_live)
+        if solution is not None:
+            update["solution"] = solution
+        await db.papers.update_one({"id": paper_id}, {"$set": update})
+
+        # A regenerate is a deliberate rejection of a specific question -- a
+        # cleaner signal than most manual edits, and load_paper_feedback_hints
+        # reads it back into the next paper's prompt.
+        await db.paper_edits.insert_one({
+            "paper_id": paper_id,
+            "owner_id": owner_id,
+            "subject": p.get("subject", ""),
+            "class_name": p.get("class_name", ""),
+            "edit_type": "regenerate_question",
+            "original": result["old_text"],
+            "revised": result["question"].get("question", ""),
+            "created_at": utcnow_iso(),
+        })
+        logger.info(
+            f"[regen] {paper_id} replaced {question_id} in "
+            f"{result['attempts']} attempt(s)"
+        )
+
+        if result["diagram_pending"]:
+            await generate_diagrams_background(paper_id, owner_id)
+    except RegenerationFailed as e:
+        logger.info(f"[regen] {paper_id} gave up on {question_id}: {e}")
+        await _fail_regen(paper_id, question_id, str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Question regeneration failed")
+        await _fail_regen(paper_id, question_id, str(e))
+
+
+async def _fail_regen(paper_id: str, question_id: str, err: str) -> None:
+    """Record a failed regeneration. Deliberately touches nothing but `regen`."""
+    await db.papers.update_one(
+        {"id": paper_id},
+        {"$set": {"regen": {
+            "status": "failed",
+            "question_id": question_id,
+            "error": str(err)[:500],
+            "finished_at": utcnow_iso(),
+        }}},
+    )
 
 
 # ---------------------------------------------------------------------------

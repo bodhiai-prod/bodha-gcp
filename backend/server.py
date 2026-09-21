@@ -66,6 +66,7 @@ from workers import (
     load_paper_feedback_hints,
     paper_target_count,
     reconcile_solution_shell,
+    regenerate_question_background,
     TOPUP_MAX,
 )
 import student_routes  # noqa: F401  registers /api/student/* endpoints
@@ -96,6 +97,11 @@ def _spawn(coro):
 # believing it. Background tasks are in-process and do not survive a restart,
 # so past this window the job is assumed dead and the paper is unlocked.
 GENERATING_LOCK_SECONDS = 15 * 60
+# The same idea for a single-question regeneration, which is one LLM call
+# and at most a couple of retries. Reusing the 15-minute window would leave
+# a question locked for a quarter of an hour after a restart, with the paper
+# view polling an answer that is never coming.
+REGEN_LOCK_SECONDS = 120
 
 # How many chunks of a book we persist. Everything downstream (topic
 # extraction, paper generation, solutions) reads from this stored subset, so
@@ -1229,6 +1235,85 @@ async def toggle_important(
     return {"ok": True, "sections": p["sections"]}
 
 
+@api_router.post("/papers/{paper_id}/question/{question_id}/regenerate")
+async def regenerate_question_endpoint(
+    paper_id: str, question_id: str, user: dict = Depends(get_current_user)
+):
+    """Replace one question with a different one in the same slot.
+
+    Unlike `/regenerate`, which throws the whole paper away, this keeps every
+    other question exactly as it is and rewrites one — same section, marks,
+    format, type, difficulty and topic. The replacement is checked against the
+    rest of the paper before it is allowed on, and every version this slot has
+    already shown goes into the next prompt's avoid list, so clicking again
+    cannot cycle back to something already rejected.
+
+    Runs in the background with a `regen` sub-document for the same reason the
+    top-up does: a retry after a duplicate can outlast the ingress proxy's 60s
+    ceiling, and the paper must stay on screen throughout.
+    """
+    p = await db.papers.find_one(
+        {"id": paper_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if p["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if p.get("is_competitive"):
+        # competitive_routes anchors every question to a retrieved past-paper
+        # passage. A school-path question dropped into one of those papers would
+        # be off-style and unanchored, which is worse than saying no.
+        raise HTTPException(
+            status_code=400,
+            detail="Regenerating a single question is not available for "
+                   "competitive papers yet.",
+        )
+    if not any(
+        q.get("id") == question_id
+        for s in p.get("sections") or []
+        for q in s.get("questions") or []
+    ):
+        raise HTTPException(status_code=404, detail="Question not found")
+    if p.get("generation_status") != "ready":
+        raise HTTPException(
+            status_code=400,
+            detail="Paper is not ready. Use 'Retry generation' instead.",
+        )
+    # A top-up is actively rewriting `sections`; two writers would race and one
+    # of them would lose questions. The solution job is NOT blocked — it only
+    # touches `paper.solution`, and the worker handles that overlap by marking
+    # the answer key stale instead of blanking one answer under it.
+    if _generation_is_live(p.get("topup") or {}):
+        raise HTTPException(
+            status_code=409, detail="Generation already in progress."
+        )
+    if _generation_is_live(p.get("regen") or {}, max_age=REGEN_LOCK_SECONDS):
+        raise HTTPException(
+            status_code=409, detail="Another question is being regenerated."
+        )
+
+    regen = {
+        "status": "generating",
+        "question_id": question_id,
+        "started_at": utcnow_iso(),
+    }
+    await db.papers.update_one({"id": paper_id}, {"$set": {"regen": regen}})
+
+    context_excerpt, feedback_hints = await _paper_generation_inputs(p)
+    _spawn(
+        regenerate_question_background(
+            paper_id=paper_id,
+            owner_id=p["owner_id"],
+            question_id=question_id,
+            context_excerpt=context_excerpt,
+            feedback_hints=feedback_hints,
+            solution_is_live=_generation_is_live(p.get("solution") or {}),
+        )
+    )
+    logger.info(f"Queued regeneration of question {question_id} on paper {paper_id}")
+    return {**regen, "queued": 1}
+
+
 @api_router.delete("/papers/{paper_id}")
 async def delete_paper(paper_id: str, user: dict = Depends(get_current_user)):
     p = await db.papers.find_one({"id": paper_id, "owner_id": user["id"]}, {"_id": 0})
@@ -1434,13 +1519,18 @@ async def generate_solution(paper_id: str, user: dict = Depends(get_current_user
     return pending_solution
 
 
-def _generation_is_live(job: dict, running: str = "generating") -> bool:
+def _generation_is_live(
+    job: dict, running: str = "generating",
+    max_age: float = GENERATING_LOCK_SECONDS,
+) -> bool:
     """True if a background job sub-document says it is running and started
-    recently enough to be believed. Past GENERATING_LOCK_SECONDS the process is
-    assumed gone — in-process tasks do not survive a restart.
+    recently enough to be believed. Past `max_age` the process is assumed
+    gone — in-process tasks do not survive a restart.
 
-    Shared by the solution job (`paper.solution`) and the question top-up job
-    (`paper.topup`), which have the same status/started_at shape."""
+    Shared by the solution job (`paper.solution`), the question top-up job
+    (`paper.topup`) and the single-question regeneration (`paper.regen`), which
+    have the same status/started_at shape. The last one passes a much shorter
+    `max_age`, because it is a much shorter job."""
     if not job or job.get("status") != running:
         return False
     stamp = job.get("started_at") or job.get("generated_at")
@@ -1451,7 +1541,7 @@ def _generation_is_live(job: dict, running: str = "generating") -> bool:
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
     age = (datetime.now(timezone.utc) - started).total_seconds()
-    return age < GENERATING_LOCK_SECONDS
+    return age < max_age
 
 
 @api_router.post("/papers/{paper_id}/solution/generate-missing")

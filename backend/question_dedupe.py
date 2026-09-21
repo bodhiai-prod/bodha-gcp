@@ -398,6 +398,146 @@ def _apply(sections: list, drop_ids: set) -> None:
         ]
 
 
+# ---------------------------------------------------------------------------
+# One candidate against a whole paper
+# ---------------------------------------------------------------------------
+# dedupe_sections answers "which of these questions repeat each other" and
+# removes the losers. Regenerating a single question asks a narrower question --
+# "does THIS one repeat anything already here?" -- and must answer it without
+# removing anything: a rejected candidate is simply never put on the paper.
+#
+# It reuses _normalise, _similarity and _classify unchanged, so a regenerated
+# question is judged by exactly the same bar, with exactly the same constants,
+# as a generated one.
+SINGLE_LLM_TOP_K = int(os.environ.get("QUESTION_DEDUPE_SINGLE_TOP_K", "12"))
+# Tighter than LLM_TIMEOUT. This runs inside a retry loop -- three attempts each
+# waiting a full minute on the judge is a regeneration nobody waits for -- and a
+# slow verdict here defaults to "keep", which is the safe direction.
+SINGLE_LLM_TIMEOUT = float(os.environ.get("QUESTION_DEDUPE_SINGLE_TIMEOUT", "25"))
+# The candidate has no id on the first attempt, and reusing the replaced
+# question's id would let a model echoing that id read as a hit. A reserved
+# string cannot collide with a uuid4.
+CANDIDATE_ID = "__candidate__"
+
+
+async def is_duplicate(
+    candidate: dict | str,
+    existing: list,
+    *,
+    topic: str = "",
+    ref: str = "",
+    use_llm: bool | None = None,
+) -> tuple[bool, str | None]:
+    """Does `candidate` repeat anything in `existing`?
+
+    Returns (verdict, reason), where reason is a _classify reason,
+    "semantic_duplicate", or None.
+
+    Never raises, and NEVER returns True on a failure -- a timeout, a missing
+    sklearn, an unvectorisable corpus all mean "keep". Same contract as
+    _llm_judge, and the safe direction: the cost of wrongly keeping is one
+    similar question, the cost of wrongly rejecting is a regeneration that can
+    never succeed.
+
+    Why this shortlists for the model when _review_duplicates deliberately does
+    not: that tier sweeps an unknown set pairwise, where ANY pair might be the
+    semantic twin, so a shortlist would be a guess about which. Here there is
+    one candidate and one question, and cosine RANKS a same-topic question above
+    an unrelated one long before it can CLASSIFY it -- ranking is all a
+    shortlist needs. The topic union below closes the rest of the gap with
+    stored data rather than a score.
+    """
+    if not DEDUPE_ENABLED:
+        return False, None
+
+    text = candidate.get("question", "") if isinstance(candidate, dict) else candidate
+    cand = _normalise(text or "")
+    rows = [q for q in existing or [] if isinstance(q, dict)]
+    ex_stems = _stems(rows)
+    if not cand.strip() or not [s for s in ex_stems if s.strip()]:
+        return False, None
+
+    # Before vectorising, because an exact repeat needs no score and the batch
+    # path can only reach _classify's equality check once _similarity has
+    # succeeded -- so an unvectorisable corpus lets a verbatim repeat through
+    # there. Here it cannot.
+    if cand in ex_stems:
+        return True, "exact_duplicate"
+
+    # Row 0 is the candidate against every existing question; the rest of the
+    # matrix is the paper against itself and is not this call's business.
+    sims = None
+    if len(ex_stems) + 1 >= MIN_CORPUS:
+        sims = _similarity([cand] + ex_stems)
+    if sims is not None:
+        for j, stem in enumerate(ex_stems):
+            reason = _classify(float(sims[0][j + 1]), cand, stem)
+            if reason:
+                logger.info(
+                    f"[dedupe] {ref or '-'} single verdict=duplicate "
+                    f"reason={reason} score={float(sims[0][j + 1]):.3f}"
+                )
+                return True, reason
+
+    # Read at call time, never as a default argument -- the test suite disables
+    # the tier by monkeypatching the module global.
+    if not (LLM_ENABLED if use_llm is None else use_llm):
+        return False, None
+
+    shortlist = _shortlist(rows, ex_stems, sims, topic)
+    if not shortlist:
+        return False, None
+    items = [{"id": CANDIDATE_ID, "text": cand[:LLM_STEM_CHARS]}] + [
+        {"id": str(q.get("id")), "text": _normalise(q.get("question") or "")[:LLM_STEM_CHARS]}
+        for q in shortlist
+        if q.get("id")
+    ]
+    if len(items) < MIN_CORPUS:
+        return False, None
+    try:
+        groups = await asyncio.wait_for(_llm_judge(items), timeout=SINGLE_LLM_TIMEOUT)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[dedupe] {ref or '-'} single judge unavailable, keeping: {e}")
+        return False, None
+
+    # Groups that do not name the candidate describe duplicates the paper
+    # already had. Real, but not this call's job and not something a
+    # regeneration should act on.
+    if any(CANDIDATE_ID in g and len(g) >= 2 for g in groups):
+        logger.info(
+            f"[dedupe] {ref or '-'} single verdict=duplicate "
+            f"reason=semantic_duplicate shortlist={len(items) - 1}"
+        )
+        return True, "semantic_duplicate"
+    return False, None
+
+
+def _shortlist(rows: list, ex_stems: list, sims, topic: str) -> list:
+    """The questions worth showing the judge: nearest by score, plus same-topic.
+
+    Same-topic questions are unioned in rather than trusted to the score,
+    because a well-paraphrased duplicate can share almost no vocabulary with its
+    twin -- which is the whole reason this tier exists. The topic is exact
+    stored data, so it finds those where cosine cannot.
+    """
+    order: list = []
+    if sims is not None:
+        ranked = sorted(
+            (j for j in range(len(rows)) if float(sims[0][j + 1]) > 0.0),
+            key=lambda j: -float(sims[0][j + 1]),
+        )
+        order = ranked[:SINGLE_LLM_TOP_K]
+    seen = set(order)
+    if topic:
+        for j, q in enumerate(rows):
+            if j not in seen and str(q.get("topic") or "") == topic:
+                order.append(j)
+                seen.add(j)
+    if not order:  # no scores and no topic match -- fall back to the paper's own order
+        order = list(range(len(rows)))
+    return [rows[j] for j in order[:SINGLE_LLM_TOP_K]]
+
+
 async def dedupe_sections(
     sections: list,
     *,

@@ -69,6 +69,26 @@ FORMAT_CONVENTIONS = (
 )
 
 
+# Hoisted out of qgen_prompt so the single-question regeneration prompt can
+# state the same rules. Two copies of this would drift the moment one is
+# tuned, and a question whose math is not LaTeX-wrapped breaks PDF rendering.
+MATH_FORMATTING = (
+    "MATH FORMATTING (STRICT — critical for PDF rendering):\n"
+    "Wrap EVERY mathematical or scientific expression in LaTeX delimiters — "
+    "'$...$' for inline, '$$...$$' for block. This includes:\n"
+    "  - Units with exponents: write '$\\mathrm{m\\,s^{-1}}$' not 'm s⁻¹'.\n"
+    "  - Units with a middle dot: write '$\\mathrm{N\\cdot m}$' not 'N·m' or 'Nm'.\n"
+    "  - Any power / subscript: '$v^2$', '$x_1$' (never Unicode ², ₁).\n"
+    "  - Degrees: '$60^\\circ$' not '60°'.\n"
+    "  - Vectors and fractions: '$\\vec{F}=m\\vec{a}$', '$\\frac{1}{2}mv^2$'.\n"
+    "  - Greek letters: '$\\theta$', '$\\omega$'.\n"
+    "Use only KaTeX + matplotlib-mathtext compatible commands. "
+    "Prefer '\\mathrm{...}' over '\\text{...}'. Do NOT output Unicode "
+    "superscripts, subscripts, or the degree symbol directly — always use "
+    "LaTeX. For non-math subjects, ignore this.\n\n"
+)
+
+
 # Shared by the school and competitive question prompts. The wording this
 # replaced ("some questions benefit from a figure...") produced two bad
 # outcomes: figures on questions where DRAWING the figure was the task (LPP, ray
@@ -869,19 +889,7 @@ def qgen_prompt(
         f"{custom_block}"
         f"{precedence_block}"
         f"{feedback_block}"
-        "MATH FORMATTING (STRICT — critical for PDF rendering):\n"
-        "Wrap EVERY mathematical or scientific expression in LaTeX delimiters — "
-        "'$...$' for inline, '$$...$$' for block. This includes:\n"
-        "  - Units with exponents: write '$\\mathrm{m\\,s^{-1}}$' not 'm s⁻¹'.\n"
-        "  - Units with a middle dot: write '$\\mathrm{N\\cdot m}$' not 'N·m' or 'Nm'.\n"
-        "  - Any power / subscript: '$v^2$', '$x_1$' (never Unicode ², ₁).\n"
-        "  - Degrees: '$60^\\circ$' not '60°'.\n"
-        "  - Vectors and fractions: '$\\vec{F}=m\\vec{a}$', '$\\frac{1}{2}mv^2$'.\n"
-        "  - Greek letters: '$\\theta$', '$\\omega$'.\n"
-        "Use only KaTeX + matplotlib-mathtext compatible commands. "
-        "Prefer '\\mathrm{...}' over '\\text{...}'. Do NOT output Unicode "
-        "superscripts, subscripts, or the degree symbol directly — always use "
-        "LaTeX. For non-math subjects, ignore this.\n\n"
+        f"{MATH_FORMATTING}"
         f"{DIAGRAM_POLICY}"
         "Return ONLY strict JSON of the form:\n"
         "{\n"
@@ -919,6 +927,167 @@ def qgen_prompt(
         "prefix questions with 'Q1.', '1.', '(i)' or similar yourself.\n"
         "- No prose outside the JSON.\n\n"
         f"=== TEXTBOOK CONTEXT (style & scope only, DO NOT COPY) ===\n{context_excerpt}\n=== END ==="
+    )
+
+
+# ---------------------------------------------------------------------------
+# Single-question regeneration — replace ONE question in an existing paper
+# ---------------------------------------------------------------------------
+# Deliberately NOT qgen_prompt(topup_count=1). That builder's whole job is
+# deciding paper shape -- per-topic quotas, the marks-sum rule, the blueprint
+# reproduction block, the precedence ladder -- and every one of those is already
+# settled here and must not move. Its top-up block even tells the model to give
+# each new question "its own sensible marks value", which is the exact opposite
+# of a locked slot, and it returns a `sections` wrapper you would then have to
+# guess a section from.
+#
+# What this asks for instead is only what actually VARIES: the stem, the MCQ
+# options, and whether a figure is needed. Everything else is copied from the
+# question being replaced (workers.PRESERVED_SLOT_FIELDS), which is what makes
+# the server-side re-stamp airtight rather than a corrective overwrite.
+REGEN_SYSTEM = QGEN_SYSTEM
+
+_REGEN_OTHERS_HEADER = (
+    "EVERY OTHER QUESTION ALREADY ON THIS PAPER (your question must not repeat "
+    "or paraphrase any of these):"
+)
+_REGEN_REJECTED_HEADER = (
+    "ALREADY REJECTED FOR THIS SLOT (previous attempts at this very question — "
+    "do NOT return these or a paraphrase; go somewhere genuinely different "
+    "within the topic):"
+)
+
+
+def regen_question_prompt(
+    *,
+    subject: str,
+    klass: str,
+    slot: dict,
+    context_excerpt: str = "",
+    feedback_hints: str = "",
+    custom_instructions: str = "",
+    other_questions: list | None = None,
+    rejected: list | None = None,
+    attempt: int = 1,
+) -> str:
+    """Ask for exactly ONE question to fill a slot an existing question vacated.
+
+    `slot` carries the fixed shape of that slot: topic, type, format, marks,
+    difficulty, and optionally needs_diagram / internal_choice_count.
+
+    `other_questions` is every OTHER stem on the paper; `rejected` is this slot's
+    own history (past versions, plus candidates already turned down as
+    duplicates). They are two separate blocks on purpose: the first says "do not
+    collide with the paper", the second says "you have already tried this and it
+    was not accepted" -- a distinction the model acts on differently.
+    """
+    topic = str(slot.get("topic") or "").strip()
+    qtype = str(slot.get("type") or "concept").strip().lower()
+    fmt = str(slot.get("format") or "").strip()
+    marks = slot.get("marks")
+    difficulty = str(slot.get("difficulty") or "medium").strip().lower()
+    figure_allowed = bool(slot.get("needs_diagram"))
+
+    type_guide = QUESTION_TYPE_GUIDE.get(qtype, "")
+    slot_lines = [
+        f"  - Topic: {topic or 'as on the rest of the paper'}",
+        f"  - Cognitive type: {qtype}" + (f" — {type_guide}" if type_guide else ""),
+        f"  - Format: {fmt or 'plain question (no special format)'}",
+        f"  - Marks: {marks}",
+        f"  - Difficulty: {difficulty}",
+    ]
+    choices = slot.get("internal_choice_count")
+    if choices:
+        slot_lines.append(
+            f"  - This slot is one of {choices} internal 'OR' alternatives; write "
+            "a single question, not the alternatives."
+        )
+    slot_lines.append(
+        "  - Figure: this slot MAY carry a figure, if the question genuinely "
+        "cannot be answered without one."
+        if figure_allowed
+        else "  - Figure: this slot carries NO figure. Set needs_diagram false."
+    )
+
+    retry_block = ""
+    if attempt > 1:
+        retry_block = (
+            "YOUR PREVIOUS ATTEMPT WAS REJECTED as a duplicate of a question "
+            "already on this paper. Change the SUBJECT MATTER within the topic — "
+            "a different sub-topic, a different quantity, a different situation. "
+            "Rewording the same question will be rejected again.\n\n"
+        )
+
+    custom_block = ""
+    if custom_instructions and custom_instructions.strip():
+        custom_block = (
+            "TEACHER'S ADDITIONAL INSTRUCTIONS (these still bind this question):\n"
+            f"{custom_instructions.strip()}\n\n"
+        )
+
+    feedback_block = ""
+    if feedback_hints:
+        feedback_block = (
+            "=== TEACHER PREFERENCES (learned from past edits) ===\n"
+            f"{feedback_hints}\n=== END ===\n\n"
+        )
+
+    mcq_schema = (
+        '  "options": ["A","B","C","D"],\n  "correct_option": 0,\n'
+        if fmt.lower() == "mcq"
+        else ""
+    )
+    diagram_block = (
+        DIAGRAM_POLICY
+        if figure_allowed
+        else "FIGURES: do NOT supply a figure for this question. Set "
+             "'needs_diagram' to false and omit 'diagram_spec'.\n\n"
+    )
+
+    return (
+        "REPLACEMENT REQUEST (HIGHEST PRIORITY — read this before anything "
+        "else):\n"
+        f"Write exactly ONE new {subject} question for Class {klass}, replacing a "
+        "question being removed from an existing question paper. It must fit the "
+        "SAME SLOT. Do NOT write a paper, a section, or more than one question.\n\n"
+        "THE SLOT — every field below is FIXED and is NOT yours to change:\n"
+        + "\n".join(slot_lines)
+        + "\n\nYour only job is to write a DIFFERENT question that fits it.\n\n"
+        + avoid_list_block(other_questions, header=_REGEN_OTHERS_HEADER)
+        + avoid_list_block(rejected, header=_REGEN_REJECTED_HEADER)
+        + retry_block
+        + difficulty_calibration_block(klass, difficulty, 1, include_mix=False)
+        + FORMAT_CONVENTIONS
+        + custom_block
+        + feedback_block
+        + MATH_FORMATTING
+        + diagram_block
+        + "Return ONLY strict JSON of the form:\n"
+        "{\n"
+        '  "question": "...",\n'
+        + mcq_schema
+        + '  "needs_diagram": false,\n'
+        '  "diagram_spec": { "figure": "...", "labels": [], "given_values": [],\n'
+        '                    "unknowns": [], "why_required": "..." }\n'
+        "}\n"
+        "There is NO 'sections' wrapper and NO array — one object. Do NOT return "
+        "'topic', 'type', 'format', 'marks' or 'difficulty': those are fixed "
+        "above and anything sent for them is ignored. Omit 'diagram_spec' "
+        "entirely when 'needs_diagram' is false.\n\n"
+        "STRICT RULES:\n"
+        "- Do NOT copy any sentence from the textbook content.\n"
+        "- The question must be originally phrased and genuinely different from "
+        "every question listed above — a new question, not a rewording.\n"
+        f"- Stay strictly within the topic '{topic}' and the Class {klass} "
+        "syllabus.\n"
+        "- For format 'mcq', 'options' MUST be exactly 4 plain strings and "
+        "'correct_option' MUST be 0, 1, 2 or 3 pointing at the right one.\n"
+        "- Do NOT use markdown formatting. No '**bold**', no '#' headings, no "
+        "backticks, no bullet markers. Question numbering is added by the "
+        "renderer; do NOT prefix the question with 'Q1.', '1.' or '(i)'.\n"
+        "- No prose outside the JSON.\n\n"
+        "=== TEXTBOOK CONTEXT (style & scope only, DO NOT COPY) ===\n"
+        f"{context_excerpt}\n=== END ==="
     )
 
 
