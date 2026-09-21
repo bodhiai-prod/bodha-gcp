@@ -49,6 +49,11 @@ export default function PaperView() {
   const [saving, setSaving] = useState(false);
   const [topupCount, setTopupCount] = useState(0);
   const [queuing, setQueuing] = useState(false);
+    // The question whose regenerate button was just clicked. Covers the gap
+  // before the reload brings back paper.regen, which is the real source of
+  // truth for the spinner.
+  const [regenId, setRegenId] = useState(null);
+  const [cancellingGeneration, setCancellingGeneration] = useState(false);
 
   const load = async () => {
     const { data } = await api.get(`/papers/${id}`);
