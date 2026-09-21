@@ -3,6 +3,7 @@ import React from "react";
 const names = { easy: "Simple", medium: "Moderate", hard: "Challenging", unspecified: "Unspecified", information: "Direct / knowledge", concept: "Concept / reasoning", application: "Application / numerical" };
 export default function PaperSummary({ paper, editing }) {
   const s = paper.summary;
+  const textbooks = paper.source_textbooks || [];
   return <aside className="paper-summary no-print" aria-label="Paper summary" data-testid="paper-summary">
     <details open className="qp-card">
       <summary className="font-bold uppercase text-sm">Paper summary</summary>
@@ -21,7 +22,9 @@ export default function PaperSummary({ paper, editing }) {
         </dl></section>
         <p className="font-bold text-xs mt-5">{s.status === "ready" ? "Ready" : s.status}</p>
         {s.mismatches.length > 0 && <details className="mt-2"><summary className="text-xs text-amber-800">{s.mismatches.length} requirement mismatches</summary><ul className="summary-issues">{s.mismatches.map((m, i) => <li key={i}>{m}</li>)}</ul></details>}
-        <p className="text-xs text-neutral-500 mt-4 break-all">Paper ID: {paper.id}</p>
+        <section className="mt-5"><h3>Ingested textbook{textbooks.length === 1 ? "" : "s"}</h3>
+          {textbooks.length === 1 ? <ul className="paper-summary-books is-single"><li>{textbooks[0]}</li></ul> : textbooks.length > 1 ? <ol className="paper-summary-books is-multiple">{textbooks.map((textbook, index) => <li key={`${textbook}-${index}`}>{textbook}</li>)}</ol> : <p className="text-xs text-neutral-500">No source textbook details available.</p>}
+        </section>
       </>}
     </details>
   </aside>;

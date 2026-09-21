@@ -44,9 +44,9 @@ API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 MODEL = os.environ.get("OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image")
 
 TEXT_PROVIDER = os.environ.get("TEXT_PROVIDER", "bedrock").strip().lower()
-TEXT_MODEL = os.environ.get("OPENROUTER_TEXT_MODEL_DEFAULT", "openai/gpt-5.6")
+TEXT_MODEL = os.environ.get("OPENROUTER_TEXT_MODEL_DEFAULT", "google/gemini-3.8-flash")
 TEXT_FALLBACK = os.environ.get(
-    "OPENROUTER_TEXT_MODEL_FALLBACK", "anthropic/claude-opus-5"
+    "OPENROUTER_TEXT_MODEL_FALLBACK", "google/gemini-3.8-flash"
 )
 TEXT_TIMEOUT = float(os.environ.get("OPENROUTER_TEXT_TIMEOUT", "150"))
 ASPECT_RATIO = os.environ.get("OPENROUTER_ASPECT_RATIO", "1:1")
