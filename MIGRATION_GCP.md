@@ -1,5 +1,16 @@
 # Bodha AWS-to-GCP migration runbook
 
+## Firebase Authentication cutover
+
+1. Register this existing GCP project with Firebase, then enable **Email/Password** and **Google** in Firebase Authentication.
+2. Add the production web app and copy its public API key, Auth domain, and App ID into Cloud Build substitutions: `_FIREBASE_API_KEY`, `_FIREBASE_AUTH_DOMAIN`, and `_FIREBASE_APP_ID`.
+3. Add `app.bodhaai.app` to Firebase Authorized Domains. Configure the Firebase custom authentication/email domain under `bodhaai.tech`, publish Firebase’s DNS records, set the reset action URL to `https://app.bodhaai.app/reset-password`, and customize the reset-email template.
+4. Enable email-enumeration protection in Firebase Authentication settings.
+5. With Application Default Credentials for the production project, run `python3 scripts/migrate_firebase_auth.py --dry-run`; review its JSON report. Re-run with `--apply --report /secure/path/firebase-migration.json` only after review.
+6. Deploy the Firebase-enabled build. Existing local-password users must select **Forgot password?** once; existing Google users retain their Bodha records through the stable Firebase UID.
+
+The legacy JWT and Google OAuth secrets remain in Secret Manager for rollback during initial cutover, but the deployed application no longer reads them. Delete them only after the Firebase deployment and migration report have been accepted.
+
 This repository is the isolated GCP port. The source repository at
 `/home/excel/Documents/ChatGPT/New project/bodha-ai-production` must remain
 unchanged. The migration branch is `codex/gcp-migration`.
@@ -28,7 +39,7 @@ From this repository only:
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r backend/requirements-local.txt
-PYTHONPATH=backend LOAD_TEST_STUB=true GCP_PROJECT_ID=bodha-test FIRESTORE_DATABASE='(default)' JWT_SECRET=test \
+PYTHONPATH=backend LOAD_TEST_STUB=true GCP_PROJECT_ID=bodha-test FIRESTORE_DATABASE='(default)' \
   .venv/bin/pytest -q backend
 npm --prefix frontend ci --legacy-peer-deps
 CI=true npm --prefix frontend test -- --watchAll=false
@@ -60,65 +71,30 @@ protection enabled.
 Add secret values without placing them in a shell history or Terraform state:
 
 ```bash
-printf '%s' "$JWT_SECRET" | gcloud secrets versions add bodha-jwt-secret --data-file=-
 printf '%s' "$OPENROUTER_API_KEY" | gcloud secrets versions add bodha-openrouter-api-key --data-file=-
 ```
 
 The variables above should come from a protected operator environment. Do not
 put their literal values in this repository.
 
-Before deploying the Google-authenticated release, rotate the existing JWT
-secret so any sessions issued by the old password system are invalidated:
+## Firebase Authentication
 
-```bash
-openssl rand -base64 48 | gcloud secrets versions add bodha-jwt-secret \
-  --project=bodha-ai-prod --data-file=-
-```
+Firebase owns Google and email/password authentication. Configure the existing
+GCP project as a Firebase project, enable both providers, add
+`app.bodhaai.app` as an authorized domain, and set the branded custom
+authentication/email domain under `bodhaai.tech`. Configure Firebase email
+action links to return to `https://app.bodhaai.app/reset-password` and enable
+email-enumeration protection.
 
-## Google sign-in
+The Firebase web configuration is public build-time metadata. Pass it to Cloud
+Build as `_FIREBASE_API_KEY`, `_FIREBASE_AUTH_DOMAIN`, and `_FIREBASE_APP_ID`;
+the project ID is supplied automatically. Do not put an Admin SDK key in the
+frontend: the Compute Engine service account provides backend credentials.
 
-Password registration and password login are intentionally disabled. Bodha uses
-the Google OpenID Connect authorization-code flow with PKCE, verified ID tokens,
-and a secure HttpOnly session cookie.
-
-1. In **Google Cloud Console → APIs & Services → OAuth consent screen**, create
-   or configure the consent screen for the `bodha-ai-prod` project. Use
-   **External** if teachers can use any Google account. While the app is in
-   testing, add each allowed email as a test user; publish the app when ready.
-2. Go to **Credentials → Create credentials → OAuth client ID → Web
-   application**. Add this exact authorized redirect URI:
-
-   ```text
-   https://app.bodhaai.app/api/auth/google/callback
-   ```
-
-   The URI must match exactly: no trailing slash and no `www` hostname.
-3. Put the generated client ID in the ignored
-   `infra/terraform/terraform.tfvars` as `google_oauth_client_id`. Set
-   `admin_emails` to the comma-separated Google email addresses that may become
-   administrators on their first sign-in. Everyone else is created as a
-   `teacher`; users cannot choose a role in the browser.
-4. Add the OAuth client secret only to Secret Manager:
-
-   ```bash
-   printf '%s' "$GOOGLE_OAUTH_CLIENT_SECRET" | \
-     gcloud secrets versions add bodha-google-oauth-client-secret \
-       --project=bodha-ai-prod --data-file=-
-   ```
-
-   Never put the client secret in `terraform.tfvars`, Git, Cloud Build
-   substitutions, or a frontend environment variable.
-5. Apply Terraform after changing the variables. On the already-running VM,
-   update its runtime configuration before deploying the release:
-
-   ```bash
-   gcloud compute ssh bodha-prod --project=bodha-ai-prod --zone=asia-south1-a \
-     --tunnel-through-iap --command="sudo sed -i \\\"s|^GOOGLE_OAUTH_CLIENT_ID=.*|GOOGLE_OAUTH_CLIENT_ID='YOUR_CLIENT_ID'|; s|^ADMIN_EMAILS=.*|ADMIN_EMAILS='YOUR_ADMIN_GOOGLE_EMAIL'|\\\" /etc/bodha/runtime.conf"
-   ```
-
-   Replace the placeholders locally; do not share the client secret. The next
-   Cloud Build deployment reads this file, fetches the secret at runtime, and
-   starts the Google-authenticated release.
+Before production cutover, run the Firebase identity migration as documented at
+the top of this runbook. Existing Google identities and application roles are
+preserved. Existing email/password users must use **Forgot password?** once,
+because the prior PBKDF2 cost cannot be imported into Firebase.
 
 ## 3. Firestore
 

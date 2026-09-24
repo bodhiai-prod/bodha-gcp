@@ -18,8 +18,7 @@ python-dotenv>=1.0
 google-cloud-firestore>=2.18
 
 # --- auth --------------------------------------------------------------------
-PyJWT>=2.8
-google-auth>=2.30
+firebase-admin>=6.6
 
 # --- PDF parsing + rendering -------------------------------------------------
 pypdf>=4.2

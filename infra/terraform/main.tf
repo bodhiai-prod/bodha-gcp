@@ -13,7 +13,9 @@ locals {
     "compute.googleapis.com",
     "dns.googleapis.com",
     "firestore.googleapis.com",
+    "firebase.googleapis.com",
     "iam.googleapis.com",
+    "identitytoolkit.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
     "secretmanager.googleapis.com",
@@ -142,6 +144,7 @@ resource "google_storage_bucket_iam_member" "cloudbuild_source_reader" {
 resource "google_project_iam_member" "app_roles" {
   for_each = toset([
     "roles/artifactregistry.reader",
+    "roles/firebaseauth.admin",
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
     "roles/datastore.user",
@@ -279,7 +282,6 @@ resource "google_compute_instance" "app" {
       storage_prefix = var.storage_prefix
       app_domain     = var.app_domain
       cors_origins   = var.cors_origins
-      google_oauth_client_id = var.google_oauth_client_id
       admin_emails   = var.admin_emails
     })
   }

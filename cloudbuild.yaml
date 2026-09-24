@@ -3,6 +3,9 @@ substitutions:
   _REPOSITORY: bodha
   _VM_NAME: bodha-prod
   _VM_ZONE: asia-south1-a
+  _FIREBASE_API_KEY: ""
+  _FIREBASE_AUTH_DOMAIN: ""
+  _FIREBASE_APP_ID: ""
 
 # Use the least-privilege account provisioned by Terraform.  Without this,
 # manual submissions use the default Compute Engine account, which cannot push
@@ -13,7 +16,7 @@ steps:
   - name: gcr.io/cloud-builders/docker
     args: ["build", "-t", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/backend:$BUILD_ID", "backend"]
   - name: gcr.io/cloud-builders/docker
-    args: ["build", "--build-arg", "REACT_APP_BACKEND_URL=", "-t", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/frontend:$BUILD_ID", "frontend"]
+    args: ["build", "--build-arg", "REACT_APP_BACKEND_URL=", "--build-arg", "REACT_APP_FIREBASE_API_KEY=${_FIREBASE_API_KEY}", "--build-arg", "REACT_APP_FIREBASE_AUTH_DOMAIN=${_FIREBASE_AUTH_DOMAIN}", "--build-arg", "REACT_APP_FIREBASE_PROJECT_ID=$PROJECT_ID", "--build-arg", "REACT_APP_FIREBASE_APP_ID=${_FIREBASE_APP_ID}", "-t", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/frontend:$BUILD_ID", "frontend"]
   - name: gcr.io/cloud-builders/docker
     args: ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/backend:$BUILD_ID"]
   - name: gcr.io/cloud-builders/docker

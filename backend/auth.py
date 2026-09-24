@@ -1,83 +1,59 @@
-"""Session, password, and Google OpenID Connect authentication utilities."""
+"""Firebase Authentication verification and Bodha role resolution."""
 import os
-import hashlib
-import secrets
-from datetime import datetime, timezone, timedelta
 
-import jwt
-from fastapi import Depends, HTTPException, Request, status
+import firebase_admin
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from firebase_admin import auth as firebase_auth
+from firebase_admin import exceptions as firebase_exceptions
 
-JWT_SECRET = os.environ["JWT_SECRET"]
-JWT_ALG = "HS256"
-JWT_EXP_DAYS = 7
+from deps import db
 
-# ``auto_error=False`` lets browser sessions use the HttpOnly cookie while
-# preserving bearer-token support for any existing API clients during rollout.
 security = HTTPBearer(auto_error=False)
-SESSION_COOKIE_NAME = "bodha_session"
-PASSWORD_ITERATIONS = 600_000
 
 
-def hash_password(password: str) -> str:
-    """Create a salted PBKDF2-SHA256 password hash for local accounts."""
-    salt = secrets.token_bytes(16)
-    digest = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), salt, PASSWORD_ITERATIONS
-    )
-    return "pbkdf2_sha256${}${}${}".format(
-        PASSWORD_ITERATIONS, salt.hex(), digest.hex()
-    )
-
-
-def verify_password(password: str, stored_hash: str | None) -> bool:
-    """Safely verify a password hash, including malformed legacy values."""
-    if not stored_hash:
-        return False
-    try:
-        algorithm, iterations, salt_hex, expected_hex = stored_hash.split("$", 3)
-        if algorithm != "pbkdf2_sha256":
-            return False
-        actual = hashlib.pbkdf2_hmac(
-            "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), int(iterations)
-        ).hex()
-        return secrets.compare_digest(actual, expected_hex)
-    except (TypeError, ValueError):
-        return False
-
-def create_token(user_id: str, role: str, email: str) -> str:
-    payload = {
-        "sub": user_id,
-        "role": role,
-        "email": email,
-        "exp": datetime.now(timezone.utc) + timedelta(days=JWT_EXP_DAYS),
-        "iat": datetime.now(timezone.utc),
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+def _firebase_app():
+    """Initialise once, using Application Default Credentials on GCP."""
+    if not firebase_admin._apps:  # Firebase Admin SDK has no public app registry.
+        firebase_admin.initialize_app(options={"projectId": os.environ["GCP_PROJECT_ID"]})
+    return firebase_admin.get_app()
 
 
 def decode_token(token: str) -> dict:
+    """Return verified Firebase claims, normalized for existing API callers."""
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        claims = firebase_auth.verify_id_token(token, app=_firebase_app(), check_revoked=True)
+    except (ValueError, firebase_exceptions.FirebaseError) as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired authentication token") from exc
+    if not claims.get("uid") or not claims.get("email"):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication token is missing identity details")
+    return {**claims, "sub": claims["uid"]}
 
 
-async def get_current_user(
-    request: Request,
+async def get_firebase_identity(
     creds: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> dict:
-    token = creds.credentials if creds else request.cookies.get(SESSION_COOKIE_NAME)
-    if not token:
+    if not creds:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-    payload = decode_token(token)
-    return {
-        "id": payload["sub"],
-        "role": payload.get("role", "teacher"),
-        "email": payload.get("email"),
-    }
+    claims = decode_token(creds.credentials)
+    return {"id": claims["sub"], "email": str(claims["email"]).lower(), "claims": claims}
+
+
+async def get_current_user(identity: dict = Depends(get_firebase_identity)) -> dict:
+    """Map a verified Firebase identity to the application-owned user record."""
+    user = await db.users.find_one({"id": identity["id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account setup is incomplete")
+    return {"id": user["id"], "role": user.get("role", "teacher"), "email": user["email"]}
+
+
+async def get_token_user(token: str) -> dict:
+    """Resolve a Firebase bearer token for endpoints that also allow query tokens."""
+    claims = decode_token(token)
+    user = await db.users.find_one({"id": claims["sub"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account setup is incomplete")
+    return {"id": user["id"], "role": user.get("role", "teacher"), "email": user["email"]}
 
 
 def require_role(*roles: str):

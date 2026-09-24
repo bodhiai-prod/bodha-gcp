@@ -7,6 +7,8 @@ import { Toaster } from "sonner";
 
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
+import ForgotPassword from "@/pages/ForgotPassword";
+import ResetPassword from "@/pages/ResetPassword";
 import Dashboard from "@/pages/Dashboard";
 import Textbooks from "@/pages/Textbooks";
 import NewPaper from "@/pages/NewPaper";
@@ -37,13 +39,15 @@ function App() {
                 borderRadius: 0,
                 background: "#FFFFFF",
                 color: "#0A0A0A",
-                fontFamily: "IBM Plex Sans, sans-serif",
+                fontFamily: "Inter, sans-serif",
               },
             }}
           />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             <Route
               path="/"
               element={

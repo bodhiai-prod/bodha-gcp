@@ -20,25 +20,24 @@ body {
     margin: 0;
     background: var(--bg);
     color: var(--ink);
-    font-family: "IBM Plex Sans", sans-serif;
+    font-family: "Inter", sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
 
-code,
 .mono,
 .font-mono {
-    font-family: "JetBrains Mono", monospace;
+    font-family: "Inter", sans-serif;
 }
 
 .font-display {
-    font-family: "Cabinet Grotesk", sans-serif;
+    font-family: "Inter", sans-serif;
     font-weight: 900;
-    letter-spacing: -0.03em;
+    letter-spacing: -0.025em;
 }
 
 .brand-mark {
-    font-family: "Cabinet Grotesk", sans-serif;
+    font-family: "Inter", sans-serif;
     font-weight: 900;
     letter-spacing: -0.005em;
     font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
@@ -50,15 +49,15 @@ code,
 }
 
 .font-heading {
-    font-family: "Cabinet Grotesk", sans-serif;
+    font-family: "Inter", sans-serif;
     font-weight: 800;
     letter-spacing: -0.02em;
 }
 
 .overline {
-    font-family: "JetBrains Mono", monospace;
+    font-family: "Inter", sans-serif;
     font-size: 0.72rem;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
     font-weight: 700;
 }
@@ -89,7 +88,7 @@ code,
 /* Input + card resets */
 .qp-input {
     @apply w-full border-2 border-black bg-white px-3 py-2 rounded-none focus:outline-none focus:ring-0;
-    font-family: "IBM Plex Sans", sans-serif;
+    font-family: "Inter", sans-serif;
 }
 .qp-input:focus {
     border-color: var(--primary);
@@ -106,7 +105,7 @@ code,
 /* Buttons */
 .qp-btn {
     @apply inline-flex items-center justify-center gap-2 px-4 py-2 border-2 border-black font-bold uppercase tracking-wider text-sm rounded-none select-none;
-    font-family: "IBM Plex Sans", sans-serif;
+    font-family: "Inter", sans-serif;
     transition:
         transform 0.15s ease,
         box-shadow 0.15s ease,
@@ -152,7 +151,7 @@ code,
 /* Badge */
 .qp-badge {
     @apply inline-flex items-center gap-1 border border-black px-2 py-0.5 text-xs uppercase bg-white;
-    font-family: "JetBrains Mono", monospace;
+    font-family: "Inter", sans-serif;
     letter-spacing: 0.05em;
 }
 .qp-badge-blue {

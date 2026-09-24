@@ -1,7 +1,7 @@
 import React from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { SignOut, Stack } from "@phosphor-icons/react";
+import { SignOut } from "@phosphor-icons/react";
 
 const NavItem = ({ to, label, testid }) => (
   <NavLink
@@ -37,9 +37,11 @@ export default function Header() {
           data-testid="app-logo-link"
           className="flex items-center gap-3 group"
         >
-          <div className="w-10 h-10 bg-black flex items-center justify-center border-2 border-black group-hover:bg-[#002FA7] transition-colors">
-            <Stack size={22} weight="fill" color="#FFC300" />
-          </div>
+          <img
+            src="/assets/bodhaai-app-icon-512.png"
+            alt="Bodha AI"
+            className="w-10 h-10 rounded-[0.55rem] transition-transform group-hover:scale-105"
+          />
           <div className="leading-none">
             <div className="brand-mark text-xl">
               Bodha <span className="accent">AI</span>

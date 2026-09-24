@@ -198,6 +198,7 @@ credentials.json
 *.csv
 *.log
 *.png
+!frontend/public/assets/bodhaai-app-icon-512.png
 .pytest_cache/
 
 # ---- not needed to run on EC2 ----

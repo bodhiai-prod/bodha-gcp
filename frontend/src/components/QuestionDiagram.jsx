@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { API } from "@/lib/api";
+import { getFirebaseToken } from "@/lib/firebase";
 import { Image as ImageIcon } from "@phosphor-icons/react";
 
 // Fetches the diagram as a blob URL so the auth token can be sent via header.
@@ -8,10 +9,9 @@ const DiagramImage = ({ paperId, questionId }) => {
   useEffect(() => {
     let revoked = false;
     let currentUrl = null;
-    const token = localStorage.getItem("qp_token");
-    fetch(`${API}/papers/${paperId}/diagrams/${questionId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
+    getFirebaseToken().then((token) => fetch(`${API}/papers/${paperId}/diagrams/${questionId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    }))
       .then((r) => (r.ok ? r.blob() : null))
       .then((blob) => {
         if (!blob || revoked) return;
