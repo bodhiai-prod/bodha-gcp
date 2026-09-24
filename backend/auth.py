@@ -1,5 +1,7 @@
-"""Session and Google OpenID Connect authentication utilities."""
+"""Session, password, and Google OpenID Connect authentication utilities."""
 import os
+import hashlib
+import secrets
 from datetime import datetime, timezone, timedelta
 
 import jwt
@@ -14,6 +16,34 @@ JWT_EXP_DAYS = 7
 # preserving bearer-token support for any existing API clients during rollout.
 security = HTTPBearer(auto_error=False)
 SESSION_COOKIE_NAME = "bodha_session"
+PASSWORD_ITERATIONS = 600_000
+
+
+def hash_password(password: str) -> str:
+    """Create a salted PBKDF2-SHA256 password hash for local accounts."""
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, PASSWORD_ITERATIONS
+    )
+    return "pbkdf2_sha256${}${}${}".format(
+        PASSWORD_ITERATIONS, salt.hex(), digest.hex()
+    )
+
+
+def verify_password(password: str, stored_hash: str | None) -> bool:
+    """Safely verify a password hash, including malformed legacy values."""
+    if not stored_hash:
+        return False
+    try:
+        algorithm, iterations, salt_hex, expected_hex = stored_hash.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        actual = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), int(iterations)
+        ).hex()
+        return secrets.compare_digest(actual, expected_hex)
+    except (TypeError, ValueError):
+        return False
 
 def create_token(user_id: str, role: str, email: str) -> str:
     payload = {

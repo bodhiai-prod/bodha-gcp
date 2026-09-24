@@ -36,7 +36,9 @@ from auth import (
     create_token,
     decode_token,
     get_current_user,
+    hash_password,
     require_role,
+    verify_password,
 )
 from llm_adapter import chat_complete, parse_json_response
 from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_errors,
@@ -175,6 +177,17 @@ class UserPublic(BaseModel):
     email: EmailStr
     full_name: str
     role: str
+
+
+class EmailPasswordSignUp(BaseModel):
+    full_name: str = Field(min_length=1, max_length=120)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+
+
+class EmailPasswordSignIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
 
 
 # Google OAuth configuration. The client secret is deliberately only present
@@ -347,6 +360,18 @@ def serialize_user(doc: dict) -> dict:
     }
 
 
+def _set_session_cookie(response: Response, user: dict) -> None:
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        create_token(user["id"], user["role"], user["email"]),
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE,
+        samesite="lax",
+        max_age=7 * 24 * 60 * 60,
+        path="/",
+    )
+
+
 # =========================================================
 # Startup
 # =========================================================
@@ -475,6 +500,45 @@ async def shutdown():
 # =========================================================
 # Auth
 # =========================================================
+@api_router.post("/auth/register", response_model=UserPublic, status_code=201)
+async def register_with_email_password(payload: EmailPasswordSignUp, response: Response):
+    """Create a local teacher account and issue the same browser session as OAuth."""
+    email = str(payload.email).lower()
+    full_name = payload.full_name.strip()
+    if not full_name:
+        raise HTTPException(status_code=422, detail="Please enter your name")
+    if await db.users.find_one({"email": email}, {"_id": 0}):
+        raise HTTPException(
+            status_code=409,
+            detail="An account already exists for this email. Sign in instead.",
+        )
+
+    user = {
+        "id": str(uuid.uuid4()),
+        "email": email,
+        "full_name": full_name,
+        "role": "admin" if email in _admin_emails() else "teacher",
+        "password_hash": hash_password(payload.password),
+        "created_at": utcnow_iso(),
+    }
+    await db.users.insert_one(user)
+
+    _set_session_cookie(response, user)
+    return UserPublic(**serialize_user(user))
+
+
+@api_router.post("/auth/login", response_model=UserPublic)
+async def login_with_email_password(payload: EmailPasswordSignIn, response: Response):
+    """Authenticate a local account without exposing whether an email exists."""
+    email = str(payload.email).lower()
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user or not verify_password(payload.password, user.get("password_hash")):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+
+    _set_session_cookie(response, user)
+    return UserPublic(**serialize_user(user))
+
+
 @api_router.get("/auth/google/start", include_in_schema=False)
 async def google_login_start():
     """Begin Google OpenID Connect authorization-code flow with PKCE."""
@@ -580,22 +644,13 @@ async def google_login_callback(request: Request, code: str = "", state: str = "
         }
         await db.users.insert_one(user)
     elif not user.get("google_subject"):
-        # Verified Google email ownership is sufficient to link a legacy local
-        # account. Remove its password hash so the old credential cannot return.
+        # Verified Google email ownership is sufficient to link a local account.
+        # Keep a password hash if present so either sign-in method stays usable.
         user["google_subject"] = str(claims["sub"])
-        user.pop("password_hash", None)
         await db.users.update_one({"id": user["id"]}, {"$set": user})
 
     response = RedirectResponse("/", status_code=303)
-    response.set_cookie(
-        SESSION_COOKIE_NAME,
-        create_token(user["id"], user["role"], user["email"]),
-        httponly=True,
-        secure=SESSION_COOKIE_SECURE,
-        samesite="lax",
-        max_age=7 * 24 * 60 * 60,
-        path="/",
-    )
+    _set_session_cookie(response, user)
     for name in ("bodha_oauth_state", "bodha_oauth_nonce", "bodha_oauth_verifier"):
         response.delete_cookie(name, path="/api/auth/google")
     return response

@@ -23,13 +23,25 @@ export const AuthProvider = ({ children }) => {
     window.location.assign("/api/auth/google/start");
   };
 
+  const loginWithPassword = async (email, password) => {
+    const response = await api.post("/auth/login", { email, password });
+    setUser(response.data);
+    return response.data;
+  };
+
+  const registerWithPassword = async (full_name, email, password) => {
+    const response = await api.post("/auth/register", { full_name, email, password });
+    setUser(response.data);
+    return response.data;
+  };
+
   const logout = () => {
     api.post("/auth/logout").catch(() => {});
     setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, loginWithGoogle, logout }}>
+    <AuthContext.Provider value={{ user, loading, loginWithGoogle, loginWithPassword, registerWithPassword, logout }}>
       {children}
     </AuthContext.Provider>
   );
