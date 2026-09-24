@@ -60,6 +60,11 @@ chainlit.md
 
 # Deployment
 .vercel
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+crash.log
 
 # Data and databases
 agenthub/agents/youtube/db
@@ -197,6 +202,7 @@ credentials.json
 # ---- not needed to run on EC2 ----
 .gitconfig
 *.md
+!MIGRATION_GCP.md
 design_guidelines.json
 docker-compose.yml
 backend/requirements.txt

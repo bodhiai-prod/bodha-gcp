@@ -1,0 +1,11 @@
+project_id         = "your-gcp-project"
+bucket_name        = "your-globally-unique-bodha-bucket"
+app_domain         = "app.example.com"
+cors_origins       = "https://app.example.com"
+alert_email        = "ops@example.com"
+billing_account_id = "000000-000000-000000"
+
+# Create the zone but do not delegate the registrar until cutover.
+manage_dns   = false
+dns_name     = "example.com."
+dns_zone_name = "bodha-prod"

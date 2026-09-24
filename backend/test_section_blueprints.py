@@ -164,7 +164,10 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         book, bp, _, spec, sections = fixture()
         bad = copy.deepcopy(sections)
         bad[0]["questions"][0]["difficulty"] = "easy"
-        db = type("DB", (), {"papers": type("Papers", (), {"update_one": AsyncMock()})()})()
+        db = type("DB", (), {"papers": type("Papers", (), {
+            "update_one": AsyncMock(),
+            "find_one": AsyncMock(return_value={"id": "test"}),
+        })()})()
         with patch.object(workers, "db", db), patch.object(workers, "chat_complete", AsyncMock(side_effect=["bad", "good"])) as chat, \
              patch.object(workers, "parse_json_response", side_effect=[{"sections": bad}, {"sections": sections}]), \
              patch.object(workers, "parse_instructions", AsyncMock()) as parse, \

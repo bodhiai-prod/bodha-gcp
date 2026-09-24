@@ -72,8 +72,8 @@ ENABLE_DIAGRAMS = os.environ.get("ENABLE_DIAGRAMS", "true").lower() not in (
 # The model ids per provider live further down (BEDROCK_MODEL_* above,
 # OPENROUTER_TEXT_MODEL_* below); the active pair is resolved once into
 # TEXT_MODEL_DEFAULT / TEXT_MODEL_FALLBACK where PROVIDER_CHAIN is built.
-TEXT_PROVIDER = os.environ.get("TEXT_PROVIDER", "bedrock").strip().lower()
-IMAGE_PROVIDER = os.environ.get("IMAGE_PROVIDER", "bedrock").strip().lower()
+TEXT_PROVIDER = os.environ.get("TEXT_PROVIDER", "openrouter").strip().lower()
+IMAGE_PROVIDER = os.environ.get("IMAGE_PROVIDER", "openrouter").strip().lower()
 
 # Hugging Face dedicated Inference Endpoint. The text-to-image task schema is
 # the same for every diffusion model behind an endpoint, so the model choice

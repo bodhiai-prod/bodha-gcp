@@ -1,42 +1,31 @@
-"""Object storage backed by AWS S3.
+"""Object storage backed by Google Cloud Storage.
 
-Replaces the original Emergent object-store client. The public surface is
-unchanged — `init_storage`, `put_object`, `get_object`, and `APP_NAME` keep the
-same signatures and return shapes, so callers in server.py / workers.py /
-competitive_routes.py did not change.
+The public surface intentionally matches the former S3 adapter so persisted
+``storage_path`` values and all callers remain unchanged.
 
-Object keys are `{STORAGE_PREFIX}/{path}`, where `path` is what callers pass in
-(and what gets persisted to Mongo as `storage_path`). Changing STORAGE_PREFIX
-after objects exist will orphan them — pick one and leave it alone.
-
-Configuration (via environment / backend/.env):
-    AWS_REGION       bucket region
+Configuration:
+    GCP_PROJECT_ID    Google Cloud project (optional when ADC supplies it)
     STORAGE_BUCKET   destination bucket (required)
-    STORAGE_PREFIX   key prefix inside the bucket (default "bodhiai")
-    APP_NAME         path namespace used by callers (default "qpgen")
+    STORAGE_PREFIX   object prefix inside the bucket (default ``bodhiai``)
+    APP_NAME         caller namespace (default ``qpgen``)
 """
+from __future__ import annotations
+
 import logging
 import os
 import threading
 
-import boto3
-from botocore.config import Config
+from google.api_core.retry import Retry
+from google.cloud import storage as gcs
 
 logger = logging.getLogger(__name__)
 
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID") or None
 BUCKET = os.environ.get("STORAGE_BUCKET", "")
 PREFIX = os.environ.get("STORAGE_PREFIX", "bodhiai").strip("/")
 APP_NAME = os.environ.get("APP_NAME", "qpgen")
-
-# See llm_adapter.LOAD_TEST_STUB. Object storage is stubbed too because from a
-# developer machine an S3 round-trip measures home upstream bandwidth, not the
-# server — in production EC2 -> S3 in-region is far faster, so leaving S3 live
-# during a local load test overstates upload cost and distorts the result.
 LOAD_TEST_STUB = os.environ.get("LOAD_TEST_STUB", "").lower() in ("1", "true", "yes")
 
-# Minimal one-page PDF, returned by get_object() under the stub so callers that
-# re-parse a stored file (e.g. reindex) still receive something pypdf can open.
 _STUB_PDF = (
     b"%PDF-1.4\n"
     b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
@@ -45,8 +34,10 @@ _STUB_PDF = (
     b"trailer<</Root 1 0 R>>\n%%EOF\n"
 )
 
+_retry = Retry(initial=1.0, maximum=10.0, multiplier=2.0, deadline=120.0)
 _client_lock = threading.Lock()
-_s3 = None
+_client: gcs.Client | None = None
+_bucket: gcs.Bucket | None = None
 
 
 def _key(path: str) -> str:
@@ -54,53 +45,60 @@ def _key(path: str) -> str:
     return f"{PREFIX}/{path}" if PREFIX else path
 
 
-def init_storage() -> str:
-    """Create (and cache) the S3 client and verify the bucket is reachable.
-
-    Called once at app startup so credential / bucket problems surface in the
-    boot log rather than on the first upload. Returns the bucket name.
-    """
-    global _s3
-    if LOAD_TEST_STUB:
-        # No credentials or bucket required while stubbed.
-        return BUCKET or "stub-bucket"
-    if _s3 is None:
+def _ensure_client() -> tuple[gcs.Client, gcs.Bucket]:
+    global _client, _bucket
+    if _client is None or _bucket is None:
         with _client_lock:
-            if _s3 is None:
+            if _client is None or _bucket is None:
                 if not BUCKET:
                     raise RuntimeError(
                         "STORAGE_BUCKET is not set — object storage is unavailable"
                     )
-                client = boto3.client(
-                    "s3",
-                    region_name=AWS_REGION,
-                    config=Config(
-                        retries={"max_attempts": 3, "mode": "standard"},
-                        read_timeout=120,
-                        connect_timeout=10,
-                    ),
-                )
-                client.head_bucket(Bucket=BUCKET)
-                _s3 = client
-                logger.info(f"Storage initialized (s3://{BUCKET}/{PREFIX})")
+                client = gcs.Client(project=GCP_PROJECT_ID)
+                bucket = client.bucket(BUCKET)
+                bucket.reload(retry=_retry, timeout=30)
+                _client, _bucket = client, bucket
+                logger.info("Storage initialized (gs://%s/%s)", BUCKET, PREFIX)
+    return _client, _bucket
+
+
+def init_storage() -> str:
+    """Initialize ADC-backed storage and verify the bucket is reachable."""
+    if LOAD_TEST_STUB:
+        return BUCKET or "stub-bucket"
+    _ensure_client()
     return BUCKET
+
+
+def check_storage() -> bool:
+    """Perform a live metadata read for readiness checks."""
+    if LOAD_TEST_STUB:
+        return True
+    _, bucket = _ensure_client()
+    bucket.reload(retry=_retry, timeout=10)
+    return True
 
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
     if LOAD_TEST_STUB:
         return {"path": path, "key": _key(path), "bucket": BUCKET or "stub-bucket"}
-    init_storage()
+    _, bucket = _ensure_client()
     key = _key(path)
-    _s3.put_object(Bucket=BUCKET, Key=key, Body=data, ContentType=content_type)
+    bucket.blob(key).upload_from_string(
+        data,
+        content_type=content_type,
+        retry=_retry,
+        timeout=120,
+    )
     return {"path": path, "key": key, "bucket": BUCKET}
 
 
 def get_object(path: str) -> tuple[bytes, str]:
     if LOAD_TEST_STUB:
-        return (_STUB_PDF, "application/pdf")
-    init_storage()
-    resp = _s3.get_object(Bucket=BUCKET, Key=_key(path))
-    return (
-        resp["Body"].read(),
-        resp.get("ContentType", "application/octet-stream"),
-    )
+        return _STUB_PDF, "application/pdf"
+    _, bucket = _ensure_client()
+    blob = bucket.blob(_key(path))
+    data = blob.download_as_bytes(retry=_retry, timeout=120)
+    if not blob.content_type:
+        blob.reload(retry=_retry, timeout=30)
+    return data, blob.content_type or "application/octet-stream"

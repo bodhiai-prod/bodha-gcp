@@ -1,8 +1,7 @@
-"""PDF utilities: text extraction, chunking, and paper rendering.
+"""PDF utilities: text extraction, OCR, chunking, and paper rendering.
 
-OCR for scanned PDFs runs on AWS Textract (see `_ocr_pdf`). Poppler is still
-required locally to rasterize PDF pages into images — Textract recognizes
-images, it does not rasterize PDFs itself.
+OCR for scanned PDFs runs on Google Cloud Vision. Poppler remains local so the
+existing page sampling and rasterization behavior is unchanged.
 """
 import asyncio
 import io
@@ -15,8 +14,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
-import boto3
-from botocore.config import Config
+from google.cloud import vision
 
 import matplotlib
 
@@ -41,14 +39,15 @@ from reportlab.platypus import (
 
 logger = logging.getLogger(__name__)
 
-# --- OCR (AWS Textract) configuration ---------------------------------------
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-# Pages are OCR'd concurrently; each worker does its own rasterize + Textract
-# call. Kept modest so a fresh AWS account doesn't trip Textract throttling.
+# --- OCR (Google Cloud Vision) configuration --------------------------------
+VISION_OCR_ENABLED = os.environ.get("VISION_OCR_ENABLED", "true").lower() in (
+    "1", "true", "yes",
+)
+# Pages are OCR'd concurrently; each worker does its own rasterize + Vision
+# call. Kept modest to avoid provider throttling and excessive local memory.
 OCR_MAX_WORKERS = int(os.environ.get("OCR_MAX_WORKERS", "5"))
-# Textract's synchronous DetectDocumentText caps in-memory document bytes at
-# ~10MB. Pages over this threshold get re-encoded as JPEG before sending.
-_TEXTRACT_MAX_BYTES = 9 * 1024 * 1024
+# Keep requests below 10MB. Pages over this threshold are re-encoded as JPEG.
+_VISION_MAX_BYTES = 9 * 1024 * 1024
 
 # --- PDF rendering pool ------------------------------------------------------
 # Dedicated pool for render_paper_pdf / render_solution_pdf.
@@ -79,33 +78,18 @@ def shutdown_pdf_pool() -> None:
     """Release the PDF pool's threads on application shutdown."""
     _PDF_POOL.shutdown(wait=False)
 
-_textract_lock = threading.Lock()
-_textract = None
+_vision_lock = threading.Lock()
+_vision_client = None
 
 
-def _textract_client():
-    """Lazily create (and cache) the Textract client.
-
-    Lazy so importing this module never requires AWS configuration — the
-    offline test suites (test_pdf_math, test_ocr_heuristic) import it directly.
-    Botocore retries are left ON here (unlike llm_adapter.py, which disables
-    them because it owns a bespoke retry/fallback chain): throttling is the
-    expected failure mode under parallelism and backoff is exactly what we want.
-    """
-    global _textract
-    if _textract is None:
-        with _textract_lock:
-            if _textract is None:
-                _textract = boto3.client(
-                    "textract",
-                    region_name=AWS_REGION,
-                    config=Config(
-                        retries={"max_attempts": 5, "mode": "standard"},
-                        read_timeout=60,
-                        connect_timeout=10,
-                    ),
-                )
-    return _textract
+def _get_vision_client():
+    """Lazily create the ADC-backed Vision client."""
+    global _vision_client
+    if _vision_client is None:
+        with _vision_lock:
+            if _vision_client is None:
+                _vision_client = vision.ImageAnnotatorClient()
+    return _vision_client
 
 
 # Register a Unicode-capable font once so characters like °, ·, ⁻¹, ², ∞, ×
@@ -504,16 +488,15 @@ def _strip_boilerplate(text: str) -> str:
 
 
 def _ocr_page_bytes(img) -> bytes:
-    """Encode a rasterized page for Textract.
+    """Encode a rasterized page for Cloud Vision.
 
-    PNG by default (lossless, best for OCR). Textract's synchronous API caps
-    document bytes at ~10MB, which a noisy colour scan can exceed — those fall
-    back to JPEG rather than failing the page outright.
+    PNG by default (lossless, best for OCR). A noisy colour scan can exceed the
+    conservative request ceiling, so those pages fall back to JPEG.
     """
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     data = buf.getvalue()
-    if len(data) > _TEXTRACT_MAX_BYTES:
+    if len(data) > _VISION_MAX_BYTES:
         buf = io.BytesIO()
         img.convert("RGB").save(buf, format="JPEG", quality=85)
         data = buf.getvalue()
@@ -521,16 +504,20 @@ def _ocr_page_bytes(img) -> bytes:
 
 
 def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 40, dpi: int = 150) -> str:
-    """OCR a scanned / image-based PDF using AWS Textract.
+    """OCR a scanned/image-based PDF using Cloud Vision Document OCR.
 
     Strategy: when the PDF is short, OCR every page up to `max_pages`. For
     longer books (> max_pages), sample evenly across the whole document so
     we capture the ToC at the front, chapter intros in the middle and the
     glossary/summary at the end — critical for topic extraction.
 
-    Pages are processed concurrently (rasterize + Textract per worker). Results
+    Pages are processed concurrently (rasterize + Vision per worker). Results
     are reassembled in page order, never completion order.
     """
+    if not VISION_OCR_ENABLED:
+        logger.info("OCR skipped because VISION_OCR_ENABLED is false")
+        return ""
+
     try:
         from pdf2image import convert_from_bytes
         from pdf2image.exceptions import PDFPageCountError
@@ -567,7 +554,7 @@ def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 40, dpi: int = 150) -> str:
         page_numbers = sorted(set(head + middle + tail))
 
     def _ocr_one_page(pn: int) -> str:
-        """Rasterize page `pn` and run it through Textract. Never raises."""
+        """Rasterize page `pn` and run it through Cloud Vision. Never raises."""
         try:
             imgs = convert_from_bytes(
                 pdf_bytes, dpi=dpi, first_page=pn, last_page=pn
@@ -583,20 +570,21 @@ def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 40, dpi: int = 150) -> str:
         out: list[str] = []
         for img in imgs:
             try:
-                resp = _textract_client().detect_document_text(
-                    Document={"Bytes": _ocr_page_bytes(img)}
+                resp = _get_vision_client().document_text_detection(
+                    image=vision.Image(content=_ocr_page_bytes(img)),
+                    timeout=60,
                 )
-                lines = [
-                    b.get("Text", "")
-                    for b in resp.get("Blocks", [])
-                    if b.get("BlockType") == "LINE"
-                ]
-                out.append("\n".join(lines))
+                if resp.error.message:
+                    raise RuntimeError(resp.error.message)
+                text = (resp.full_text_annotation.text or "").strip()
+                if not text and resp.text_annotations:
+                    text = (resp.text_annotations[0].description or "").strip()
+                out.append(text)
             except Exception as e:  # noqa: BLE001
                 # Auth/permission/throttling all land here. Logged rather than
                 # swallowed — a silent empty result is what made the old
                 # missing-Tesseract failure so hard to diagnose.
-                logger.warning(f"OCR page {pn}: Textract failed ({e})")
+                logger.warning(f"OCR page {pn}: Cloud Vision failed ({e})")
                 continue
         return "\n\n".join(o for o in out if o.strip())
 
@@ -607,14 +595,14 @@ def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 40, dpi: int = 150) -> str:
 
     succeeded = sum(1 for p in pieces if p.strip())
     logger.info(
-        f"OCR via Textract: {succeeded}/{len(page_numbers)} pages returned text "
+        f"OCR via Cloud Vision: {succeeded}/{len(page_numbers)} pages returned text "
         f"(total {total_pages} pages, {workers} workers)"
     )
     if not succeeded:
         logger.warning(
-            "OCR produced no text — check AWS credentials, the "
-            "textract:DetectDocumentText IAM permission, and that poppler is "
-            "on PATH. Run scripts/check_bedrock.py to isolate which."
+            "OCR produced no text — check Application Default Credentials, "
+            "the Vision API IAM permission, and that poppler is on PATH. "
+            "Run scripts/check_gcp.py to isolate which."
         )
     return "\n\n".join(p for p in pieces if p.strip())
 

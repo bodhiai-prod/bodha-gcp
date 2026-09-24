@@ -54,7 +54,7 @@ from prompts import (
     topic_extract_prompt,
     QPAPER_EXTRACT_SYSTEM,
 )
-from storage import APP_NAME, get_object, init_storage, put_object
+from storage import APP_NAME, check_storage, get_object, init_storage, put_object
 from token_usage import install as install_token_usage, tag
 from workers import (
     build_solution_for_paper,
@@ -136,6 +136,36 @@ def spread_chunks(chunks: List[str], limit: int = STORED_CHUNK_LIMIT) -> List[st
 # =========================================================
 # Models
 # =========================================================
+
+
+@app.get("/health/live", include_in_schema=False)
+async def health_live():
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def health_ready():
+    checks: dict[str, str] = {}
+    try:
+        await db.command("ping")
+        checks["mongodb"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Readiness MongoDB check failed: %s", exc)
+        checks["mongodb"] = "failed"
+    try:
+        await asyncio.to_thread(check_storage)
+        checks["storage"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Readiness storage check failed: %s", exc)
+        checks["storage"] = "failed"
+    if any(value != "ok" for value in checks.values()):
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "not_ready", "checks": checks},
+        )
+    return {"status": "ready", "checks": checks}
+
+
 class RegisterInput(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6)
