@@ -121,6 +121,15 @@ resource "google_storage_bucket_iam_member" "app_objects" {
   member = "serviceAccount:${google_service_account.app.email}"
 }
 
+# `gcloud builds submit` stages the source in this Google-managed bucket, then
+# the project's default Compute Engine service account reads that archive to
+# start the build.  Grant only the read permission required for that hand-off.
+resource "google_storage_bucket_iam_member" "cloudbuild_source_reader" {
+  bucket = "${var.project_id}_cloudbuild"
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${data.google_project.current.number}-compute@developer.gserviceaccount.com"
+}
+
 resource "google_project_iam_member" "app_roles" {
   for_each = toset([
     "roles/logging.logWriter",
