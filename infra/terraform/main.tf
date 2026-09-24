@@ -132,6 +132,7 @@ resource "google_storage_bucket_iam_member" "cloudbuild_source_reader" {
 
 resource "google_project_iam_member" "app_roles" {
   for_each = toset([
+    "roles/artifactregistry.reader",
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
     "roles/datastore.user",
