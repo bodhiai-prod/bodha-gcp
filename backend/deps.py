@@ -14,7 +14,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 from fastapi import APIRouter, FastAPI, HTTPException  # noqa: E402
-from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
+from firestore_compat import FirestoreClient, FirestoreDatabase  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,9 +22,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("bodhiai")
 
-mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ["DB_NAME"]]
+gcp_project_id = os.environ["GCP_PROJECT_ID"]
+client = FirestoreClient()
+db = FirestoreDatabase(gcp_project_id, os.environ.get("FIRESTORE_DATABASE", "(default)"))
 
 app = FastAPI(title="Bodha AI - AI Question Paper Generator")
 api_router = APIRouter(prefix="/api")

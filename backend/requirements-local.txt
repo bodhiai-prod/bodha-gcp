@@ -15,8 +15,7 @@ pydantic>=2.7
 python-dotenv>=1.0
 
 # --- database ----------------------------------------------------------------
-motor>=3.5                   # bumped from Emergent's 3.3.1 for Python 3.12
-pymongo>=4.7
+google-cloud-firestore>=2.18
 
 # --- auth --------------------------------------------------------------------
 bcrypt>=4.1

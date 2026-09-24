@@ -17,11 +17,20 @@ steps:
     entrypoint: gcloud
     args:
       - compute
+      - scp
+      - deploy/vm/bodha-deploy
+      - ${_VM_NAME}:/tmp/bodha-deploy
+      - --zone=${_VM_ZONE}
+      - --tunnel-through-iap
+  - name: gcr.io/cloud-builders/gcloud
+    entrypoint: gcloud
+    args:
+      - compute
       - ssh
       - ${_VM_NAME}
       - --zone=${_VM_ZONE}
       - --tunnel-through-iap
-      - --command=sudo /usr/local/bin/bodha-deploy $SHORT_SHA
+      - --command=sudo install -m 0755 /tmp/bodha-deploy /usr/local/bin/bodha-deploy && sudo /usr/local/bin/bodha-deploy $SHORT_SHA
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/backend:$SHORT_SHA

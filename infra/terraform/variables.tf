@@ -48,11 +48,6 @@ variable "storage_prefix" {
   default = "bodhiai"
 }
 
-variable "db_name" {
-  type    = string
-  default = "bodhiai"
-}
-
 variable "manage_dns" {
   description = "Create a Cloud DNS zone and A record. Delegate it only at cutover."
   type        = bool

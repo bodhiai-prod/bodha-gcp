@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preflight the GCP production dependencies.
 
-This creates and removes one GCS object, one Atlas collection/index, one tiny
+This creates and removes one GCS object, one Firestore document, one tiny
 Vision OCR request, and one local file. The Vision request is billable after
 the account's monthly free allowance. It does not make an LLM generation call.
 """
@@ -15,9 +15,8 @@ from pathlib import Path
 
 import requests
 from google.auth import default
-from google.cloud import storage, vision
+from google.cloud import firestore, storage, vision
 from PIL import Image, ImageDraw
-from pymongo import MongoClient
 
 
 def require(name: str) -> str:
@@ -63,20 +62,18 @@ def check_vision() -> None:
     print(f"OK Vision OCR {text!r}")
 
 
-def check_mongodb() -> None:
-    client = MongoClient(require("MONGO_URL"), serverSelectionTimeoutMS=10000)
-    db = client[os.environ.get("DB_NAME", "bodhiai")]
-    db.command("ping")
-    name = f"_gcp_preflight_{uuid.uuid4().hex}"
-    coll = db[name]
+def check_firestore() -> None:
+    client = firestore.Client(
+        project=require("GCP_PROJECT_ID"),
+        database=os.environ.get("FIRESTORE_DATABASE", "(default)"),
+    )
+    reference = client.collection("_gcp_preflight").document(uuid.uuid4().hex)
     try:
-        coll.insert_one({"probe": True})
-        coll.create_index("probe")
-        assert coll.count_documents({"probe": True}) == 1
+        reference.set({"probe": True})
+        assert reference.get().to_dict() == {"probe": True}
     finally:
-        coll.drop()
-        client.close()
-    print("OK MongoDB Atlas read/write/index/drop")
+        reference.delete()
+    print("OK Firestore read/write/delete")
 
 
 def check_openrouter() -> None:
@@ -99,7 +96,7 @@ def check_log_volume() -> None:
 
 
 def main() -> int:
-    checks = (check_adc, check_storage, check_vision, check_mongodb, check_openrouter, check_log_volume)
+    checks = (check_adc, check_storage, check_vision, check_firestore, check_openrouter, check_log_volume)
     failures = 0
     for check in checks:
         try:

@@ -42,10 +42,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from motor.motor_asyncio import AsyncIOMotorClient
-
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / "backend" / ".env")
+sys.path.insert(0, str(ROOT / "backend"))
+from firestore_compat import FirestoreClient, FirestoreDatabase  # noqa: E402
 
 
 def utcnow_iso() -> str:
@@ -236,23 +236,22 @@ async def main() -> int:
     )
     args = ap.parse_args()
 
-    mongo_url = os.environ.get("MONGO_URL")
-    db_name = os.environ.get("DB_NAME")
-    if not mongo_url or not db_name:
-        print("MONGO_URL and DB_NAME must be set (backend/.env)", file=sys.stderr)
+    project_id = os.environ.get("GCP_PROJECT_ID")
+    if not project_id:
+        print("GCP_PROJECT_ID must be set (backend/.env)", file=sys.stderr)
         return 2
 
-    client = AsyncIOMotorClient(mongo_url)
-    db = client[db_name]
+    client = FirestoreClient()
+    db = FirestoreDatabase(project_id, os.environ.get("FIRESTORE_DATABASE", "(default)"))
     rep = Report()
     try:
         await db.command("ping")
     except Exception as e:  # noqa: BLE001
-        print(f"cannot reach Mongo: {e}", file=sys.stderr)
+        print(f"cannot reach Firestore: {e}", file=sys.stderr)
         return 2
 
     try:
-        print(f"database: {db_name}")
+        print(f"Firestore project: {project_id}")
         print("pass 1/4  past_papers.owner_id")
         await stamp_papers(db, args.apply, rep)
         print("pass 2/4  past_questions.owner_id")

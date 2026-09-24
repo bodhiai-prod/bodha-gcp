@@ -148,10 +148,10 @@ async def health_ready():
     checks: dict[str, str] = {}
     try:
         await db.command("ping")
-        checks["mongodb"] = "ok"
+        checks["firestore"] = "ok"
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Readiness MongoDB check failed: %s", exc)
-        checks["mongodb"] = "failed"
+        logger.warning("Readiness Firestore check failed: %s", exc)
+        checks["firestore"] = "failed"
     try:
         await asyncio.to_thread(check_storage)
         checks["storage"] = "ok"

@@ -7,9 +7,12 @@ locals {
   cloudbuild_sa = "serviceAccount:${google_service_account.build.email}"
   required_apis = toset([
     "artifactregistry.googleapis.com",
+    "billingbudgets.googleapis.com",
     "cloudbuild.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
     "compute.googleapis.com",
     "dns.googleapis.com",
+    "firestore.googleapis.com",
     "iam.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
@@ -74,6 +77,8 @@ resource "google_compute_firewall" "iap_ssh" {
 resource "google_compute_address" "app" {
   name   = "${local.name}-ip"
   region = var.region
+
+  depends_on = [google_project_service.required]
 }
 
 resource "google_service_account" "app" {
@@ -118,9 +123,9 @@ resource "google_storage_bucket_iam_member" "app_objects" {
 
 resource "google_project_iam_member" "app_roles" {
   for_each = toset([
-    "roles/cloudvision.user",
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
+    "roles/datastore.user",
     "roles/secretmanager.secretAccessor",
     "roles/serviceusage.serviceUsageConsumer",
   ])
@@ -165,6 +170,8 @@ resource "google_compute_disk" "data" {
   zone                      = var.zone
   size                      = var.data_disk_gb
   physical_block_size_bytes = 4096
+
+  depends_on = [google_project_service.required]
 }
 
 resource "google_compute_resource_policy" "snapshots" {
@@ -187,6 +194,8 @@ resource "google_compute_resource_policy" "snapshots" {
       labels            = { app = "bodha", environment = var.environment }
     }
   }
+
+  depends_on = [google_project_service.required]
 }
 
 resource "google_compute_disk_resource_policy_attachment" "snapshots" {
@@ -249,7 +258,6 @@ resource "google_compute_instance" "app" {
       region         = var.region
       bucket_name    = var.bucket_name
       storage_prefix = var.storage_prefix
-      db_name        = var.db_name
       app_domain     = var.app_domain
       cors_origins   = var.cors_origins
     })
@@ -347,4 +355,6 @@ resource "google_billing_budget" "monthly" {
   threshold_rules { threshold_percent = 0.5 }
   threshold_rules { threshold_percent = 0.8 }
   threshold_rules { threshold_percent = 1.0 }
+
+  depends_on = [google_project_service.required]
 }

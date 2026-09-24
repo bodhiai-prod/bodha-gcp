@@ -14,7 +14,7 @@ proxies `/api` and `/health` to the backend container.
 
 State is split as follows:
 
-- MongoDB documents: MongoDB Atlas on GCP in Mumbai.
+- Application documents: Firestore in Native mode, in this GCP project.
 - PDFs and diagrams: regional Cloud Storage, with existing object keys intact.
 - OCR: Cloud Vision Document Text Detection.
 - text and diagrams: OpenRouter.
@@ -28,7 +28,7 @@ From this repository only:
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r backend/requirements-local.txt
-PYTHONPATH=backend LOAD_TEST_STUB=true MONGO_URL=mongodb://localhost:27017 DB_NAME=bodhiai JWT_SECRET=test \
+PYTHONPATH=backend LOAD_TEST_STUB=true GCP_PROJECT_ID=bodha-test FIRESTORE_DATABASE='(default)' JWT_SECRET=test \
   .venv/bin/pytest -q backend
 npm --prefix frontend ci --legacy-peer-deps
 CI=true npm --prefix frontend test -- --watchAll=false
@@ -60,7 +60,6 @@ protection enabled.
 Add secret values without placing them in a shell history or Terraform state:
 
 ```bash
-printf '%s' "$MONGO_URL" | gcloud secrets versions add bodha-mongo-url --data-file=-
 printf '%s' "$JWT_SECRET" | gcloud secrets versions add bodha-jwt-secret --data-file=-
 printf '%s' "$OPENROUTER_API_KEY" | gcloud secrets versions add bodha-openrouter-api-key --data-file=-
 ```
@@ -68,14 +67,11 @@ printf '%s' "$OPENROUTER_API_KEY" | gcloud secrets versions add bodha-openrouter
 The variables above should come from a protected operator environment. Do not
 put their literal values in this repository.
 
-## 3. MongoDB Atlas on GCP
+## 3. Firestore
 
-1. Create a dedicated Atlas project and a production cluster on Google Cloud in `asia-south1`.
-2. Enable TLS, continuous backup, point-in-time recovery, and alerting.
-3. Create separate migration and application database users. Restrict the application user to `bodhiai` and allow the VM static IP only.
-4. Recreate the indexes emitted by backend startup, then use Atlas Live Migration from the current production MongoDB.
-5. Keep continuous sync active while AWS serves production. Validate every collection count and representative user, textbook, paper, competitive-exam, and ownership record.
-6. Put the final Atlas application URI into `bodha-mongo-url` only after validation.
+1. Create the default Firestore database in **Native mode** in the GCP project. Choose the location deliberately: it cannot be changed later.
+2. The VM service account receives `roles/datastore.user` from Terraform. No database password, network allowlist, or connection string is required.
+3. Firestore is an empty new database. Importing existing MongoDB production data is a separate, planned data-conversion exercise; do not cut over existing users until it is complete and validated.
 
 ## 4. S3-to-GCS transfer
 
@@ -88,19 +84,12 @@ that prefix and are not rewritten.
 Before cutover, run the reconciliation tool with source and destination
 credentials available through their normal SDK chains:
 
-```bash
-python scripts/reconcile_migration.py \
-  --source-mongo "$SOURCE_MONGO_URL" \
-  --destination-mongo "$MONGO_URL" \
-  --source-bucket SOURCE_BUCKET \
-  --destination-bucket DESTINATION_BUCKET \
-  --prefix bodhiai/
-```
-
-The command must report zero count, document-sample, missing-object, and size
-mismatches. For a final audit, export the Storage Transfer manifest and verify
-SHA-256 hashes for a representative sample; S3 multipart ETags are not content
-hashes and must not be treated as such.
+The existing reconciliation script is MongoDB-to-MongoDB only and must not be
+used for a Firestore cutover. If production MongoDB data exists, create and
+validate a dedicated one-time MongoDB-to-Firestore converter before cutover.
+For object data, export the Storage Transfer manifest and verify SHA-256 hashes
+for a representative sample; S3 multipart ETags are not content hashes and
+must not be treated as such.
 
 ## 5. Build and deploy
 
@@ -118,7 +107,7 @@ exactly one backend container.
 
 Run the preflight from the backend container or an identically configured
 operator environment. It performs one small Vision OCR request and temporary
-GCS/Atlas writes:
+GCS/Firestore writes:
 
 ```bash
 PYTHONPATH=backend python scripts/check_gcp.py
@@ -128,13 +117,13 @@ curl -fsS "https://$APP_DOMAIN/health/ready"
 
 ## 6. Cutover
 
-1. Deploy and test a temporary hostname against staging Atlas and GCS data.
+1. Deploy and test a temporary hostname against Firestore and GCS data.
 2. Reduce the current DNS record TTL to 300 seconds at least 24 hours in advance.
 3. At the change window, block production uploads/mutations and allow active jobs to finish. Do not restart either stack while jobs are pending.
-4. Complete Atlas Live Migration, run the final incremental Storage Transfer, and rerun reconciliation.
-5. Switch the production secret to the finalized Atlas URI, deploy the GCP release, and complete login/upload/OCR/generation/download smoke tests.
+4. Complete the final incremental Storage Transfer and rerun its object audit.
+5. Deploy the GCP release and complete login/upload/OCR/generation/download smoke tests.
 6. Update the existing authoritative DNS A record to Terraform's `vm_external_ip`. If moving DNS to Cloud DNS, enable `manage_dns`, apply, verify the zone independently, and delegate the registrar only at this step.
-7. Monitor `journalctl`, Cloud Logging, uptime alerts, VM CPU/memory/disk, Vision errors, Atlas connections, and storage errors for 24 hours.
+7. Monitor `journalctl`, Cloud Logging, uptime alerts, VM CPU/memory/disk, Vision errors, Firestore operations, and storage errors for 24 hours.
 
 ## 7. Rollback and retirement
 
@@ -142,7 +131,7 @@ Keep AWS intact and read-only for seven days. To roll back, restore the old DNS
 record, re-enable AWS mutations, and reconcile writes accepted by GCP during the
 cutover window before resuming normal service.
 
-After seven accepted days, capture final Atlas and GCS backups, revoke the
+After seven accepted days, capture final Firestore and GCS backups, revoke the
 temporary AWS transfer identity, and disable AWS application services. Removing
 AWS data, DNS, backups, buckets, or IAM identities requires a separate explicit
 approval.
@@ -150,8 +139,8 @@ approval.
 ## Expected monthly cost
 
 For 100 monthly users, 10 GB of objects, and 10,000 OCR pages, budget roughly
-USD 130–180 per month before OpenRouter and Internet egress. Vision OCR is about
+USD 75–125 per month before OpenRouter and Internet egress. Vision OCR is about
 USD 13.50 after its first 1,000 free monthly units. VM/disk/snapshots are
-approximately USD 55–75, Atlas with backups approximately USD 55–75, and the
-remaining GCP services approximately USD 5–15. Confirm final figures in the GCP
-and Atlas calculators immediately before provisioning.
+approximately USD 55–75, with Firestore billed for its operations and storage,
+and the remaining GCP services approximately USD 5–15. Confirm final figures in the GCP
+and Firestore calculators immediately before provisioning.
