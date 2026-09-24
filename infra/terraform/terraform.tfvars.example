@@ -2,6 +2,9 @@ project_id         = "your-gcp-project"
 bucket_name        = "your-globally-unique-bodha-bucket"
 app_domain         = "app.example.com"
 cors_origins       = "https://app.example.com"
+google_oauth_client_id = "1234567890-example.apps.googleusercontent.com"
+# Only these verified Google accounts receive the admin role when first created.
+admin_emails       = "admin@example.com"
 alert_email        = "ops@example.com"
 billing_account_id = "000000-000000-000000"
 

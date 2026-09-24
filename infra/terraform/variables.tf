@@ -33,6 +33,18 @@ variable "cors_origins" {
   type        = string
 }
 
+variable "google_oauth_client_id" {
+  description = "Google OAuth 2.0 web client ID used for Google sign-in."
+  type        = string
+  default     = ""
+}
+
+variable "admin_emails" {
+  description = "Comma-separated Google-account emails granted the admin role on first sign-in."
+  type        = string
+  default     = ""
+}
+
 variable "machine_type" {
   type    = string
   default = "e2-standard-2"

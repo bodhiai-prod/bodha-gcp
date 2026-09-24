@@ -4,9 +4,12 @@
 from deps import api_router, app, client, db, logger, utcnow_iso  # noqa: I001
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
+import requests
+import secrets
 import uuid
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
@@ -18,22 +21,22 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+    Request,
     Response,
     UploadFile,
 )
+from fastapi.responses import RedirectResponse
+from google.auth.transport.requests import Request as GoogleRequest
+from google.oauth2 import id_token
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from starlette.middleware.cors import CORSMiddleware
 
 from auth import (
-    AUTH_POOL_MAX_WORKERS,
+    SESSION_COOKIE_NAME,
     create_token,
     decode_token,
     get_current_user,
-    hash_password,
-    hash_password_async,
     require_role,
-    shutdown_auth_pool,
-    verify_password_async,
 )
 from llm_adapter import chat_complete, parse_json_response
 from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_errors,
@@ -166,18 +169,6 @@ async def health_ready():
     return {"status": "ready", "checks": checks}
 
 
-class RegisterInput(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=6)
-    full_name: str
-    role: str = "teacher"  # teacher or admin
-
-
-class LoginInput(BaseModel):
-    email: EmailStr
-    password: str
-
-
 class UserPublic(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
@@ -186,9 +177,35 @@ class UserPublic(BaseModel):
     role: str
 
 
-class AuthResponse(BaseModel):
-    token: str
-    user: UserPublic
+# Google OAuth configuration. The client secret is deliberately only present
+# at runtime (from Secret Manager); the client ID identifies the relying party
+# whose Google ID tokens we accept.
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
+APP_BASE_URL = os.getenv("APP_BASE_URL", "").rstrip("/")
+SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "true").lower() != "false"
+OAUTH_COOKIE_MAX_AGE = 10 * 60
+
+
+def _configured_google_oauth() -> bool:
+    return bool(GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET and APP_BASE_URL)
+
+
+def _oauth_callback_url() -> str:
+    return f"{APP_BASE_URL}/api/auth/google/callback"
+
+
+def _admin_emails() -> set[str]:
+    return {
+        email.strip().lower()
+        for email in os.getenv("ADMIN_EMAILS", "").split(",")
+        if email.strip()
+    }
+
+
+def _code_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
 class TextbookSummary(BaseModel):
@@ -345,7 +362,6 @@ async def startup():
     # stub's 30s floor; the extra ~18s was purely queuing for a free thread.
     #
     # Sleeping threads cost almost no CPU, so a much larger pool is safe here.
-    # Password hashing deliberately does NOT use this pool — see auth.py.
     loop = asyncio.get_running_loop()
     loop.set_default_executor(
         ThreadPoolExecutor(
@@ -354,7 +370,6 @@ async def startup():
     )
     logger.info(
         f"Thread pools: default={THREAD_POOL_MAX_WORKERS} (I/O-bound), "
-        f"auth={AUTH_POOL_MAX_WORKERS} (CPU-bound), "
         f"pdf={PDF_POOL_MAX_WORKERS} (CPU-bound)"
     )
 
@@ -451,80 +466,146 @@ async def startup():
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Orphan recovery failed: {e}")
 
-    # Seed default admin account if missing. Idempotent — never overwrites
-    # an existing admin (so password rotation is the operator's job).
-    try:
-        admin_email = "admin@bodhi.ai"
-        existing_admin = await db.users.find_one({"email": admin_email})
-        if not existing_admin:
-            admin_id = str(uuid.uuid4())
-            await db.users.insert_one(
-                {
-                    "id": admin_id,
-                    "email": admin_email,
-                    "full_name": "Bodha AI Admin",
-                    "role": "admin",
-                    "password_hash": hash_password("admin123"),
-                    "created_at": utcnow_iso(),
-                }
-            )
-            logger.info(f"Seeded default admin: {admin_email}")
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"admin seed failed: {e}")
-
-
 @app.on_event("shutdown")
 async def shutdown():
     client.close()
-    shutdown_auth_pool()
     shutdown_pdf_pool()
 
 
 # =========================================================
 # Auth
 # =========================================================
-@api_router.post("/auth/register", response_model=AuthResponse)
-async def register(data: RegisterInput):
-    if data.role not in ("teacher", "admin", "student"):
-        raise HTTPException(status_code=400, detail="role must be teacher, admin or student")
-    existing = await db.users.find_one({"email": data.email.lower()})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    user_id = str(uuid.uuid4())
-    # bcrypt is deliberately CPU-expensive (~215ms at cost factor 12). Calling it
-    # inline would block the event loop for that whole time, stalling every other
-    # request — 50 concurrent registrations measured a 13s median because they
-    # serialised. Runs on auth.py's dedicated pool, kept separate from the default
-    # executor so it never queues behind a 30-120s Bedrock call.
-    password_hash = await hash_password_async(data.password)
-    doc = {
-        "id": user_id,
-        "email": data.email.lower(),
-        "full_name": data.full_name,
-        "role": data.role,
-        "password_hash": password_hash,
-        "created_at": utcnow_iso(),
+@api_router.get("/auth/google/start", include_in_schema=False)
+async def google_login_start():
+    """Begin Google OpenID Connect authorization-code flow with PKCE."""
+    if not _configured_google_oauth():
+        logger.error("Google OAuth is not configured")
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
+
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    verifier = secrets.token_urlsafe(64)
+    params = {
+        "client_id": GOOGLE_OAUTH_CLIENT_ID,
+        "redirect_uri": _oauth_callback_url(),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "nonce": nonce,
+        "code_challenge": _code_challenge(verifier),
+        "code_challenge_method": "S256",
+        "prompt": "select_account",
     }
-    await db.users.insert_one(doc)
-    token = create_token(user_id, data.role, data.email.lower())
-    return AuthResponse(token=token, user=UserPublic(**serialize_user(doc)))
+    from urllib.parse import urlencode
 
-
-@api_router.post("/auth/login", response_model=AuthResponse)
-async def login(data: LoginInput):
-    user = await db.users.find_one({"email": data.email.lower()}, {"_id": 0})
-    # Same reason as register(): keep bcrypt off the event loop, on the dedicated
-    # auth pool. This path matters more in production — every user logs in, and
-    # each verify would otherwise freeze the whole app for ~215ms. `and` still
-    # short-circuits, so verify_password is skipped when the email doesn't exist,
-    # exactly as before.
-    ok = bool(user) and await verify_password_async(
-        data.password, user["password_hash"]
+    response = RedirectResponse(
+        f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}",
+        status_code=302,
     )
-    if not ok:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_token(user["id"], user["role"], user["email"])
-    return AuthResponse(token=token, user=UserPublic(**serialize_user(user)))
+    cookie_options = {
+        "httponly": True,
+        "secure": SESSION_COOKIE_SECURE,
+        "samesite": "lax",
+        "max_age": OAUTH_COOKIE_MAX_AGE,
+        "path": "/api/auth/google",
+    }
+    response.set_cookie("bodha_oauth_state", state, **cookie_options)
+    response.set_cookie("bodha_oauth_nonce", nonce, **cookie_options)
+    response.set_cookie("bodha_oauth_verifier", verifier, **cookie_options)
+    return response
+
+
+@api_router.get("/auth/google/callback", include_in_schema=False)
+async def google_login_callback(request: Request, code: str = "", state: str = ""):
+    """Verify Google's callback, link/provision the user, then set a session."""
+    def failed_login() -> RedirectResponse:
+        response = RedirectResponse("/login?error=google_sign_in_failed", status_code=303)
+        for name in ("bodha_oauth_state", "bodha_oauth_nonce", "bodha_oauth_verifier"):
+            response.delete_cookie(name, path="/api/auth/google")
+        return response
+
+    if (
+        not _configured_google_oauth()
+        or not code
+        or not request
+        or not secrets.compare_digest(state, request.cookies.get("bodha_oauth_state", ""))
+    ):
+        return failed_login()
+
+    nonce = request.cookies.get("bodha_oauth_nonce", "")
+    verifier = request.cookies.get("bodha_oauth_verifier", "")
+    if not nonce or not verifier:
+        return failed_login()
+
+    try:
+        token_response = await asyncio.to_thread(
+            requests.post,
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": GOOGLE_OAUTH_CLIENT_ID,
+                "client_secret": GOOGLE_OAUTH_CLIENT_SECRET,
+                "redirect_uri": _oauth_callback_url(),
+                "grant_type": "authorization_code",
+                "code_verifier": verifier,
+            },
+            timeout=10,
+        )
+        token_response.raise_for_status()
+        identity_token = token_response.json()["id_token"]
+        claims = await asyncio.to_thread(
+            id_token.verify_oauth2_token,
+            identity_token,
+            GoogleRequest(),
+            GOOGLE_OAUTH_CLIENT_ID,
+        )
+        if not claims.get("email_verified") or not secrets.compare_digest(claims.get("nonce", ""), nonce):
+            raise ValueError("Google account email or nonce could not be verified")
+        email = str(claims["email"]).lower()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Google OAuth callback verification failed: %s", exc)
+        return failed_login()
+
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user:
+        user = {
+            "id": str(uuid.uuid4()),
+            "email": email,
+            "full_name": str(claims.get("name") or email.split("@", 1)[0]),
+            # A caller can never select this role. Administrators are explicitly
+            # allowlisted via deployment configuration and must sign in with it.
+            "role": "admin" if email in _admin_emails() else "teacher",
+            "google_subject": str(claims["sub"]),
+            "created_at": utcnow_iso(),
+        }
+        await db.users.insert_one(user)
+    elif not user.get("google_subject"):
+        # Verified Google email ownership is sufficient to link a legacy local
+        # account. Remove its password hash so the old credential cannot return.
+        user["google_subject"] = str(claims["sub"])
+        user.pop("password_hash", None)
+        await db.users.update_one({"id": user["id"]}, {"$set": user})
+
+    response = RedirectResponse("/", status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        create_token(user["id"], user["role"], user["email"]),
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE,
+        samesite="lax",
+        max_age=7 * 24 * 60 * 60,
+        path="/",
+    )
+    for name in ("bodha_oauth_state", "bodha_oauth_nonce", "bodha_oauth_verifier"):
+        response.delete_cookie(name, path="/api/auth/google")
+    return response
+
+
+@api_router.post("/auth/logout", status_code=204)
+async def logout():
+    response = Response(status_code=204)
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    return response
 
 
 @api_router.get("/auth/me", response_model=UserPublic)

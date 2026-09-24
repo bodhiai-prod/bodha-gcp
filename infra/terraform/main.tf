@@ -121,6 +121,15 @@ resource "google_storage_bucket_iam_member" "app_objects" {
   member = "serviceAccount:${google_service_account.app.email}"
 }
 
+# The application performs a bucket-metadata read during its readiness check.
+# Object Admin covers object operations, while this grants only bucket-level
+# read access to the application's own bucket.
+resource "google_storage_bucket_iam_member" "app_bucket_metadata" {
+  bucket = google_storage_bucket.app.name
+  role   = "roles/storage.legacyBucketReader"
+  member = "serviceAccount:${google_service_account.app.email}"
+}
+
 # `gcloud builds submit` stages the source in this Google-managed bucket, then
 # the project's default Compute Engine service account reads that archive to
 # start the build.  Grant only the read permission required for that hand-off.
@@ -166,7 +175,7 @@ resource "google_service_account_iam_member" "cloudbuild_uses_vm_sa" {
 }
 
 resource "google_secret_manager_secret" "runtime" {
-  for_each  = toset(["bodha-mongo-url", "bodha-jwt-secret", "bodha-openrouter-api-key"])
+  for_each  = toset(["bodha-mongo-url", "bodha-jwt-secret", "bodha-openrouter-api-key", "bodha-google-oauth-client-secret"])
   secret_id = each.value
   replication {
     auto {}
@@ -270,6 +279,8 @@ resource "google_compute_instance" "app" {
       storage_prefix = var.storage_prefix
       app_domain     = var.app_domain
       cors_origins   = var.cors_origins
+      google_oauth_client_id = var.google_oauth_client_id
+      admin_emails   = var.admin_emails
     })
   }
 

@@ -1,29 +1,12 @@
-import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import React from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { toast } from "sonner";
 import { ArrowRight, BookOpen } from "@phosphor-icons/react";
 
 export default function Login() {
-  const { login } = useAuth();
-  const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      await login(email, password);
-      toast.success("Welcome back");
-      navigate("/");
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || "Login failed");
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const { loginWithGoogle } = useAuth();
+  const [params] = useSearchParams();
+  const failed = params.get("error") === "google_sign_in_failed";
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2 bg-[#FAFAFA]">
@@ -75,65 +58,31 @@ export default function Login() {
 
       {/* Right side: Form */}
       <div className="flex items-center justify-center p-6 lg:p-12">
-        <form
-          onSubmit={onSubmit}
-          data-testid="login-form"
-          className="w-full max-w-md qp-card hard-shadow-static"
-        >
+        <section data-testid="login-form" className="w-full max-w-md qp-card hard-shadow-static">
           <div className="overline text-neutral-500 mb-2">// AUTH / 01</div>
           <h2 className="font-display text-4xl mb-2">Sign in.</h2>
           <p className="text-neutral-600 mb-8 text-sm">
-            Enter your credentials to access the studio.
+            Continue securely with your Google account.
           </p>
-
-          <div className="mb-4">
-            <label className="qp-label">Email</label>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="teacher@school.edu"
-              className="qp-input"
-              data-testid="login-email-input"
-            />
-          </div>
-
-          <div className="mb-6">
-            <label className="qp-label">Password</label>
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="qp-input"
-              data-testid="login-password-input"
-            />
-          </div>
+          {failed && (
+            <p className="mb-6 border-2 border-red-700 bg-red-50 p-3 text-sm text-red-800" role="alert">
+              Google sign-in could not be completed. Please try again.
+            </p>
+          )}
 
           <button
-            type="submit"
-            disabled={submitting}
+            type="button"
+            onClick={loginWithGoogle}
             className="qp-btn qp-btn-primary w-full"
-            data-testid="login-submit-button"
+            data-testid="google-login-button"
           >
-            {submitting ? "Signing in..." : "Sign in"}
+            Continue with Google
             <ArrowRight size={16} weight="bold" />
           </button>
-
           <p className="mt-6 text-sm text-neutral-600">
-            No account yet?{" "}
-            <Link
-              to="/register"
-              className="font-bold underline underline-offset-4 hover:text-[#002FA7]"
-              data-testid="go-to-register-link"
-            >
-              Create one
-            </Link>
+            Your Google account is verified before a Bodha AI session is created.
           </p>
-        </form>
+        </section>
       </div>
     </div>
   );

@@ -30,6 +30,7 @@ secret_to_env() {
 
 secret_to_env JWT_SECRET bodha-jwt-secret
 secret_to_env OPENROUTER_API_KEY bodha-openrouter-api-key
+secret_to_env GOOGLE_OAUTH_CLIENT_SECRET bodha-google-oauth-client-secret
 
 cat >>"$env_file" <<EOF
 GCP_PROJECT_ID=${GCP_PROJECT_ID:?}
@@ -39,6 +40,10 @@ STORAGE_BUCKET=${STORAGE_BUCKET:?}
 STORAGE_PREFIX=${STORAGE_PREFIX:-bodhiai}
 APP_NAME=${APP_NAME:-qpgen}
 CORS_ORIGINS=${CORS_ORIGINS:?}
+APP_BASE_URL=https://${APP_DOMAIN:?}
+GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:?}
+ADMIN_EMAILS=${ADMIN_EMAILS:-}
+SESSION_COOKIE_SECURE=true
 TEXT_PROVIDER=openrouter
 IMAGE_PROVIDER=openrouter
 VISION_OCR_ENABLED=true
