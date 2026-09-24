@@ -4,6 +4,11 @@ substitutions:
   _VM_NAME: bodha-prod
   _VM_ZONE: asia-south1-a
 
+# Use the least-privilege account provisioned by Terraform.  Without this,
+# manual submissions use the default Compute Engine account, which cannot push
+# release images or write build logs.
+serviceAccount: projects/bodha-ai-prod/serviceAccounts/bodha-prod-build@bodha-ai-prod.iam.gserviceaccount.com
+
 steps:
   - name: gcr.io/cloud-builders/docker
     args: ["build", "-t", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/backend:$BUILD_ID", "backend"]
