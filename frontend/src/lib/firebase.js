@@ -8,12 +8,19 @@ const firebaseConfig = {
   appId: process.env.REACT_APP_FIREBASE_APP_ID,
 };
 
-export const firebaseConfigured = Object.values(firebaseConfig).every(Boolean);
+// `appId` is useful for Firebase products such as Analytics, but Firebase
+// Authentication only requires these three options. Keeping it optional also
+// makes an auth-only web app resilient if it was registered without an app ID.
+const requiredFirebaseOptions = ["apiKey", "authDomain", "projectId"];
+const missingFirebaseOptions = requiredFirebaseOptions.filter((key) => !firebaseConfig[key]);
+export const firebaseConfigured = missingFirebaseOptions.length === 0;
 export const firebaseAuth = firebaseConfigured ? getAuth(initializeApp(firebaseConfig)) : null;
 
 export function requireFirebaseAuth() {
   if (!firebaseAuth) {
-    throw new Error("Firebase Authentication is not configured for this deployment.");
+    throw new Error(
+      `Firebase Authentication is not configured for this deployment. Missing: ${missingFirebaseOptions.join(", ")}.`
+    );
   }
   return firebaseAuth;
 }

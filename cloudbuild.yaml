@@ -3,9 +3,12 @@ substitutions:
   _REPOSITORY: bodha
   _VM_NAME: bodha-prod
   _VM_ZONE: asia-south1-a
-  _FIREBASE_API_KEY: ""
-  _FIREBASE_AUTH_DOMAIN: ""
-  _FIREBASE_APP_ID: ""
+  # Firebase Web configuration is public client-side configuration, not a
+  # credential. Keeping it here makes production builds reproducible and
+  # avoids accidental empty values from a manually entered substitution.
+  _FIREBASE_API_KEY: "AIzaSyBQ2GHQuGybTbm7OIPa7-zJ57ZFL9ImCF0"
+  _FIREBASE_AUTH_DOMAIN: "bodha-ai-prod.firebaseapp.com"
+  _FIREBASE_APP_ID: "1:102946766569:web:80504ce59806b026823a78"
 
 # Use the least-privilege account provisioned by Terraform.  Without this,
 # manual submissions use the default Compute Engine account, which cannot push

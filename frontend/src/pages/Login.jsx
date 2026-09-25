@@ -67,12 +67,12 @@ export default function Login({ mode = "login" }) {
         <div className="overline text-neutral-600">© Bodha AI — Academic control room</div>
       </div>
     </div>
-    <div className="flex items-center justify-center p-6 lg:p-12"><section data-testid="login-form" className="w-full max-w-md qp-card hard-shadow-static">
+    <div className="flex min-h-screen items-start justify-center p-4 lg:items-center lg:p-6"><section data-testid="login-form" className="w-full max-w-md qp-card hard-shadow-static lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
       <div className="overline text-neutral-500 mb-2">// AUTH / {isRegister ? "02" : "01"}</div>
-      <h2 className="font-display text-4xl mb-2">{isRegister ? "Create account." : "Sign in."}</h2>
-      <p className="text-neutral-600 mb-6 text-sm">{isRegister ? "Use your email and password, or continue with Google." : "Sign in with your email and password, or continue with Google."}</p>
-      {error && <p className="mb-5 border-2 border-red-700 bg-red-50 p-3 text-sm text-red-800" role="alert">{error}</p>}
-      <form onSubmit={submit} className="space-y-4">
+      <h2 className="font-display text-3xl mb-2">{isRegister ? "Create account." : "Sign in."}</h2>
+      <p className="text-neutral-600 mb-4 text-sm">{isRegister ? "Use your email and password, or continue with Google." : "Sign in with your email and password, or continue with Google."}</p>
+      {error && <p className="mb-3 border-2 border-red-700 bg-red-50 p-2 text-sm text-red-800" role="alert">{error}</p>}
+      <form onSubmit={submit} className="space-y-3">
         {isRegister && <ProfileFields form={form} onChange={update} includeName />}
         <div><label className="qp-label" htmlFor="email">Email address</label><input id="email" name="email" type="email" autoComplete="email" required value={form.email} onChange={update} className="qp-input" /></div>
         <PasswordField id="password" label="Password" value={form.password} onChange={update} autoComplete={isRegister ? "new-password" : "current-password"} hint={isRegister ? "Use at least 8 characters." : null} />
@@ -80,9 +80,9 @@ export default function Login({ mode = "login" }) {
         {!isRegister && <div className="text-right"><Link to="/forgot-password" className="text-sm font-bold text-[#002FA7] underline">Forgot password?</Link></div>}
         <button type="submit" disabled={submitting} className="qp-btn qp-btn-primary w-full" data-testid="email-auth-submit">{submitting ? "Please wait…" : isRegister ? "Create account" : "Sign in"}{!submitting && <ArrowRight size={16} weight="bold" />}</button>
       </form>
-      <div className="flex items-center gap-3 my-6 text-neutral-500" aria-hidden="true"><div className="h-px bg-neutral-300 flex-1" /><span className="overline text-[10px]">or</span><div className="h-px bg-neutral-300 flex-1" /></div>
+      <div className="flex items-center gap-3 my-4 text-neutral-500" aria-hidden="true"><div className="h-px bg-neutral-300 flex-1" /><span className="overline text-[10px]">or</span><div className="h-px bg-neutral-300 flex-1" /></div>
       <button type="button" onClick={continueWithGoogle} className="qp-btn qp-btn-secondary w-full" data-testid="google-login-button">Continue with Google <ArrowRight size={16} weight="bold" /></button>
-      <p className="mt-6 text-sm text-neutral-600">{isRegister ? <>Already have an account? <Link to="/login" className="font-bold text-[#002FA7] underline">Sign in</Link></> : <>New to Bodha AI? <Link to="/register" className="font-bold text-[#002FA7] underline">Create an account</Link></>}</p>
+      <p className="mt-4 text-sm text-neutral-600">{isRegister ? <>Already have an account? <Link to="/login" className="font-bold text-[#002FA7] underline">Sign in</Link></> : <>New to Bodha AI? <Link to="/register" className="font-bold text-[#002FA7] underline">Create an account</Link></>}</p>
     </section></div>
   </div>;
 }
