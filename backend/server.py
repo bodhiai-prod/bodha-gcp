@@ -167,10 +167,25 @@ class UserPublic(BaseModel):
     email: EmailStr
     full_name: str
     role: str
+    school_name: str = ""
+    board: str = ""
+    board_other_name: str = ""
+    created_at: str = ""
+    profile_complete: bool = False
 
 
 class FirebaseSyncRequest(BaseModel):
     full_name: str = Field(default="", max_length=120)
+    school_name: str = Field(default="", max_length=160)
+    board: str = Field(default="", max_length=40)
+    board_other_name: str = Field(default="", max_length=120)
+
+
+class ProfileUpdateRequest(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=120)
+    school_name: str = Field(..., min_length=1, max_length=160)
+    board: str = Field(..., min_length=1, max_length=40)
+    board_other_name: str = Field(default="", max_length=120)
 
 
 def _admin_emails() -> set[str]:
@@ -178,6 +193,37 @@ def _admin_emails() -> set[str]:
         email.strip().lower()
         for email in os.getenv("ADMIN_EMAILS", "").split(",")
         if email.strip()
+    }
+
+
+BOARD_CHOICES = {"CBSE", "ICSE", "West Bengal Board", "Other"}
+
+
+def _profile_values(
+    school_name: str,
+    board: str,
+    board_other_name: str,
+    *,
+    require_complete: bool,
+) -> dict:
+    """Normalize and validate the application-owned part of a user profile."""
+    school_name = school_name.strip()
+    board = board.strip()
+    board_other_name = board_other_name.strip()
+    if not school_name and not board and not board_other_name and not require_complete:
+        return {}
+    if not school_name or not board:
+        raise HTTPException(status_code=422, detail="School name and board are required")
+    if board not in BOARD_CHOICES:
+        raise HTTPException(status_code=422, detail="Choose a valid board")
+    if board == "Other" and not board_other_name:
+        raise HTTPException(status_code=422, detail="Enter the name of your board")
+    if board != "Other":
+        board_other_name = ""
+    return {
+        "school_name": school_name,
+        "board": board,
+        "board_other_name": board_other_name,
     }
 
 class TextbookSummary(BaseModel):
@@ -311,11 +357,19 @@ class MissingQuestionsRequest(BaseModel):
 # Helpers
 # =========================================================
 def serialize_user(doc: dict) -> dict:
+    school_name = (doc.get("school_name") or "").strip()
+    board = (doc.get("board") or "").strip()
+    board_other_name = (doc.get("board_other_name") or "").strip()
     return {
         "id": doc["id"],
         "email": doc["email"],
         "full_name": doc["full_name"],
         "role": doc["role"],
+        "school_name": school_name,
+        "board": board,
+        "board_other_name": board_other_name,
+        "created_at": doc.get("created_at", ""),
+        "profile_complete": bool(school_name and board and (board != "Other" or board_other_name)),
     }
 
 
@@ -454,6 +508,9 @@ async def sync_firebase_user(
 ):
     """Provision a Bodha profile after Firebase has verified authentication."""
     user = await db.users.find_one({"id": identity["id"]}, {"_id": 0})
+    profile = _profile_values(
+        payload.school_name, payload.board, payload.board_other_name, require_complete=False
+    )
     if not user:
         full_name = payload.full_name.strip() or identity["email"].split("@", 1)[0]
         user = {
@@ -462,8 +519,16 @@ async def sync_firebase_user(
             "full_name": full_name,
             "role": "admin" if identity["email"] in _admin_emails() else "teacher",
             "created_at": utcnow_iso(),
+            **profile,
         }
         await db.users.insert_one(user)
+    elif profile:
+        # Sync may happen more than once after Firebase state changes. Only an
+        # explicitly supplied onboarding profile updates these user-owned fields.
+        if payload.full_name.strip():
+            profile["full_name"] = payload.full_name.strip()
+        await db.users.update_one({"id": identity["id"]}, {"$set": profile})
+        user.update(profile)
     return UserPublic(**serialize_user(user))
 
 
@@ -473,6 +538,46 @@ async def me(user: dict = Depends(get_current_user)):
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
     return UserPublic(**serialize_user(u))
+
+
+@api_router.patch("/auth/profile", response_model=UserPublic)
+async def update_profile(
+    payload: ProfileUpdateRequest,
+    user: dict = Depends(get_current_user),
+):
+    profile = _profile_values(
+        payload.school_name, payload.board, payload.board_other_name, require_complete=True
+    )
+    values = {"full_name": payload.full_name.strip(), **profile}
+    await db.users.update_one({"id": user["id"]}, {"$set": values})
+    updated = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    return UserPublic(**serialize_user(updated))
+
+
+@api_router.get("/auth/account")
+async def account_summary(user: dict = Depends(get_current_user)):
+    """Return profile plus the exact activity totals displayed on the user's dashboard."""
+    record = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    if not record:
+        raise HTTPException(status_code=404, detail="User not found")
+    active = {"is_deleted": False}
+    if user["role"] == "student":
+        tests = await db.mock_tests.find({"owner_id": user["id"]}, {"_id": 0, "status": 1, "score": 1}).to_list(500)
+        submitted = [test for test in tests if test.get("status") == "submitted"]
+        average_score = (
+            round(sum((test.get("score") or {}).get("percent", 0) for test in submitted) / len(submitted))
+            if submitted else None
+        )
+        stats = {"kind": "student", "total_tests": len(tests), "submitted_tests": len(submitted), "average_score": average_score}
+    else:
+        textbook_query = active if user["role"] == "admin" else {**active, "$or": [{"owner_id": user["id"]}, {"is_shared": True}]}
+        stats = {
+            "kind": "teacher",
+            "textbooks_indexed": await db.textbooks.count_documents(textbook_query),
+            "papers_generated": await db.papers.count_documents({**active, "owner_id": user["id"]}),
+            "questions_saved": await db.qbank.count_documents({**active, "owner_id": user["id"]}),
+        }
+    return {"user": UserPublic(**serialize_user(record)), "stats": stats}
 
 
 # =========================================================
