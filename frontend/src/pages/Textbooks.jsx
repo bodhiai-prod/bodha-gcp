@@ -311,12 +311,13 @@ export default function Textbooks() {
                         <button
                           onClick={() => deleteTextbook(tb.id)}
                           disabled={tb.is_owned === false}
-                          className="qp-btn qp-btn-secondary h-10 w-10 justify-center px-0 text-xs"
+                          className="qp-btn qp-btn-danger min-h-11 justify-center whitespace-nowrap text-xs"
                           aria-label="Delete textbook"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`delete-textbook-${tb.id}`}
                         >
-                          <Trash size={14} weight="bold" />
+                          <Trash size={16} weight="bold" />
+                          Delete
                         </button>
                       </div>
                     </div>

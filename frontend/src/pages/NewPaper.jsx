@@ -50,6 +50,8 @@ export default function NewPaper() {
   const [concept, setConcept] = useState(40);
   const [selectedTopics, setSelectedTopics] = useState([]);
   const [expandedTopics, setExpandedTopics] = useState({});
+  const [activeTopicBookId, setActiveTopicBookId] = useState("");
+  const [topicSearch, setTopicSearch] = useState("");
   // Scoped by book and parent so similarly named subtopics stay independent.
   const [topicDifficulties, setTopicDifficulties] = useState({});
   const [generating, setGenerating] = useState(false);
@@ -159,6 +161,15 @@ export default function NewPaper() {
       });
     });
   }, [selectedTbIds]); // eslint-disable-line
+
+  // The picker shows one selected textbook at a time, while selection itself
+  // continues to work across every selected textbook.
+  useEffect(() => {
+    if (!selectedTbIds.includes(activeTopicBookId)) {
+      setActiveTopicBookId(selectedTbIds[0] || "");
+      setTopicSearch("");
+    }
+  }, [selectedTbIds, activeTopicBookId]);
 
   const addTextbook = (id) => {
     if (!id) return;
@@ -430,7 +441,7 @@ export default function NewPaper() {
   return (
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
-      <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="new-paper-page">
+      <main className="new-paper-page max-w-7xl mx-auto p-6 md:p-12" data-testid="new-paper-page">
         <div className="overline text-neutral-500 mb-3">// NEW PAPER</div>
         <h1 className="font-display text-5xl md:text-6xl mb-10">
           Tune the
@@ -442,9 +453,9 @@ export default function NewPaper() {
           {["Setup", "Questions", "Review"].map((label, index) => <button key={label} type="button" className={step === index ? "is-active" : ""} aria-current={step === index ? "step" : undefined} onClick={() => setStep(index)}>{index + 1}. {label}</button>)}
         </nav>
 
-        <form onSubmit={onGenerate} className="grid grid-cols-1 lg:grid-cols-5 gap-6 md:gap-8">
+        <form onSubmit={onGenerate} className="grid grid-cols-1 gap-6 md:gap-8 lg:grid-cols-[minmax(0,1.25fr)_minmax(28rem,1fr)]">
           {/* Left: Metadata + distribution */}
-          <div className="lg:col-span-3 space-y-6">
+          <div className="space-y-6">
             {step === 0 && <>
             <ExpandableCard id="metadata" title="Paper details" summary={`${selectedTbIds.length} textbooks · ${totalMarks} marks · ${duration} minutes`} defaultOpen>
               <div className="mb-4">
@@ -834,14 +845,14 @@ Make Q23 as hard as possible`}
           </div>
 
           {/* Right: Topics + submit */}
-          <div className="lg:col-span-2 space-y-6">
+          <div className="space-y-5">
             {step !== 2 && <section className="qp-card" data-testid="persistent-difficulty-card">
               <h2 className="font-bold uppercase text-sm tracking-wide mb-4">Difficulty</h2>
               <div className="grid grid-cols-3 border-2 border-black">
                 {DIFFICULTIES.map((d, i) => <button key={d} type="button" onClick={() => setDifficulty(d)} data-testid={`difficulty-${d}-button`} className={`py-3 font-bold uppercase tracking-wider text-sm transition-colors ${difficulty === d ? "bg-black text-white" : "bg-white hover:bg-neutral-100"} ${i !== 2 ? "border-r-2 border-black" : ""}`}>{DIFFICULTY_LABELS[d]}</button>)}
               </div>
             </section>}
-            <ConfigurationSummary preview={preview?.requestKey === requestKey ? preview : null} loading={previewLoading} error={previewError} />
+            <ConfigurationSummary compact preview={preview?.requestKey === requestKey ? preview : null} loading={previewLoading} error={previewError} />
             {!blueprint && <ExpandableCard id="topics" title="Topic selection (no blueprint)" summary={`${selectedTopics.length} selected · Default: ${DIFFICULTY_LABELS[difficulty]}`} defaultOpen>
 
               {selectedTbIds.length === 0 && (
@@ -857,12 +868,46 @@ Make Q23 as hard as possible`}
                 </p>
               )}
 
+              {selectedTbIds.length > 1 && (
+                <div className="topic-book-switcher" role="tablist" aria-label="Selected textbooks">
+                  {selectedTbIds.map((bookId) => {
+                    const tb = textbooks.find((t) => t.id === bookId);
+                    const selectedCount = selectedTopics.filter((topic) => topic.textbook_id === bookId).length;
+                    return <button
+                      key={bookId}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTopicBookId === bookId}
+                      className={activeTopicBookId === bookId ? "is-active" : ""}
+                      onClick={() => { setActiveTopicBookId(bookId); setTopicSearch(""); }}
+                    >
+                      <span className="truncate">{(tb?.original_filename || "Textbook").slice(0, 24)}</span>
+                      <span>{selectedCount} selected</span>
+                    </button>;
+                  })}
+                </div>
+              )}
+
+              {selectedTbIds.length > 0 && anyTopics && (
+                <div className="topic-search-wrap">
+                  <label className="sr-only" htmlFor="topic-search">Search topics or subtopics</label>
+                  <input
+                    id="topic-search"
+                    value={topicSearch}
+                    onChange={(e) => setTopicSearch(e.target.value)}
+                    placeholder="Search topics or subtopics..."
+                    className="qp-input topic-search-input"
+                    data-testid="topic-search-input"
+                  />
+                </div>
+              )}
+
               <div
-                className="chapter-selection-scroll space-y-5"
+                className="chapter-selection-scroll space-y-4"
                 aria-label="Chapters and subtopics"
                 data-testid="topic-selection-scroll"
               >
-                {selectedTbIds.map((bookId) => {
+                {selectedTbIds.filter((bookId) => bookId === activeTopicBookId).map((bookId) => {
                   const detail = tbDetails[bookId];
                   const tb = textbooks.find((t) => t.id === bookId);
                   const topics = detail?.topics || [];
@@ -878,6 +923,13 @@ Make Q23 as hard as possible`}
                     selectedBookTopicCount === bookTopicNames.length;
                   const someBookTopicsSelected =
                     selectedBookTopicCount > 0 && !allBookTopicsSelected;
+                  const visibleTopics = topicSearch.trim()
+                    ? topics.filter((topic) => {
+                      const search = topicSearch.trim().toLowerCase();
+                      return topic.name.toLowerCase().includes(search) ||
+                        (topic.subtopics || []).some((subtopic) => subtopic.toLowerCase().includes(search));
+                    })
+                    : topics;
                   return (
                     <div key={bookId} data-testid={`book-topics-${bookId}`}>
                       <div className="flex items-center justify-between mb-2">
@@ -947,7 +999,10 @@ Make Q23 as hard as possible`}
                               {selectedBookTopicCount}/{bookTopicNames.length}
                             </span>
                           </button>
-                          {topics.map((t, i) => {
+                          {visibleTopics.length === 0 && (
+                            <p className="topic-search-empty">No topics or subtopics match “{topicSearch}”.</p>
+                          )}
+                          {visibleTopics.map((t, i) => {
                             const expansionKey = topicKey(bookId, t.name);
                             const expanded = !!expandedTopics[expansionKey];
                             const selectedSubtopics = (t.subtopics || []).filter((name) =>
@@ -1055,7 +1110,9 @@ Make Q23 as hard as possible`}
               </div>
             </ExpandableCard>}
 
-            {step < 2 ? <button type="button" onClick={() => setStep(current => current + 1)} className="qp-btn qp-btn-primary w-full text-base py-4" data-testid="save-next-button">Save &amp; next<ArrowRight size={16} weight="bold" /></button> : <button type="submit" disabled={generating} className="qp-btn qp-btn-primary w-full text-base py-4" data-testid="generate-paper-button"><Sparkle size={18} weight="bold" />{generating ? "Generating..." : "Save and generate"}<ArrowRight size={16} weight="bold" /></button>}
+            <div className="paper-action-bar">
+              {step < 2 ? <button type="button" onClick={() => setStep(current => current + 1)} className="qp-btn qp-btn-primary w-full text-base py-4" data-testid="save-next-button">Save &amp; next<ArrowRight size={16} weight="bold" /></button> : <button type="submit" disabled={generating} className="qp-btn qp-btn-primary w-full text-base py-4" data-testid="generate-paper-button"><Sparkle size={18} weight="bold" />{generating ? "Generating..." : "Save and generate"}<ArrowRight size={16} weight="bold" /></button>}
+            </div>
           </div>
         </form>
       </main>
