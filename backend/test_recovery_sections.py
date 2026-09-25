@@ -2,7 +2,7 @@ import json
 import unittest
 
 from llm_adapter import parse_json_response
-from workers import align_blueprint_sections, restore_recovered_sections
+from workers import align_blueprint_sections, reconcile_section_plan, restore_recovered_sections
 
 
 class RecoverySectionTests(unittest.TestCase):
@@ -62,6 +62,29 @@ class RecoverySectionTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(len(sections), 1)
         self.assertEqual([question["id"] for question in sections[0]["questions"]], ["old", "new"])
+
+    def test_existing_non_blueprint_topup_uses_current_section_name_and_order(self):
+        sections, plan, changed = reconcile_section_plan([
+            {"title": "Section A - Information Based", "questions": [{"id": "one"}]},
+            {"title": "Section B - Concept Based", "questions": [{"id": "two"}]},
+            {"title": "Section A - Top-Up Questions", "questions": [{"id": "three"}]},
+            {"title": "Section A", "questions": [{"id": "four"}]},
+        ])
+
+        self.assertTrue(changed)
+        self.assertEqual([row["title"] for row in plan], [
+            "Section A - Information Based", "Section B - Concept Based", "Section A",
+        ])
+        self.assertEqual([section["title"] for section in sections], [
+            "Section A - Information Based", "Section B - Concept Based", "Section A",
+        ])
+        self.assertEqual([question["id"] for question in sections[-1]["questions"]], ["four", "three"])
+        self.assertTrue(all(question.get("section_id") for section in sections for question in section["questions"]))
+
+        second_sections, second_plan, changed_again = reconcile_section_plan(sections, plan)
+        self.assertFalse(changed_again)
+        self.assertEqual(second_sections, sections)
+        self.assertEqual(second_plan, plan)
 
 
 if __name__ == "__main__":

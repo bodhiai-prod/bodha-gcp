@@ -893,7 +893,7 @@ def qgen_prompt(
         f"{DIAGRAM_POLICY}"
         "Return ONLY strict JSON of the form:\n"
         "{\n"
-        '  "instructions": "short instruction line",\n'
+        '  "instructions": "short student-facing exam instruction line",\n'
         '  "sections": [\n'
         '    { "title": "Section A - Information Based",\n'
         '      "questions": [\n'
@@ -925,6 +925,8 @@ def qgen_prompt(
         "no '#' headings, no backticks, no bullet '-' or '*' markers at the start of "
         "lines. Use plain prose. Question numbering is added by the renderer; do NOT "
         "prefix questions with 'Q1.', '1.', '(i)' or similar yourself.\n"
+        "- The instructions field is printed for students. Never mention LaTeX, JSON, "
+        "formatting, rendering, prompts, models, or other implementation details.\n"
         "- No prose outside the JSON.\n\n"
         f"=== TEXTBOOK CONTEXT (style & scope only, DO NOT COPY) ===\n{context_excerpt}\n=== END ==="
     )

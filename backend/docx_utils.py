@@ -15,6 +15,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 from PIL import Image
+from export_utils import format_mark, printable_instructions
 
 
 DOCX_POOL_MAX_WORKERS = int(os.environ.get("DOCX_POOL_MAX_WORKERS", "4"))
@@ -70,6 +71,10 @@ def _latex_to_ast(source: str):
             nodes.extend(_latex_to_ast(group))
             continue
         if char == "\\":
+            if source.startswith("\\\\", cursor):
+                nodes.append(("text", "; "))
+                cursor += 2
+                continue
             end = cursor + 1
             while end < len(source) and source[end].isalpha():
                 end += 1
@@ -82,6 +87,11 @@ def _latex_to_ast(source: str):
                 numerator, cursor = _latex_group(source, end)
                 denominator, cursor = _latex_group(source, cursor)
                 nodes.append(("frac", _latex_to_ast(numerator), _latex_to_ast(denominator)))
+                continue
+            if command in {"begin", "end"}:
+                environment, cursor = _latex_group(source, end)
+                if command == "begin" and environment in {"cases", "array", "aligned"}:
+                    nodes.append(("text", "{ " if environment == "cases" else ""))
                 continue
             if command == "sqrt":
                 if end < len(source) and source[end] == "[":
@@ -102,6 +112,10 @@ def _latex_to_ast(source: str):
                 continue
             nodes.append(("text", _LATEX_SYMBOLS.get(command, command)))
             cursor = end
+            continue
+        if char == "&":
+            nodes.append(("text", "  "))
+            cursor += 1
             continue
         if char in "^_":
             if nodes:
@@ -152,7 +166,12 @@ def _omml_node(node):
         return fraction
     if kind == "sqrt":
         radical = OxmlElement("m:rad")
-        radical.append(OxmlElement("m:radPr"))
+        properties = OxmlElement("m:radPr")
+        degree_hidden = OxmlElement("m:degHide")
+        degree_hidden.set(qn("m:val"), "1")
+        properties.append(degree_hidden)
+        radical.append(properties)
+        radical.append(OxmlElement("m:deg"))
         radical.append(_omml_arg(node[1]))
         return radical
     if kind in {"sup", "sub"}:
@@ -166,13 +185,16 @@ def _omml_node(node):
     return _omml_run(str(node))
 
 
-def _append_native_equation(paragraph, latex: str) -> None:
-    math_para = OxmlElement("m:oMathPara")
+def _append_native_equation(paragraph, latex: str, *, display: bool = False) -> None:
     math = OxmlElement("m:oMath")
     for node in _latex_to_ast(latex.strip()):
         math.append(_omml_node(node))
-    math_para.append(math)
-    paragraph._p.append(math_para)
+    if display:
+        math_para = OxmlElement("m:oMathPara")
+        math_para.append(math)
+        paragraph._p.append(math_para)
+    else:
+        paragraph._p.append(math)
 
 
 def shutdown_docx_pool() -> None:
@@ -216,6 +238,22 @@ def _set_table_borders(table, color="FFFFFF"):
             border = OxmlElement(f"w:{edge}")
             borders.append(border)
         border.set(qn("w:val"), "nil")
+        border.set(qn("w:color"), color)
+
+
+def _set_visible_table_borders(table, color="000000"):
+    table_properties = table._tbl.tblPr
+    borders = table_properties.first_child_found_in("w:tblBorders")
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        table_properties.append(borders)
+    for edge in ("top", "left", "bottom", "insideH", "insideV", "right"):
+        border = borders.find(qn(f"w:{edge}"))
+        if border is None:
+            border = OxmlElement(f"w:{edge}")
+            borders.append(border)
+        border.set(qn("w:val"), "single")
+        border.set(qn("w:sz"), "6")
         border.set(qn("w:color"), color)
 
 
@@ -270,7 +308,7 @@ def _set_row_cant_split(row):
     properties.append(cant_split)
 
 
-def _add_equation_block(container, latex: str) -> None:
+def _add_equation_block(container, latex: str):
     paragraph = container.add_paragraph()
     paragraph.paragraph_format.left_indent = Inches(0.25)
     paragraph.paragraph_format.right_indent = Inches(0.25)
@@ -278,9 +316,8 @@ def _add_equation_block(container, latex: str) -> None:
     paragraph.paragraph_format.space_after = Pt(4)
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _set_keep(paragraph, keep_together=True)
-    _set_cell_or_paragraph_shading(paragraph, "F3F6FA")
-    _set_cell_or_paragraph_border(paragraph)
-    _append_native_equation(paragraph, latex)
+    _append_native_equation(paragraph, latex, display=True)
+    return paragraph
 
 
 def _append_rich_text(paragraph, container, text: str):
@@ -291,6 +328,7 @@ def _append_rich_text(paragraph, container, text: str):
         return paragraph
 
     cursor = 0
+    last_block = None
     for match in matches:
         if match.start() > cursor:
             if paragraph is None:
@@ -304,17 +342,23 @@ def _append_rich_text(paragraph, container, text: str):
             or ""
         )
         if match.group("block"):
-            _add_equation_block(container, latex)
+            last_block = _add_equation_block(container, latex)
             paragraph = None
         else:
             if paragraph is None:
                 paragraph = container.add_paragraph()
-            _append_native_equation(paragraph, latex)
+            _append_native_equation(paragraph, latex, display=False)
         cursor = match.end()
     if cursor < len(text):
-        if paragraph is None:
+        tail = text[cursor:]
+        if paragraph is None and last_block is not None and tail.strip() in {".", ",", ";", ":", "?", "!"}:
+            last_block.add_run(tail)
+            paragraph = last_block
+        elif paragraph is None:
             paragraph = container.add_paragraph()
-        paragraph.add_run(text[cursor:])
+            paragraph.add_run(tail)
+        else:
+            paragraph.add_run(tail)
     return paragraph
 
 
@@ -323,6 +367,14 @@ def _add_text_with_newlines(container, text: str, *, style: Optional[str] = None
     for line in lines:
         paragraph = container.add_paragraph(style=style)
         _append_rich_text(paragraph, container, line)
+
+
+def _grayscale_image_bytes(image_bytes: bytes) -> bytes:
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        grayscale = image.convert("L")
+        output = io.BytesIO()
+        grayscale.save(output, format="PNG")
+        return output.getvalue()
 
 
 def _add_diagram(container, image_bytes: Optional[bytes], available: bool) -> None:
@@ -334,7 +386,8 @@ def _add_diagram(container, image_bytes: Optional[bytes], available: bool) -> No
             paragraph.paragraph_format.space_before = Pt(2)
             paragraph.paragraph_format.space_after = Pt(6)
             _set_keep(paragraph, keep_together=True)
-            _set_cell_or_paragraph_border(paragraph, "BFBFBF")
+            _set_cell_or_paragraph_border(paragraph, "000000")
+            image_bytes = _grayscale_image_bytes(image_bytes)
             with Image.open(io.BytesIO(image_bytes)) as image:
                 width_px, height_px = image.size
             # Keep figures compact enough to sit naturally with the question
@@ -356,8 +409,7 @@ def _add_diagram(container, image_bytes: Optional[bytes], available: bool) -> No
     placeholder.paragraph_format.left_indent = Inches(0.25)
     placeholder.paragraph_format.space_after = Pt(6)
     _set_keep(placeholder, keep_together=True)
-    _set_cell_or_paragraph_shading(placeholder, "FFF4E5")
-    _set_cell_or_paragraph_border(placeholder, "E6A23C")
+    _set_cell_or_paragraph_border(placeholder, "000000")
     placeholder.add_run("[Diagram unavailable]").italic = True
 
 
@@ -365,6 +417,8 @@ def render_paper_docx(
     paper: dict,
     diagram_loader: Optional[Callable[[str, str], Optional[bytes]]] = None,
     branding_loader: Optional[Callable[[str], Optional[bytes]]] = None,
+    *,
+    include_solutions: bool = False,
 ) -> bytes:
     document = Document()
     section = document.sections[0]
@@ -384,6 +438,7 @@ def render_paper_docx(
         header_bytes = branding_loader(header_path)
         if header_bytes:
             try:
+                header_bytes = _grayscale_image_bytes(header_bytes)
                 paragraph = document.add_paragraph()
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 paragraph.add_run().add_picture(
@@ -394,6 +449,8 @@ def render_paper_docx(
 
     for key, size in (("school_name", 15), ("title", 20)):
         value = (paper.get(key) or "").strip()
+        if key == "title" and include_solutions:
+            value = f"{value} - Answer Key"
         if value:
             paragraph = document.add_paragraph()
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -418,21 +475,31 @@ def render_paper_docx(
     metadata_paragraph.paragraph_format.space_after = Pt(10)
     metadata_paragraph.add_run(metadata)
 
-    instructions = paper.get("instructions")
-    if instructions:
-        heading = document.add_paragraph()
-        heading.paragraph_format.space_before = Pt(4)
-        heading.paragraph_format.space_after = Pt(0)
+    instructions = printable_instructions(
+        paper.get("instructions"),
+        custom_instructions=paper.get("custom_instructions") or "",
+    )
+    if not include_solutions:
+        instruction_table = document.add_table(rows=1, cols=1)
+        instruction_table.alignment = WD_TABLE_ALIGNMENT.LEFT
+        instruction_table.autofit = False
+        _set_table_width(instruction_table, 6.65)
+        _set_table_columns(instruction_table, (6.65,))
+        _set_visible_table_borders(instruction_table)
+        instruction_cell = instruction_table.cell(0, 0)
+        _set_cell_margins(instruction_cell, top=90, start=120, bottom=90, end=120)
+        heading = instruction_cell.paragraphs[0]
+        heading.paragraph_format.space_after = Pt(3)
         heading.add_run("Instructions").bold = True
-        _set_cell_or_paragraph_shading(heading, "F3F6FA")
-        _set_cell_or_paragraph_border(heading)
-        body = document.add_paragraph()
-        body.paragraph_format.left_indent = Inches(0.12)
-        body.paragraph_format.right_indent = Inches(0.12)
-        body.paragraph_format.space_after = Pt(10)
-        _set_cell_or_paragraph_shading(body, "F3F6FA")
-        _set_cell_or_paragraph_border(body)
-        _append_rich_text(body, document, instructions)
+        body = instruction_cell.add_paragraph()
+        body.paragraph_format.space_after = Pt(0)
+        _append_rich_text(body, instruction_cell, instructions)
+
+    answer_by_question = {}
+    if include_solutions:
+        for solution_section in (paper.get("solution") or {}).get("sections") or []:
+            for answer in solution_section.get("answers") or []:
+                answer_by_question[answer.get("question_id")] = answer.get("answer") or ""
 
     sections = paper.get("sections") or []
     if not sections:
@@ -440,6 +507,7 @@ def render_paper_docx(
 
     labels = ["(a)", "(b)", "(c)", "(d)"]
     question_number = 1
+    previous_had_diagram = False
     for section_data in sections:
         heading = document.add_paragraph()
         heading.paragraph_format.space_before = Pt(12)
@@ -449,8 +517,12 @@ def render_paper_docx(
         section_run.bold = True
         section_run.font.name = "Arial"
         section_run.font.size = Pt(13)
-        section_run.font.color.rgb = RGBColor(0, 47, 167)
+        section_run.font.color.rgb = RGBColor(0, 0, 0)
         for question in section_data.get("questions", []):
+            if include_solutions and question_number > 1 and (
+                previous_had_diagram or (question_number - 1) % 5 == 0
+            ):
+                document.add_page_break()
             question_table = document.add_table(rows=1, cols=2)
             question_table.alignment = WD_TABLE_ALIGNMENT.LEFT
             question_table.autofit = False
@@ -473,7 +545,7 @@ def render_paper_docx(
             marks_paragraph = marks_cell.paragraphs[0]
             marks_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             marks_paragraph.paragraph_format.space_before = Pt(5)
-            marks_run = marks_paragraph.add_run(f"[{question.get('marks', 0)}]")
+            marks_run = marks_paragraph.add_run(f"[{format_mark(question.get('marks', 0))}]")
             marks_run.bold = True
             _append_rich_text(
                 question_paragraph,
@@ -506,6 +578,23 @@ def render_paper_docx(
                     else None
                 )
                 _add_diagram(question_cell, image_bytes, bool(image_bytes))
+                previous_had_diagram = True
+            else:
+                previous_had_diagram = False
+            if include_solutions:
+                answer_heading = document.add_paragraph()
+                answer_heading.paragraph_format.left_indent = Inches(0.25)
+                answer_heading.paragraph_format.space_before = Pt(5)
+                answer_heading.paragraph_format.space_after = Pt(2)
+                answer_heading.add_run("Answer").bold = True
+                answer_paragraph = document.add_paragraph()
+                answer_paragraph.paragraph_format.left_indent = Inches(0.25)
+                answer_paragraph.paragraph_format.space_after = Pt(7)
+                _append_rich_text(
+                    answer_paragraph,
+                    document,
+                    answer_by_question.get(question.get("id")) or "(no answer)",
+                )
             question_number += 1
 
     footer = (paper.get("branding_footer") or "").strip()
@@ -535,4 +624,28 @@ async def render_paper_docx_async(
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         _DOCX_POOL, render_paper_docx, paper, diagram_loader, branding_loader
+    )
+
+
+def render_solution_docx(
+    paper: dict,
+    diagram_loader: Optional[Callable[[str, str], Optional[bytes]]] = None,
+    branding_loader: Optional[Callable[[str], Optional[bytes]]] = None,
+) -> bytes:
+    return render_paper_docx(
+        paper,
+        diagram_loader=diagram_loader,
+        branding_loader=branding_loader,
+        include_solutions=True,
+    )
+
+
+async def render_solution_docx_async(
+    paper: dict,
+    diagram_loader: Optional[Callable[[str, str], Optional[bytes]]] = None,
+    branding_loader: Optional[Callable[[str], Optional[bytes]]] = None,
+) -> bytes:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _DOCX_POOL, render_solution_docx, paper, diagram_loader, branding_loader
     )

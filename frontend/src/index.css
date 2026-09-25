@@ -352,6 +352,28 @@ pre.math-fallback {
            coloured fill — print white-on-white, i.e. invisible. */
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
+        color: #000 !important;
+    }
+
+    [data-testid="paper-preview"] *,
+    [data-testid="solution-body"] * {
+        color: #000 !important;
+        border-color: #000 !important;
+        text-shadow: none !important;
+    }
+    [data-testid="paper-preview"] section,
+    [data-testid="solution-body"] section,
+    .paper-instructions,
+    [data-testid^="answer-"] {
+        background: #fff !important;
+    }
+    [data-testid="paper-preview"] section > h2,
+    [data-testid="solution-body"] section > h2 {
+        color: #000 !important;
+    }
+    .paper-branding-logo,
+    img[data-testid^="diagram-"] {
+        filter: grayscale(1) !important;
     }
 
     /* --- Never reveal the correct answer on the question paper --- */
@@ -422,6 +444,15 @@ pre.math-fallback {
     [data-testid="failed-banner"] {
         display: none !important;
     }
+}
+
+.paper-branding-logo {
+    display: block;
+    width: auto;
+    height: auto;
+}
+.paper-branding-logo-loading {
+    min-height: 2rem;
 }
 /* Section allocation and backend summary panels. */
 .section-tabs { display:flex; flex-wrap:wrap; gap:4px; border-bottom:2px solid #111; }

@@ -44,7 +44,12 @@ from pdf_utils import (
     render_solution_pdf_async,
     shutdown_pdf_pool,
 )
-from docx_utils import render_paper_docx_async, shutdown_docx_pool
+from docx_utils import (
+    render_paper_docx_async,
+    render_solution_docx_async,
+    shutdown_docx_pool,
+)
+from export_utils import printable_instructions
 from prompts import (
     derive_target_question_count,
     qpaper_extract_prompt,
@@ -64,7 +69,7 @@ from workers import (
     paper_target_count,
     reconcile_solution_shell,
     regenerate_question_background,
-    restore_recovered_sections,
+    reconcile_section_plan,
     TOPUP_MAX,
 )
 import student_routes  # noqa: F401  registers /api/student/* endpoints
@@ -302,6 +307,7 @@ class PaperRequest(BaseModel):
     branding_tagline: Optional[str] = Field(default=None, max_length=300)
     branding_footer: Optional[str] = Field(default=None, max_length=300)
     branding_watermark: Optional[str] = Field(default=None, max_length=100)
+    branding_id: Optional[str] = Field(default=None, max_length=200)
 
 
 class QuestionInput(BaseModel):
@@ -340,6 +346,50 @@ class BrandingUpdate(BaseModel):
     tagline: Optional[str] = Field(default=None, max_length=300)
     footer: Optional[str] = Field(default=None, max_length=300)
     watermark: Optional[str] = Field(default=None, max_length=100)
+
+
+class BrandingPresetBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    school_name: str = Field(default="", max_length=200)
+    tagline: str = Field(default="", max_length=300)
+    footer: str = Field(default="", max_length=300)
+    watermark: str = Field(default="", max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def non_blank_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("name must not be blank")
+        return value
+
+
+class BrandingPresetCreate(BrandingPresetBase):
+    pass
+
+
+class BrandingPresetUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    school_name: Optional[str] = Field(default=None, max_length=200)
+    tagline: Optional[str] = Field(default=None, max_length=300)
+    footer: Optional[str] = Field(default=None, max_length=300)
+    watermark: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def non_blank_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("name must not be blank")
+        return value
+
+
+class BrandingApply(BaseModel):
+    branding_id: str = Field(min_length=1, max_length=200)
 
 
 class SavedTopic(BaseModel):
@@ -644,6 +694,81 @@ def _branding_for_user(doc: dict) -> dict:
     }
 
 
+def _serialize_branding_preset(doc: dict) -> dict:
+    return {
+        "id": doc["id"],
+        "name": doc.get("name") or "Untitled branding",
+        "school_name": doc.get("school_name") or "",
+        "tagline": doc.get("tagline") or "",
+        "footer": doc.get("footer") or "",
+        "watermark": doc.get("watermark") or "",
+        "header_image_path": doc.get("header_image_path"),
+        "created_at": doc.get("created_at"),
+        "updated_at": doc.get("updated_at"),
+    }
+
+
+async def _ensure_legacy_branding_preset(user_id: str) -> None:
+    """Turn the former user-profile branding fields into one named preset."""
+    existing = await db.branding_presets.find_one(
+        {"owner_id": user_id}, {"_id": 0, "id": 1}
+    )
+    if existing:
+        return
+    profile = await db.users.find_one({"id": user_id}, {"_id": 0})
+    legacy = _branding_for_user(profile or {})
+    if not any(legacy.values()):
+        return
+    now = utcnow_iso()
+    await db.branding_presets.insert_one({
+        "id": str(uuid.uuid4()),
+        "owner_id": user_id,
+        "name": "Standard branding",
+        "school_name": legacy["school_name"],
+        "tagline": legacy["tagline"],
+        "footer": legacy["footer"],
+        "watermark": legacy["watermark"],
+        "header_image_path": legacy["header_image_path"],
+        "created_at": now,
+        "updated_at": now,
+    })
+
+
+async def _owned_branding_preset(branding_id: str, user_id: str) -> dict:
+    preset = await db.branding_presets.find_one(
+        {"id": branding_id, "owner_id": user_id}, {"_id": 0}
+    )
+    if not preset:
+        raise HTTPException(status_code=404, detail="Branding preset not found")
+    return preset
+
+
+def _branding_snapshot(preset: dict, *, applied_at: Optional[str] = None) -> dict:
+    return {
+        "branding_id": preset.get("id"),
+        "branding_name": preset.get("name") or "Untitled branding",
+        "branding_applied_at": applied_at or utcnow_iso(),
+        "school_name": preset.get("school_name") or "",
+        "header_image_path": preset.get("header_image_path"),
+        "branding_tagline": preset.get("tagline") or "",
+        "branding_footer": preset.get("footer") or "",
+        "branding_watermark": preset.get("watermark") or "",
+    }
+
+
+def _empty_branding_snapshot() -> dict:
+    return {
+        "branding_id": None,
+        "branding_name": None,
+        "branding_applied_at": None,
+        "school_name": "",
+        "header_image_path": None,
+        "branding_tagline": "",
+        "branding_footer": "",
+        "branding_watermark": "",
+    }
+
+
 def _serialize_paper_configuration(doc: dict) -> dict:
     result = dict(doc)
     result.pop("owner_id", None)
@@ -707,6 +832,126 @@ async def delete_paper_configuration(configuration_id: str, user: dict = Depends
 async def get_branding(user: dict = Depends(get_current_user)):
     profile = await db.users.find_one({"id": user["id"]}, {"_id": 0})
     return _branding_for_user(profile or {})
+
+
+@api_router.get("/branding-presets")
+async def list_branding_presets(user: dict = Depends(get_current_user)):
+    await _ensure_legacy_branding_preset(user["id"])
+    records = await db.branding_presets.find(
+        {"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}
+    ).sort("updated_at", -1).to_list(200)
+    return [_serialize_branding_preset(record) for record in records]
+
+
+@api_router.post("/branding-presets", status_code=201)
+async def create_branding_preset(
+    payload: BrandingPresetCreate, user: dict = Depends(get_current_user)
+):
+    now = utcnow_iso()
+    record = payload.model_dump()
+    for key in ("name", "school_name", "tagline", "footer", "watermark"):
+        record[key] = (record.get(key) or "").strip()
+    record.update({
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "header_image_path": None,
+        "created_at": now,
+        "updated_at": now,
+    })
+    await db.branding_presets.insert_one(record)
+    return _serialize_branding_preset(record)
+
+
+@api_router.patch("/branding-presets/{branding_id}")
+async def update_branding_preset(
+    branding_id: str,
+    payload: BrandingPresetUpdate,
+    user: dict = Depends(get_current_user),
+):
+    await _owned_branding_preset(branding_id, user["id"])
+    values = payload.model_dump(exclude_unset=True)
+    if not values:
+        raise HTTPException(status_code=400, detail="No branding fields supplied")
+    for key in ("name", "school_name", "tagline", "footer", "watermark"):
+        if key in values:
+            values[key] = (values[key] or "").strip()
+    values["updated_at"] = utcnow_iso()
+    await db.branding_presets.update_one(
+        {"id": branding_id, "owner_id": user["id"]}, {"$set": values}
+    )
+    return _serialize_branding_preset(
+        await _owned_branding_preset(branding_id, user["id"])
+    )
+
+
+@api_router.delete("/branding-presets/{branding_id}")
+async def delete_branding_preset(
+    branding_id: str, user: dict = Depends(get_current_user)
+):
+    result = await db.branding_presets.delete_one(
+        {"id": branding_id, "owner_id": user["id"]}
+    )
+    if result.deleted_count != 1:
+        raise HTTPException(status_code=404, detail="Branding preset not found")
+    # Retain the object-storage image because historical paper snapshots may
+    # still reference this immutable path.
+    return {"ok": True}
+
+
+@api_router.post("/branding-presets/{branding_id}/image")
+async def upload_branding_preset_image(
+    branding_id: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    await _owned_branding_preset(branding_id, user["id"])
+    content_type = (file.content_type or "").lower()
+    extension = os.path.splitext(file.filename or "")[1].lower()
+    allowed = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+    if extension not in allowed or allowed[extension] != content_type:
+        raise HTTPException(status_code=400, detail="Only JPG and PNG images are accepted")
+    data = await file.read()
+    if not data or len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Header image must be between 1 byte and 5 MB")
+    path = f"{APP_NAME}/branding/{user['id']}/{uuid.uuid4().hex}{extension}"
+    put_object(path, data, content_type)
+    await db.branding_presets.update_one(
+        {"id": branding_id, "owner_id": user["id"]},
+        {"$set": {"header_image_path": path, "updated_at": utcnow_iso()}},
+    )
+    return _serialize_branding_preset(
+        await _owned_branding_preset(branding_id, user["id"])
+    )
+
+
+@api_router.get("/branding-presets/{branding_id}/image")
+async def get_branding_preset_image(
+    branding_id: str, user: dict = Depends(get_current_user)
+):
+    preset = await _owned_branding_preset(branding_id, user["id"])
+    path = preset.get("header_image_path")
+    if not path:
+        raise HTTPException(status_code=404, detail="No header image configured")
+    data, content_type = get_object(path)
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@api_router.delete("/branding-presets/{branding_id}/image")
+async def remove_branding_preset_image(
+    branding_id: str, user: dict = Depends(get_current_user)
+):
+    await _owned_branding_preset(branding_id, user["id"])
+    await db.branding_presets.update_one(
+        {"id": branding_id, "owner_id": user["id"]},
+        {"$set": {"header_image_path": None, "updated_at": utcnow_iso()}},
+    )
+    return _serialize_branding_preset(
+        await _owned_branding_preset(branding_id, user["id"])
+    )
 
 
 @api_router.patch("/branding")
@@ -1303,11 +1548,15 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     fmt_dist = {k: int(v) for k, v in (req.format_distribution or {}).items() if int(v) > 0}
     custom_instructions = (req.custom_instructions or "").strip()
     section_blueprint = (req.section_blueprint or "").strip()
-    profile = await db.users.find_one({"id": user["id"]}, {"_id": 0})
-    default_branding = _branding_for_user(profile or {})
-    header_image_path = req.header_image_path or default_branding["header_image_path"]
-    if header_image_path and not header_image_path.startswith(f"{APP_NAME}/branding/{user['id']}/"):
-        raise HTTPException(status_code=400, detail="Invalid header image")
+    selected_branding = (
+        await _owned_branding_preset(req.branding_id, user["id"])
+        if req.branding_id else None
+    )
+    branding_snapshot = (
+        _branding_snapshot(selected_branding)
+        if selected_branding
+        else _empty_branding_snapshot()
+    )
     paper_doc = {
         "id": paper_id,
         "owner_id": user["id"],
@@ -1330,13 +1579,9 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "blueprint_id": req.blueprint_id,
         "blueprint_version": req.blueprint_version,
         "section_topic_allocations": [a.model_dump() for a in req.section_topic_allocations or []],
-        # Branding is copied into the paper so future profile edits cannot
-        # silently alter documents that have already been generated.
-        "school_name": (req.school_name if req.school_name is not None else default_branding["school_name"]).strip(),
-        "header_image_path": header_image_path,
-        "branding_tagline": (req.branding_tagline if req.branding_tagline is not None else default_branding["tagline"]).strip(),
-        "branding_footer": (req.branding_footer if req.branding_footer is not None else default_branding["footer"]).strip(),
-        "branding_watermark": (req.branding_watermark if req.branding_watermark is not None else default_branding["watermark"]).strip(),
+        # Branding is snapshotted so preset edits or deletion cannot silently
+        # alter an already generated document.
+        **branding_snapshot,
         **({"generation_requirements": resolved} if resolved else {}),
         # A blueprint still states its count in prose nobody parses, so it
         # stores 0 and paper_target_count declines to guess. Additional
@@ -1484,23 +1729,35 @@ async def update_paper(
 
 
 @api_router.post("/papers/{paper_id}/branding/apply")
-async def apply_branding_to_paper(paper_id: str, user: dict = Depends(get_current_user)):
+async def apply_branding_to_paper(
+    paper_id: str,
+    payload: BrandingApply,
+    user: dict = Depends(get_current_user),
+):
     paper = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
     if paper["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    profile = await db.users.find_one({"id": user["id"]}, {"_id": 0})
-    branding = _branding_for_user(profile or {})
-    if not any(branding.values()):
-        raise HTTPException(status_code=400, detail="Configure branding before applying it")
-    await db.papers.update_one({"id": paper_id}, {"$set": {
-        "school_name": branding["school_name"],
-        "header_image_path": branding["header_image_path"],
-        "branding_tagline": branding["tagline"],
-        "branding_footer": branding["footer"],
-        "branding_watermark": branding["watermark"],
-    }})
+    branding = await _owned_branding_preset(payload.branding_id, user["id"])
+    await db.papers.update_one(
+        {"id": paper_id}, {"$set": _branding_snapshot(branding)}
+    )
+    return await get_paper(paper_id, user)
+
+
+@api_router.delete("/papers/{paper_id}/branding")
+async def remove_branding_from_paper(
+    paper_id: str, user: dict = Depends(get_current_user)
+):
+    paper = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if paper["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    await db.papers.update_one(
+        {"id": paper_id}, {"$set": _empty_branding_snapshot()}
+    )
     return await get_paper(paper_id, user)
 
 
@@ -1539,14 +1796,19 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    repaired_sections, repaired_recovery = restore_recovered_sections(
-        p.get("sections") or [], p.get("generation_requirements") or {}
+    repaired_sections, section_plan, repaired_recovery = reconcile_section_plan(
+        p.get("sections") or [], p.get("section_plan"), p.get("generation_requirements") or {}
     )
-    if repaired_recovery:
+    if repaired_recovery or section_plan != (p.get("section_plan") or []):
         await db.papers.update_one(
-            {"id": paper_id}, {"$set": {"sections": repaired_sections}}
+            {"id": paper_id}, {"$set": {"sections": repaired_sections, "section_plan": section_plan}}
         )
         p["sections"] = repaired_sections
+        p["section_plan"] = section_plan
+    p["instructions"] = printable_instructions(
+        p.get("instructions"),
+        custom_instructions=p.get("custom_instructions") or "",
+    )
     textbook_ids = p.get("textbook_ids") or ([p["textbook_id"]] if p.get("textbook_id") else [])
     textbook_rows = await db.textbooks.find(
         {"id": {"$in": textbook_ids}, "is_deleted": False},
@@ -1787,6 +2049,14 @@ async def paper_pdf(
         raise HTTPException(status_code=409, detail="Paper is still being generated")
     if p.get("generation_status") == "failed":
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
+    p["sections"], section_plan, repaired = reconcile_section_plan(
+        p.get("sections") or [], p.get("section_plan"), p.get("generation_requirements") or {}
+    )
+    if repaired or section_plan != (p.get("section_plan") or []):
+        p["section_plan"] = section_plan
+        await db.papers.update_one(
+            {"id": paper_id}, {"$set": {"sections": p["sections"], "section_plan": section_plan}}
+        )
 
     def _diagram_loader(_qid: str, path: str):
         try:
@@ -1829,6 +2099,14 @@ async def paper_docx(
         raise HTTPException(status_code=409, detail="Paper is still being generated")
     if paper.get("generation_status") == "failed":
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
+    paper["sections"], section_plan, repaired = reconcile_section_plan(
+        paper.get("sections") or [], paper.get("section_plan"), paper.get("generation_requirements") or {}
+    )
+    if repaired or section_plan != (paper.get("section_plan") or []):
+        paper["section_plan"] = section_plan
+        await db.papers.update_one(
+            {"id": paper_id}, {"$set": {"sections": paper["sections"], "section_plan": section_plan}}
+        )
 
     def asset_loader(path: str):
         try:
@@ -1847,6 +2125,44 @@ async def paper_docx(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{safe_title}.docx"'},
+    )
+
+
+@api_router.get("/papers/{paper_id}/solution/docx")
+async def solution_docx(
+    paper_id: str,
+    authorization: Optional[str] = Header(None),
+    auth: Optional[str] = Query(None),
+):
+    token = authorization.split(" ", 1)[1] if authorization and authorization.lower().startswith("bearer ") else auth
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = await get_token_user(token)
+    paper = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if paper["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not paper.get("solution"):
+        raise HTTPException(status_code=409, detail="No solution is available to download")
+
+    def asset_loader(path: str):
+        try:
+            return get_object(path)[0]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Solution DOCX asset load failed for %s: %s", path, exc)
+            return None
+
+    docx_bytes = await render_solution_docx_async(
+        paper,
+        diagram_loader=lambda _question_id, path: asset_loader(path),
+        branding_loader=asset_loader,
+    )
+    safe_title = "".join(c for c in paper["title"] if c.isalnum() or c in (" ", "-", "_")).strip()[:60] or "paper"
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{safe_title} - Solution.docx"'},
     )
 
 

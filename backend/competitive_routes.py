@@ -47,6 +47,7 @@ from workers import (
     generate_diagrams_background,
     merge_topup_sections,
     paper_target_count,
+    reconcile_section_plan,
     _auto_topup_if_short,
     _fail_topup,
     _finish_topup,
@@ -609,7 +610,9 @@ async def generate_missing_competitive_questions(paper_id: str, count: int) -> N
         anchors = await _retrieve_anchors(exam, topics)
         rag_dist = difficulty_distribution(anchors)
 
-        existing_sections = p.get("sections") or []
+        existing_sections, section_plan, _ = reconcile_section_plan(
+            p.get("sections") or [], p.get("section_plan"), None
+        )
         already_asked = flatten_question_texts(existing_sections)
         # Built by prompts.avoid_list_block rather than here. This used to be a
         # second copy of that list with the same two silent caps -- the first 60
@@ -702,9 +705,10 @@ async def generate_missing_competitive_questions(paper_id: str, count: int) -> N
         target = paper_target_count(p)
         before = count_questions(existing_sections)
         merged = merge_topup_sections(existing_sections, new_sections, limit=target)
+        merged, section_plan, _ = reconcile_section_plan(merged, section_plan, None)
         added = count_questions(merged) - before
 
-        await _finish_topup(paper_id, merged, added, pending_count, target)
+        await _finish_topup(paper_id, merged, added, pending_count, target, section_plan)
         logger.info(
             f"Top-up added {added} question(s) to competitive paper {paper_id}"
         )
@@ -904,11 +908,13 @@ async def _generate_competitive_paper(paper_id: str, req: CompetitivePaperReques
             q["diagram_status"] = "pending" if q.get("needs_diagram") else "none"
 
     spec = get_format(exam_type)
+    sections, section_plan, _ = reconcile_section_plan(sections, None, None)
     await db.papers.update_one(
         {"id": paper_id},
         {"$set": {
             "instructions": instructions,
             "sections": sections,
+            "section_plan": section_plan,
             "question_count": count_questions(sections),
             "target_question_count": total_q,
             # Previously counted and dropped. A paper that lost batches is short

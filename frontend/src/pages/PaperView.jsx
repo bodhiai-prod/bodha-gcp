@@ -22,8 +22,10 @@ import {
 import MathText from "@/components/MathText";
 import MatchTheFollowing from "@/components/MatchTheFollowing";
 import QuestionDiagram from "@/components/QuestionDiagram";
+import BrandingLogo from "@/components/BrandingLogo";
 import { printDocument, diagramsReady } from "@/lib/print";
 import { canRegenerate, regeneratingId } from "@/lib/regenerate";
+import { DEFAULT_PAPER_INSTRUCTIONS, formatMark } from "@/lib/exportFormat";
 
 const typeBadge = (t) => {
   if (t === "information") return "qp-badge qp-badge-blue";
@@ -56,6 +58,8 @@ export default function PaperView() {
   const [cancellingGeneration, setCancellingGeneration] = useState(false);
   const [docxDownloading, setDocxDownloading] = useState(false);
   const [brandingApplying, setBrandingApplying] = useState(false);
+  const [brandingPresets, setBrandingPresets] = useState([]);
+  const [selectedBrandingId, setSelectedBrandingId] = useState("");
 
   const load = async () => {
     const { data } = await api.get(`/papers/${id}`);
@@ -64,6 +68,9 @@ export default function PaperView() {
 
   useEffect(() => {
     load();
+    api.get("/branding-presets")
+      .then(({ data }) => setBrandingPresets(data))
+      .catch(() => {});
   }, [id]); // eslint-disable-line
 
   // Poll for diagram completion when any are still pending.
@@ -302,13 +309,33 @@ export default function PaperView() {
   };
 
   const applyBranding = async () => {
+    if (!selectedBrandingId) {
+      toast.error("Choose a branding preset first");
+      return;
+    }
     setBrandingApplying(true);
     try {
-      const { data } = await api.post(`/papers/${id}/branding/apply`);
+      const { data } = await api.post(`/papers/${id}/branding/apply`, {
+        branding_id: selectedBrandingId,
+      });
       setPaper(data);
+      setSelectedBrandingId("");
       toast.success("Current branding applied to this paper");
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Could not apply branding");
+    } finally {
+      setBrandingApplying(false);
+    }
+  };
+
+  const removeBranding = async () => {
+    setBrandingApplying(true);
+    try {
+      const { data } = await api.delete(`/papers/${id}/branding`);
+      setPaper(data);
+      toast.success("Branding removed from this paper");
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not remove branding");
     } finally {
       setBrandingApplying(false);
     }
@@ -458,6 +485,10 @@ export default function PaperView() {
   const topupValue = topupCount || missingCount || 1;
 
   const view = editing ? draft : paper;
+  const hasAppliedBranding = Boolean(
+    paper.branding_id || paper.school_name || paper.header_image_path
+    || paper.branding_tagline || paper.branding_footer || paper.branding_watermark
+  );
   let counter = 1;
 
   return (
@@ -639,9 +670,17 @@ export default function PaperView() {
                 >
                   <CheckCircle size={16} weight="bold" /> Solution
                 </Link>
-                <button onClick={applyBranding} disabled={brandingApplying} className="qp-btn qp-btn-secondary" data-testid="apply-paper-branding">
-                  {brandingApplying ? "Applying..." : "Apply Branding"}
+                <div className="flex items-center gap-1 border-2 border-black px-2" data-testid="paper-branding-status">
+                  <span className="text-xs font-bold whitespace-nowrap">{hasAppliedBranding ? `Applied: ${paper.branding_name || "Legacy branding"}` : "No branding applied"}</span>
+                  <select value={selectedBrandingId} onChange={(event) => setSelectedBrandingId(event.target.value)} className="text-xs bg-white py-1 max-w-36" aria-label="Branding preset">
+                    <option value="">Choose preset</option>
+                    {brandingPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                  </select>
+                </div>
+                <button onClick={applyBranding} disabled={brandingApplying || !selectedBrandingId} className="qp-btn qp-btn-secondary" data-testid="apply-paper-branding">
+                  {brandingApplying ? "Applying..." : hasAppliedBranding ? "Replace Branding" : "Apply Branding"}
                 </button>
+                {hasAppliedBranding && <button onClick={removeBranding} disabled={brandingApplying} className="qp-btn qp-btn-secondary" data-testid="remove-paper-branding">Remove</button>}
                 <button onClick={downloadDocx} disabled={docxDownloading} className="qp-btn qp-btn-secondary" data-testid="download-docx-button">
                   <Download size={16} weight="bold" /> {docxDownloading ? "Preparing..." : "DOCX"}
                 </button>
@@ -663,8 +702,9 @@ export default function PaperView() {
           className="bg-white border-2 border-black p-8 md:p-12 hard-shadow-static-lg"
           data-testid="paper-preview"
         >
-          {view.branding_watermark && <div className="text-center text-xs uppercase tracking-[0.35em] text-neutral-300 mb-2" aria-hidden="true">{view.branding_watermark}</div>}
+          {view.branding_watermark && <div className="paper-branding-watermark text-center text-xs uppercase tracking-[0.35em] text-neutral-300 mb-2" aria-hidden="true">{view.branding_watermark}</div>}
           <div className="text-center border-b-2 border-black pb-6 mb-6">
+            <BrandingLogo paperId={id} hasLogo={Boolean(view.header_image_path)} className="mx-auto mb-3 max-h-24 max-w-32 object-contain" />
             {view.school_name && <div className="font-bold text-lg uppercase tracking-wide mb-2">{view.school_name}</div>}
             {editing ? (
               <input
@@ -738,10 +778,10 @@ export default function PaperView() {
               data-testid="edit-instructions-input"
             />
           ) : (
-            view.instructions && (
+            (
               <section className="paper-instructions mb-6 border border-neutral-300 bg-neutral-50 p-4 text-sm" aria-label="Paper instructions">
                 <h2 className="font-bold mb-2">Instructions</h2>
-                <div>{instructionLines(view.instructions).map((line, index) => <div key={`${line}-${index}`} className="paper-instruction-line"><MathText text={line} /></div>)}</div>
+                <div>{instructionLines(view.instructions || DEFAULT_PAPER_INSTRUCTIONS).map((line, index) => <div key={`${line}-${index}`} className="paper-instruction-line"><MathText text={line} /></div>)}</div>
               </section>
             )
           )}
@@ -895,7 +935,7 @@ export default function PaperView() {
                             <MatchTheFollowing text={q.question} />
                           </div>
                           <span className="font-mono font-bold text-sm shrink-0">
-                            [{q.marks}]
+                            [{formatMark(q.marks)}]
                           </span>
                         </div>
                         {(q.format || "").toLowerCase() === "mcq" &&
@@ -1010,6 +1050,7 @@ export default function PaperView() {
           <div className="text-center mt-8 pt-4 border-t-2 border-black font-mono text-xs text-neutral-500">
             — End of Paper —
           </div>
+          {view.branding_footer && <div className="paper-branding-footer text-center mt-3 font-mono text-xs">{view.branding_footer}</div>}
         </div>
         <PaperSummary paper={paper} editing={editing} />
         </div>

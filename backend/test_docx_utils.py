@@ -3,7 +3,8 @@ from zipfile import ZipFile
 
 from PIL import Image
 
-from docx_utils import render_paper_docx
+from docx_utils import render_paper_docx, render_solution_docx
+from export_utils import DEFAULT_INSTRUCTIONS, format_mark, printable_instructions
 
 
 def _paper():
@@ -66,6 +67,9 @@ def test_docx_preserves_structure_as_native_word_equations():
     assert "hard" not in document_xml
     assert "Diagram unavailable" in document_xml
     assert document_xml.count("Solve ") == 1
+    # Inline $g=9.8$ stays in its text paragraph; only the explicit $$...$$
+    # expression becomes centered display math.
+    assert document_xml.count("<m:oMathPara>") == 1
 
 
 def test_docx_embeds_available_diagrams():
@@ -77,6 +81,9 @@ def test_docx_embeds_available_diagrams():
 
     assert len(media_files) == 1
     assert 'wp:extent cx="3886200" cy="2914650"' in document_xml
+    with ZipFile(BytesIO(data)) as archive:
+        image = Image.open(BytesIO(archive.read(media_files[0])))
+        assert image.mode == "L"
 
 
 def test_docx_ignores_invalid_header_image():
@@ -99,3 +106,49 @@ def test_docx_keeps_placeholder_for_pending_diagram():
         document_xml = archive.read("word/document.xml").decode("utf-8")
 
     assert "Diagram unavailable" in document_xml
+
+
+def test_marks_instructions_and_cases_are_normalized():
+    paper = _paper()
+    paper["custom_instructions"] = ""
+    paper["instructions"] = "Ensure proper LaTeX formatting."
+    question = paper["sections"][0]["questions"][0]
+    question["marks"] = 5.0
+    question["question"] = (
+        r"Study $$f(n)=\begin{cases}\frac{n+1}{2}, & n \text{ odd} \\ "
+        r"\frac{n}{2}, & n \text{ even}\end{cases}$$."
+    )
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert DEFAULT_INSTRUCTIONS in document_xml
+    assert "[5]" in document_xml
+    assert "[5.0]" not in document_xml
+    assert r"\begin" not in document_xml
+    assert r"\end" not in document_xml
+    assert ">cases<" not in document_xml
+
+
+def test_solution_docx_contains_answers_and_monochrome_heading():
+    paper = _paper()
+    paper["solution"] = {
+        "sections": [{"title": "Section A", "answers": [
+            {"question_id": "q1", "answer": "The answer is $2$."},
+        ]}]
+    }
+    data = render_solution_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert "Physics Test - Answer Key" in document_xml
+    assert "The answer is " in document_xml
+    assert "002FA7" not in document_xml
+
+
+def test_export_text_helpers():
+    assert format_mark(2.0) == "2"
+    assert format_mark(2.5) == "2.5"
+    assert printable_instructions("Ensure proper LaTeX formatting.") == DEFAULT_INSTRUCTIONS
+    assert printable_instructions(
+        "Show working. Ensure proper LaTeX formatting.",
+        custom_instructions="Show working.",
+    ) == "Show working."

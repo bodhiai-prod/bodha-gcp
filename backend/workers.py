@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio as _asyncio
 import copy
 import os
+import re
 import uuid
 from typing import Optional
 
@@ -30,6 +31,7 @@ from prompts import (
     STEM_CHARS,
 )
 from instruction_spec import parse_instructions, verify as verify_instructions
+from export_utils import printable_instructions
 from generation_requirements import compile_requirements, remaining_requirements
 from section_blueprints import allocation_coverage
 from question_dedupe import dedupe_sections, is_duplicate
@@ -555,6 +557,11 @@ async def generate_paper_background(
         except Exception as exc:
             logger.warning(f"Requirement correction skipped for {paper_id}: {exc}")
 
+    # Capture the first valid set of headings as this paper's durable section
+    # plan. From here on recovered and top-up questions are routed by ID, not
+    # by whatever display title the provider happens to emit.
+    sections, section_plan, _ = reconcile_section_plan(sections, None, spec)
+
     # Finish the questions that arrived structurally incomplete: an MCQ with
     # two options, a stem cut mid-sentence, an answer key pointing at
     # nothing. Runs ahead of repair_sections so options written here get the
@@ -624,8 +631,12 @@ async def generate_paper_background(
     await db.papers.update_one(
         {"id": paper_id, "generation_status": "pending"},
         {"$set": {
-            "instructions": data.get("instructions", ""),
+            "instructions": printable_instructions(
+                data.get("instructions", ""),
+                custom_instructions=custom_instructions,
+            ),
             "sections": sections,
+            "section_plan": section_plan,
             "question_count": count_questions(sections),
             "diagrams_pending": pending_count,
             "generation_status": "ready",
@@ -780,6 +791,104 @@ def merge_topup_sections(existing: list, new: list, limit: int = 0) -> list:
     return merged
 
 
+def _section_key(title: object) -> str:
+    """A comparison key for display headings; never shown to teachers."""
+    return re.sub(r"[^a-z0-9]+", " ", str(title or "").casefold()).strip()
+
+
+def _section_family(title: object) -> str:
+    """The stable part of conventional headings such as ``Section A``."""
+    key = _section_key(title)
+    match = re.match(r"section\s+([a-z0-9]+)\b", key)
+    return f"section {match.group(1)}" if match else key
+
+
+def _is_synthetic_section(section: dict) -> bool:
+    title = _section_key(section.get("title"))
+    return title == "recovered questions" or title.endswith("top up questions")
+
+
+def _synthetic_base_key(title: object) -> str:
+    return re.sub(r"\s+top up questions$", "", _section_key(title)).strip()
+
+
+def reconcile_section_plan(
+    sections: list, section_plan: Optional[list] = None, spec: Optional[dict] = None
+) -> tuple[list, list, bool]:
+    """Apply the server-owned section plan and return canonical section order.
+
+    Titles remain teacher-facing presentation text.  ``section_id`` is the
+    placement identity: recovery and top-up labels are matched to a saved plan
+    before questions are rendered, exported, or counted.  This also makes the
+    operation idempotent for existing papers.
+    """
+    spec = spec or {}
+    source = [dict(section, questions=list(section.get("questions") or [])) for section in sections or []]
+    original = [(s.get("section_id"), s.get("title"), len(s.get("questions") or [])) for s in source]
+    had_question_ids = all(
+        question.get("section_id") == section.get("section_id")
+        for section in source
+        for question in section.get("questions") or []
+        if section.get("section_id")
+    )
+
+    # Blueprint allocation IDs are the strongest placement signal. Keep that
+    # compatibility path first, then use the universal plan below.
+    source, _ = align_blueprint_sections(source, spec)
+    plan = [dict(row) for row in (section_plan or []) if isinstance(row, dict) and row.get("id")]
+    by_id = {row["id"]: row for row in plan}
+    by_key = {_section_key(row.get("title")): row for row in plan if _section_key(row.get("title"))}
+    by_family: dict[str, list] = {}
+    for row in plan:
+        by_family.setdefault(_section_family(row.get("title")), []).append(row)
+
+    # First establish a plan from ordinary sections. Synthetic sections never
+    # get their own permanent ID when a real matching section exists.
+    # Existing questions always precede refills even when an old malformed
+    # document stored the synthetic block before its base section.
+    for section in [*filter(lambda item: not _is_synthetic_section(item), source),
+                    *filter(_is_synthetic_section, source)]:
+        if _is_synthetic_section(section):
+            continue
+        row = by_id.get(section.get("section_id")) or by_key.get(_section_key(section.get("title")))
+        if row is None:
+            section_id = section.get("section_id") or f"section-{len(plan) + 1}"
+            while section_id in by_id:
+                section_id = f"section-{len(plan) + 1}"
+            row = {"id": section_id, "title": section.get("title") or f"Section {len(plan) + 1}", "order": len(plan) + 1}
+            plan.append(row)
+            by_id[row["id"]] = row
+            by_key[_section_key(row["title"])] = row
+            by_family.setdefault(_section_family(row["title"]), []).append(row)
+
+    grouped = {row["id"]: {"section_id": row["id"], "title": row["title"], "questions": []} for row in plan}
+    extras: list[dict] = []
+    for section in [*filter(lambda item: not _is_synthetic_section(item), source),
+                    *filter(_is_synthetic_section, source)]:
+        row = by_id.get(section.get("section_id")) or by_key.get(_section_key(section.get("title")))
+        if row is None and _is_synthetic_section(section):
+            row = by_key.get(_synthetic_base_key(section.get("title")))
+        if row is None and _is_synthetic_section(section):
+            family = _section_family(section.get("title"))
+            matches = by_family.get(family, [])
+            if len(matches) == 1:
+                row = matches[0]
+        if row is None:
+            # A recovery response with no trustworthy target stays visible for
+            # review; it is never silently assigned to an arbitrary section.
+            extras.append(section)
+            continue
+        target = grouped[row["id"]]
+        for question in section.get("questions") or []:
+            question["section_id"] = row["id"]
+            target["questions"].append(question)
+
+    ordered = [grouped[row["id"]] for row in sorted(plan, key=lambda item: item.get("order", 0)) if grouped[row["id"]]["questions"]]
+    ordered.extend(extras)
+    current = [(s.get("section_id"), s.get("title"), len(s.get("questions") or [])) for s in ordered]
+    return ordered, plan, current != original or not had_question_ids
+
+
 def align_blueprint_sections(sections: list, spec: dict) -> tuple[list, bool]:
     """Route synthetic recovery/top-up blocks to their allocation sections.
 
@@ -854,7 +963,8 @@ def restore_recovered_sections(sections: list, spec: dict) -> tuple[list, bool]:
 
 
 async def _finish_topup(
-    paper_id: str, sections: list, added: int, pending_count: int, target: int
+    paper_id: str, sections: list, added: int, pending_count: int, target: int,
+    section_plan: Optional[list] = None,
 ) -> None:
     """Write a successful top-up back to the paper."""
     total = count_questions(sections)
@@ -864,6 +974,7 @@ async def _finish_topup(
     already_pending = int((existing or {}).get("diagrams_pending") or 0)
     update = {
         "sections": sections,
+        **({"section_plan": section_plan} if section_plan is not None else {}),
         "question_count": total,
         "diagrams_pending": already_pending + pending_count,
         "topup": {
@@ -1036,15 +1147,14 @@ async def generate_missing_questions_background(
             await generate_missing_competitive_questions(paper_id, count)
             return
 
-        existing_sections = p.get("sections") or []
-        existing_sections, repaired_recovery = restore_recovered_sections(
-            existing_sections, p.get("generation_requirements") or {}
+        existing_sections, section_plan, repaired_recovery = reconcile_section_plan(
+            p.get("sections") or [], p.get("section_plan"), p.get("generation_requirements") or {}
         )
-        if repaired_recovery:
+        if repaired_recovery or section_plan != (p.get("section_plan") or []):
             # Persist before generating so merge_topup_sections has the same
             # canonical section layout as the paper the teacher sees.
             await db.papers.update_one(
-                {"id": paper_id}, {"$set": {"sections": existing_sections}}
+                {"id": paper_id}, {"$set": {"sections": existing_sections, "section_plan": section_plan}}
             )
         difficulty = p.get("difficulty", "medium")
         # The teacher's instructions govern the top-up too -- a paper told
@@ -1107,7 +1217,7 @@ async def generate_missing_questions_background(
         # The provider occasionally decorates a real title with "Top-Up
         # Questions". Route by allocation identity before merge so it cannot
         # create a second Section A at the end of the document.
-        new_sections, _ = align_blueprint_sections(new_sections, legacy_spec)
+        new_sections, _, _ = reconcile_section_plan(new_sections, section_plan, legacy_spec)
         if not count_questions(new_sections):
             raise RuntimeError("The model returned no usable questions.")
 
@@ -1141,9 +1251,10 @@ async def generate_missing_questions_background(
         target = paper_target_count(p)
         before = count_questions(existing_sections)
         merged = merge_topup_sections(existing_sections, new_sections, limit=target)
+        merged, section_plan, _ = reconcile_section_plan(merged, section_plan, legacy_spec)
         added = count_questions(merged) - before
 
-        await _finish_topup(paper_id, merged, added, pending_count, target)
+        await _finish_topup(paper_id, merged, added, pending_count, target, section_plan)
         await db.papers.update_one({"id": paper_id}, {"$set": {
             "instruction_check": verify_instructions(merged, legacy_spec),
         }})

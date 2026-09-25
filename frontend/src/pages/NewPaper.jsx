@@ -57,6 +57,8 @@ export default function NewPaper() {
   const [customInstructions, setCustomInstructions] = useState("");
   const [sectionBlueprint, setSectionBlueprint] = useState("");
   const [blueprintCatalog, setBlueprintCatalog] = useState([]);
+  const [brandingPresets, setBrandingPresets] = useState([]);
+  const [brandingId, setBrandingId] = useState("");
   const [blueprint, setBlueprint] = useState(null);
   const [allocations, setAllocations] = useState([]);
   const [analyzing, setAnalyzing] = useState(false);
@@ -143,6 +145,7 @@ export default function NewPaper() {
   useEffect(() => {
     api.get("/textbooks").then((r) => setTextbooks(r.data)).catch(() => toast.error("Could not load textbooks. Reload to retry."));
     api.get("/paper-blueprints").then(r => setBlueprintCatalog(r.data)).catch(() => toast.error("Could not load board templates. Reload to retry."));
+    api.get("/branding-presets").then(r => setBrandingPresets(r.data)).catch(() => toast.error("Could not load branding presets."));
   }, []);
 
   // Load detail (topics) for every selected textbook not yet in cache.
@@ -318,6 +321,7 @@ export default function NewPaper() {
         blueprint_id: blueprint?.id || null,
         blueprint_version: blueprint?.version || null,
         section_topic_allocations: blueprint ? allocations : null,
+        branding_id: brandingId || null,
       });
       toast.success("Generation started — opening paper…");
       navigate(`/papers/${data.id}`);
@@ -387,6 +391,7 @@ export default function NewPaper() {
     custom_instructions: customInstructions.trim() || null, section_blueprint: sectionBlueprint.trim() || null,
     blueprint_id: blueprint?.id || null, blueprint_version: blueprint?.version || null,
     section_topic_allocations: blueprint ? allocations : null,
+    branding_id: brandingId || null,
   });
   const { preview, loading: previewLoading, error: previewError } = useConfigurationPreview(requestKey);
 
@@ -826,6 +831,15 @@ Make Q23 as hard as possible`}
                 <div><dt>Question target</dt><dd>{promptOverride ? "Defined by blueprint" : effectiveQuestionCount}</dd></div>
                 <div><dt>Difficulty</dt><dd>{DIFFICULTY_LABELS[difficulty]}</dd></div>
                 <div><dt>Blueprint</dt><dd>{blueprint?.label || "No blueprint"}</dd></div>
+                <div>
+                  <dt>Branding</dt>
+                  <dd>
+                    <select value={brandingId} onChange={(event) => setBrandingId(event.target.value)} className="qp-input py-1 text-sm" data-testid="paper-branding-select">
+                      <option value="">No branding</option>
+                      {brandingPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                    </select>
+                  </dd>
+                </div>
               </dl>
               <h3 className="text-xs font-bold uppercase mt-5 mb-2">Topic-wise composition</h3>
               {Object.keys(topicOverview).length ? <div className="review-topic-list">{Object.entries(topicOverview).map(([topic, count]) => <div key={topic}><span>{topic}</span><strong>{count} {blueprint ? "questions" : "selected"}</strong></div>)}</div> : <p className="text-sm text-neutral-500">Choose topics in the persistent panel to see their composition here.</p>}

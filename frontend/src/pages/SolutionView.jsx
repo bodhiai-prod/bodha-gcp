@@ -16,7 +16,9 @@ import {
 import MathText from "@/components/MathText";
 import MatchTheFollowing from "@/components/MatchTheFollowing";
 import QuestionDiagram from "@/components/QuestionDiagram";
+import BrandingLogo from "@/components/BrandingLogo";
 import { printDocument, diagramsReady } from "@/lib/print";
+import { formatMark } from "@/lib/exportFormat";
 
 const typeBadge = (t) => {
   if (t === "information") return "qp-badge qp-badge-blue";
@@ -33,6 +35,7 @@ export default function SolutionView() {
   const [regenerating, setRegenerating] = useState(false);
   // null | "all" | a question_id — which retry button is mid-request.
   const [filling, setFilling] = useState(null);
+  const [docxDownloading, setDocxDownloading] = useState(false);
 
   const load = async () => {
     const { data } = await api.get(`/papers/${id}`);
@@ -173,6 +176,28 @@ export default function SolutionView() {
     printDocument(`${paper.title} - Solution`);
   };
 
+  const downloadDocx = async () => {
+    const answeredIds = new Set((paper.solution?.sections || []).flatMap(section => (section.answers || []).filter(answer => answer.answer).map(answer => answer.question_id)));
+    const unanswered = (paper.sections || []).flatMap(section => section.questions || []).filter(question => question.question && !answeredIds.has(question.id)).length;
+    const generating = paper.solution?.status === "generating";
+    if ((generating || unanswered > 0) && !window.confirm(`${generating ? "Answer-key generation is still in progress" : `${unanswered} answer${unanswered === 1 ? " is" : "s are"} still missing`}. Download the incomplete answer key anyway?`)) return;
+    setDocxDownloading(true);
+    try {
+      const { data } = await api.get(`/papers/${id}/solution/docx`, { responseType: "blob" });
+      const url = URL.createObjectURL(data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${(paper.title || "paper").replace(/[^a-z0-9 _-]/gi, "").slice(0, 60) || "paper"} - Solution.docx`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success("Solution DOCX downloaded");
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not download solution DOCX");
+    } finally {
+      setDocxDownloading(false);
+    }
+  };
+
   if (!paper) {
     return (
       <div className="min-h-screen bg-[#FAFAFA]">
@@ -279,6 +304,9 @@ export default function SolutionView() {
                 >
                   <Download size={16} weight="bold" /> Download Solution PDF
                 </button>
+                <button onClick={downloadDocx} disabled={docxDownloading} className="qp-btn qp-btn-secondary" data-testid="download-solution-docx-button">
+                  <Download size={16} weight="bold" /> {docxDownloading ? "Preparing..." : "Solution DOCX"}
+                </button>
               </>
             )}
           </div>
@@ -318,7 +346,10 @@ export default function SolutionView() {
             className="bg-white border-2 border-black p-8 md:p-12 hard-shadow-static-lg"
             data-testid="solution-body"
           >
+            {paper.branding_watermark && <div className="paper-branding-watermark text-center text-xs uppercase tracking-[0.35em] text-neutral-300 mb-2" aria-hidden="true">{paper.branding_watermark}</div>}
             <div className="text-center border-b-2 border-black pb-6 mb-6">
+              <BrandingLogo paperId={id} hasLogo={Boolean(paper.header_image_path)} className="mx-auto mb-3 max-h-24 max-w-32 object-contain" />
+              {paper.school_name && <div className="font-bold text-lg uppercase tracking-wide mb-2">{paper.school_name}</div>}
               <div className="overline text-neutral-500 mb-2">
                 // ANSWER KEY
               </div>
@@ -330,6 +361,7 @@ export default function SolutionView() {
                 <b>{paper.subject}</b> · Total Marks{" "}
                 <b>{paper.total_marks}</b>
               </div>
+              {paper.branding_tagline && <div className="mt-2 text-sm italic text-neutral-500">{paper.branding_tagline}</div>}
             </div>
 
             {solution.status === "generating" && (
@@ -468,7 +500,7 @@ export default function SolutionView() {
                             <MatchTheFollowing text={q.question} />
                           </div>
                           <span className="font-mono font-bold text-sm shrink-0">
-                            [{q.marks}]
+                            [{formatMark(q.marks)}]
                           </span>
                         </div>
                         <div className="no-print mt-2 flex flex-wrap gap-1 pl-6">
@@ -541,6 +573,7 @@ export default function SolutionView() {
             <div className="text-center mt-8 pt-4 border-t-2 border-black font-mono text-xs text-neutral-500">
               — End of Answer Key —
             </div>
+            {paper.branding_footer && <div className="paper-branding-footer text-center mt-3 font-mono text-xs">{paper.branding_footer}</div>}
           </div>
         )}
       </main>

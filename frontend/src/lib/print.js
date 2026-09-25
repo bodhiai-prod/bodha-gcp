@@ -55,7 +55,10 @@ export function printDocument(title) {
  * the placeholder is hidden in print anyway.
  */
 export function diagramsReady(root = document) {
+  if (root.querySelector('[data-testid="branding-logo-loading"]')) return false;
+  if (root.querySelector('[data-testid="branding-logo-failed"]')) return false;
   if (root.querySelector('[data-testid="diagram-loading"]')) return false;
   const imgs = root.querySelectorAll('img[data-testid^="diagram-"]');
-  return Array.from(imgs).every((img) => img.complete && img.naturalWidth > 0);
+  const logos = root.querySelectorAll('img[data-testid="branding-logo"]');
+  return [...imgs, ...logos].every((img) => img.complete && img.naturalWidth > 0);
 }
