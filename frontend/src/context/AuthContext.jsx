@@ -7,12 +7,25 @@ import {
   signInWithEmailAndPassword,
   signInWithRedirect,
   signOut,
-  updateProfile,
+  updateProfile as updateFirebaseProfile,
 } from "firebase/auth";
 import { api } from "@/lib/api";
 import { firebaseAuth, requireFirebaseAuth } from "@/lib/firebase";
 
 const AuthContext = createContext(null);
+const ONBOARDING_KEY = "bodha-profile-onboarding";
+
+const savedOnboardingProfile = () => {
+  try {
+    return JSON.parse(sessionStorage.getItem(ONBOARDING_KEY) || "null") || {};
+  } catch {
+    return {};
+  }
+};
+
+const saveOnboardingProfile = (profile) => {
+  sessionStorage.setItem(ONBOARDING_KEY, JSON.stringify(profile));
+};
 
 function authError(error) {
   const codes = {
@@ -29,7 +42,14 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   const syncUser = async (firebaseUser) => {
-    const response = await api.post("/auth/sync", { full_name: firebaseUser.displayName || "" });
+    const onboarding = savedOnboardingProfile();
+    const response = await api.post("/auth/sync", {
+      full_name: firebaseUser.displayName || onboarding.full_name || "",
+      school_name: onboarding.school_name || "",
+      board: onboarding.board || "",
+      board_other_name: onboarding.board_other_name || "",
+    });
+    if (response.data.profile_complete) sessionStorage.removeItem(ONBOARDING_KEY);
     setUser(response.data);
     return response.data;
   };
@@ -56,7 +76,10 @@ export const AuthProvider = ({ children }) => {
     return unsubscribe;
   }, []);
 
-  const loginWithGoogle = () => signInWithRedirect(requireFirebaseAuth(), new GoogleAuthProvider());
+  const loginWithGoogle = (profile = null) => {
+    if (profile) saveOnboardingProfile(profile);
+    return signInWithRedirect(requireFirebaseAuth(), new GoogleAuthProvider());
+  };
 
   const loginWithPassword = async (email, password) => {
     try {
@@ -67,10 +90,11 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const registerWithPassword = async (fullName, email, password) => {
+  const registerWithPassword = async (fullName, email, password, profile) => {
     try {
+      saveOnboardingProfile({ full_name: fullName.trim(), ...profile });
       const credential = await createUserWithEmailAndPassword(requireFirebaseAuth(), email, password);
-      await updateProfile(credential.user, { displayName: fullName.trim() });
+      await updateFirebaseProfile(credential.user, { displayName: fullName.trim() });
       await syncUser(credential.user);
     } catch (error) {
       throw new Error(authError(error));
@@ -94,8 +118,16 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
   };
 
+  const updateBodhaProfile = async (profile) => {
+    const response = await api.patch("/auth/profile", profile);
+    setUser(response.data);
+    return response.data;
+  };
+
+  const hasPasswordProvider = () => firebaseAuth?.currentUser?.providerData?.some((provider) => provider.providerId === "password") || false;
+
   return (
-    <AuthContext.Provider value={{ user, loading, loginWithGoogle, loginWithPassword, registerWithPassword, requestPasswordReset, logout }}>
+    <AuthContext.Provider value={{ user, loading, loginWithGoogle, loginWithPassword, registerWithPassword, requestPasswordReset, updateBodhaProfile, hasPasswordProvider, logout }}>
       {children}
     </AuthContext.Provider>
   );

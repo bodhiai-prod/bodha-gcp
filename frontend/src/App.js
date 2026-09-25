@@ -9,6 +9,8 @@ import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
+import CompleteProfile from "@/pages/CompleteProfile";
+import Account from "@/pages/Account";
 import Dashboard from "@/pages/Dashboard";
 import Textbooks from "@/pages/Textbooks";
 import NewPaper from "@/pages/NewPaper";
@@ -48,6 +50,8 @@ function App() {
             <Route path="/register" element={<Register />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/complete-profile" element={<ProtectedRoute allowIncomplete><CompleteProfile /></ProtectedRoute>} />
+            <Route path="/account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
             <Route
               path="/"
               element={

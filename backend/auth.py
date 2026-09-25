@@ -44,6 +44,11 @@ async def get_current_user(identity: dict = Depends(get_firebase_identity)) -> d
     user = await db.users.find_one({"id": identity["id"]}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account setup is incomplete")
+    school_name = (user.get("school_name") or "").strip()
+    board = (user.get("board") or "").strip()
+    board_other_name = (user.get("board_other_name") or "").strip()
+    if not school_name or not board or (board == "Other" and not board_other_name):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Complete your account profile before using the workspace")
     return {"id": user["id"], "role": user.get("role", "teacher"), "email": user["email"]}
 
 
@@ -53,6 +58,8 @@ async def get_token_user(token: str) -> dict:
     user = await db.users.find_one({"id": claims["sub"]}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account setup is incomplete")
+    if not (user.get("school_name") or "").strip() or not (user.get("board") or "").strip() or (user.get("board") == "Other" and not (user.get("board_other_name") or "").strip()):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Complete your account profile before using the workspace")
     return {"id": user["id"], "role": user.get("role", "teacher"), "email": user["email"]}
 
 

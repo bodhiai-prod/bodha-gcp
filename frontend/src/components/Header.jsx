@@ -1,7 +1,7 @@
 import React from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { SignOut } from "@phosphor-icons/react";
+import { SignOut, UserCircle } from "@phosphor-icons/react";
 
 const NavItem = ({ to, label, testid }) => (
   <NavLink
@@ -76,13 +76,14 @@ export default function Header() {
           )}
         </nav>
 
-        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3">
           <div className="hidden sm:block text-right">
             <div className="text-sm font-bold">{user?.full_name}</div>
             <div className="overline text-neutral-500 text-[10px]">
               {user?.role}
             </div>
           </div>
+          <Link to="/account" data-testid="nav-account" className="qp-btn qp-btn-secondary" aria-label="Account"><UserCircle size={18} weight="bold" /><span className="hidden sm:inline">Account</span></Link>
           <button
             onClick={handleLogout}
             data-testid="logout-button"

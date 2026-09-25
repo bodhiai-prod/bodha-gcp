@@ -55,6 +55,37 @@ EOF
 gcloud auth configure-docker "${GCP_REGION:-asia-south1}-docker.pkg.dev" --quiet
 docker compose --env-file "$state_dir/release.env" \
   -f "$state_dir/docker-compose.gcp.yml" pull
-docker compose --env-file "$state_dir/release.env" \
-  -f "$state_dir/docker-compose.gcp.yml" up -d --remove-orphans
+
+# Start the API first and wait until its Docker health check passes.  Starting
+# both services at once can make Compose give up while the API is still doing
+# normal first-start work (for example building its font cache), even though it
+# becomes healthy moments later.
+compose=(docker compose --env-file "$state_dir/release.env" -f "$state_dir/docker-compose.gcp.yml")
+"${compose[@]}" up -d --remove-orphans backend
+
+backend_container="$("${compose[@]}" ps -q backend)"
+if [[ -z "$backend_container" ]]; then
+  echo "backend container was not created" >&2
+  exit 1
+fi
+
+for attempt in {1..36}; do
+  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$backend_container")"
+  if [[ "$health" == "healthy" ]]; then
+    break
+  fi
+  if [[ "$health" == "exited" || "$health" == "dead" ]]; then
+    docker logs "$backend_container" >&2 || true
+    exit 1
+  fi
+  sleep 5
+done
+
+if [[ "$health" != "healthy" ]]; then
+  echo "backend did not become healthy within 180 seconds (last state: $health)" >&2
+  docker logs "$backend_container" >&2 || true
+  exit 1
+fi
+
+"${compose[@]}" up -d --no-deps web
 docker image prune -f --filter 'until=168h'

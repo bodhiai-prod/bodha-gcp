@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ArrowRight, Eye, EyeSlash } from "@phosphor-icons/react";
 import { useAuth } from "@/context/AuthContext";
+import ProfileFields from "@/components/ProfileFields";
 
 function authError(error) {
   return error?.message || "Something went wrong. Please try again.";
@@ -23,12 +24,16 @@ function PasswordField({ id, label, value, onChange, autoComplete, hint }) {
 
 export default function Login({ mode = "login" }) {
   const isRegister = mode === "register";
-  const { loginWithGoogle, loginWithPassword, registerWithPassword } = useAuth();
+  const { user, loading, loginWithGoogle, loginWithPassword, registerWithPassword } = useAuth();
   const navigate = useNavigate();
-  const [form, setForm] = useState({ fullName: "", email: "", password: "", confirmPassword: "" });
+  const [form, setForm] = useState({ fullName: "", email: "", password: "", confirmPassword: "", schoolName: "", board: "", boardOtherName: "" });
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const update = (event) => setForm((previous) => ({ ...previous, [event.target.name]: event.target.value }));
+
+  useEffect(() => {
+    if (user && !loading) navigate(user.profile_complete ? "/" : "/complete-profile", { replace: true });
+  }, [user, loading, navigate]);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -36,7 +41,7 @@ export default function Login({ mode = "login" }) {
     if (isRegister && form.password !== form.confirmPassword) return setError("Passwords do not match.");
     setSubmitting(true);
     try {
-      if (isRegister) await registerWithPassword(form.fullName, form.email, form.password);
+      if (isRegister) await registerWithPassword(form.fullName, form.email, form.password, { school_name: form.schoolName, board: form.board, board_other_name: form.boardOtherName });
       else await loginWithPassword(form.email, form.password);
       navigate("/", { replace: true });
     } catch (requestError) {
@@ -44,6 +49,13 @@ export default function Login({ mode = "login" }) {
     } finally {
       setSubmitting(false);
     }
+  };
+  const continueWithGoogle = () => {
+    if (isRegister && (!form.fullName.trim() || !form.schoolName.trim() || !form.board || (form.board === "Other" && !form.boardOtherName.trim()))) {
+      setError("Complete your name, school, and board before continuing with Google.");
+      return;
+    }
+    loginWithGoogle(isRegister ? { full_name: form.fullName, school_name: form.schoolName, board: form.board, board_other_name: form.boardOtherName } : null).catch((err) => setError(authError(err)));
   };
 
   return <div className="min-h-screen grid lg:grid-cols-2 bg-[#FAFAFA]">
@@ -61,7 +73,7 @@ export default function Login({ mode = "login" }) {
       <p className="text-neutral-600 mb-6 text-sm">{isRegister ? "Use your email and password, or continue with Google." : "Sign in with your email and password, or continue with Google."}</p>
       {error && <p className="mb-5 border-2 border-red-700 bg-red-50 p-3 text-sm text-red-800" role="alert">{error}</p>}
       <form onSubmit={submit} className="space-y-4">
-        {isRegister && <div><label className="qp-label" htmlFor="fullName">Full name</label><input id="fullName" name="fullName" autoComplete="name" required value={form.fullName} onChange={update} className="qp-input" /></div>}
+        {isRegister && <ProfileFields form={form} onChange={update} includeName />}
         <div><label className="qp-label" htmlFor="email">Email address</label><input id="email" name="email" type="email" autoComplete="email" required value={form.email} onChange={update} className="qp-input" /></div>
         <PasswordField id="password" label="Password" value={form.password} onChange={update} autoComplete={isRegister ? "new-password" : "current-password"} hint={isRegister ? "Use at least 8 characters." : null} />
         {isRegister && <PasswordField id="confirmPassword" label="Confirm password" value={form.confirmPassword} onChange={update} autoComplete="new-password" />}
@@ -69,7 +81,7 @@ export default function Login({ mode = "login" }) {
         <button type="submit" disabled={submitting} className="qp-btn qp-btn-primary w-full" data-testid="email-auth-submit">{submitting ? "Please wait…" : isRegister ? "Create account" : "Sign in"}{!submitting && <ArrowRight size={16} weight="bold" />}</button>
       </form>
       <div className="flex items-center gap-3 my-6 text-neutral-500" aria-hidden="true"><div className="h-px bg-neutral-300 flex-1" /><span className="overline text-[10px]">or</span><div className="h-px bg-neutral-300 flex-1" /></div>
-      <button type="button" onClick={() => loginWithGoogle().catch((err) => setError(authError(err)))} className="qp-btn qp-btn-secondary w-full" data-testid="google-login-button">Continue with Google <ArrowRight size={16} weight="bold" /></button>
+      <button type="button" onClick={continueWithGoogle} className="qp-btn qp-btn-secondary w-full" data-testid="google-login-button">Continue with Google <ArrowRight size={16} weight="bold" /></button>
       <p className="mt-6 text-sm text-neutral-600">{isRegister ? <>Already have an account? <Link to="/login" className="font-bold text-[#002FA7] underline">Sign in</Link></> : <>New to Bodha AI? <Link to="/register" className="font-bold text-[#002FA7] underline">Create an account</Link></>}</p>
     </section></div>
   </div>;

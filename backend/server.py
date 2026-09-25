@@ -543,26 +543,28 @@ async def me(user: dict = Depends(get_current_user)):
 @api_router.patch("/auth/profile", response_model=UserPublic)
 async def update_profile(
     payload: ProfileUpdateRequest,
-    user: dict = Depends(get_current_user),
+    identity: dict = Depends(get_firebase_identity),
 ):
     profile = _profile_values(
         payload.school_name, payload.board, payload.board_other_name, require_complete=True
     )
     values = {"full_name": payload.full_name.strip(), **profile}
-    await db.users.update_one({"id": user["id"]}, {"$set": values})
-    updated = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    await db.users.update_one({"id": identity["id"]}, {"$set": values})
+    updated = await db.users.find_one({"id": identity["id"]}, {"_id": 0})
+    if not updated:
+        raise HTTPException(status_code=401, detail="Account setup is incomplete")
     return UserPublic(**serialize_user(updated))
 
 
 @api_router.get("/auth/account")
-async def account_summary(user: dict = Depends(get_current_user)):
+async def account_summary(identity: dict = Depends(get_firebase_identity)):
     """Return profile plus the exact activity totals displayed on the user's dashboard."""
-    record = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    record = await db.users.find_one({"id": identity["id"]}, {"_id": 0})
     if not record:
         raise HTTPException(status_code=404, detail="User not found")
     active = {"is_deleted": False}
-    if user["role"] == "student":
-        tests = await db.mock_tests.find({"owner_id": user["id"]}, {"_id": 0, "status": 1, "score": 1}).to_list(500)
+    if record["role"] == "student":
+        tests = await db.mock_tests.find({"student_id": record["id"]}, {"_id": 0, "status": 1, "score": 1}).to_list(500)
         submitted = [test for test in tests if test.get("status") == "submitted"]
         average_score = (
             round(sum((test.get("score") or {}).get("percent", 0) for test in submitted) / len(submitted))
@@ -570,12 +572,12 @@ async def account_summary(user: dict = Depends(get_current_user)):
         )
         stats = {"kind": "student", "total_tests": len(tests), "submitted_tests": len(submitted), "average_score": average_score}
     else:
-        textbook_query = active if user["role"] == "admin" else {**active, "$or": [{"owner_id": user["id"]}, {"is_shared": True}]}
+        textbook_query = active if record["role"] == "admin" else {**active, "$or": [{"owner_id": record["id"]}, {"is_shared": True}]}
         stats = {
             "kind": "teacher",
             "textbooks_indexed": await db.textbooks.count_documents(textbook_query),
-            "papers_generated": await db.papers.count_documents({**active, "owner_id": user["id"]}),
-            "questions_saved": await db.qbank.count_documents({**active, "owner_id": user["id"]}),
+            "papers_generated": await db.papers.count_documents({**active, "owner_id": record["id"]}),
+            "questions_saved": await db.qbank.count_documents({**active, "owner_id": record["id"]}),
         }
     return {"user": UserPublic(**serialize_user(record)), "stats": stats}
 

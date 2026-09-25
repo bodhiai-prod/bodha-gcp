@@ -6,6 +6,7 @@ export default function StudentRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return null;
   if (!user) return <Navigate to="/login" replace />;
+  if (!user.profile_complete) return <Navigate to="/complete-profile" replace />;
   if (user.role !== "student" && user.role !== "admin") {
     return <Navigate to="/" replace />;
   }
