@@ -1269,29 +1269,38 @@ def parse_json_response(text: str) -> Any:
 
     # Salvage a truncated paper: pull "instructions" if present + walk any
     # complete question objects out of the (possibly broken) sections array.
-    # Returns a single-section paper containing whatever questions survived
-    # the cut-off — better than failing the whole job.
+    # Crucially, retain the section metadata that preceded each questions
+    # array.  Collapsing everything into "Recovered Questions" makes a
+    # recoverable transport failure look like a blueprint violation and means
+    # a later top-up has no section to merge into.
     instr_m = re.search(r'"instructions"\s*:\s*"([^"]*)"', text)
     instructions = instr_m.group(1) if instr_m else ""
     # Walk every `"questions": [` block in the response; for each, scan the
     # remaining text and collect complete question objects until brace depth
     # closes the array (or text ends).
-    questions: list = []
-    for qm in re.finditer(r'"questions"\s*:\s*\[', text):
-        questions.extend(_walk_top_level_objects(text[qm.end():]))
-    # Dedupe in the rare case multiple blocks salvage the same items.
+    recovered_sections: list[dict] = []
+    by_section: dict[tuple[str, str], dict] = {}
     seen: set = set()
-    unique_questions = []
-    for q in questions:
-        sig = (q.get("question", ""), tuple(q.get("options", []) or []))
-        if sig in seen:
-            continue
-        seen.add(sig)
-        unique_questions.append(q)
-    if unique_questions:
+    for qm in re.finditer(r'"questions"\s*:\s*\[', text):
+        metadata = _section_metadata_before(text, qm.start())
+        title = metadata.get("title") or "Recovered Questions"
+        section_id = metadata.get("section_id") or ""
+        key = (section_id, title)
+        section = by_section.get(key)
+        if section is None:
+            section = {**metadata, "title": title, "questions": []}
+            by_section[key] = section
+            recovered_sections.append(section)
+        for q in _walk_top_level_objects(text[qm.end():]):
+            sig = (q.get("question", ""), tuple(q.get("options", []) or []))
+            if sig in seen:
+                continue
+            seen.add(sig)
+            section["questions"].append(q)
+    if any(section["questions"] for section in recovered_sections):
         return {
             "instructions": instructions,
-            "sections": [{"title": "Recovered Questions", "questions": unique_questions}],
+            "sections": [section for section in recovered_sections if section["questions"]],
             "_recovered_from_truncation": True,
         }
 
@@ -1318,6 +1327,12 @@ def _walk_top_level_objects(body: str) -> list:
         if ch == '"':
             in_string = True
             continue
+        # `body` starts immediately after a questions-array opening bracket.
+        # Stop at that array's close rather than continuing into the next
+        # section, where its whole section object could otherwise be mistaken
+        # for another question.
+        if ch == "]" and depth == 0:
+            break
         if ch == "{":
             if depth == 0:
                 start = i
@@ -1332,3 +1347,47 @@ def _walk_top_level_objects(body: str) -> list:
                     pass
                 start = None
     return items
+
+
+def _section_metadata_before(text: str, position: int) -> dict:
+    """Return title/section_id from the object owning a questions array.
+
+    A truncated response is not valid JSON as a whole, but everything before a
+    `"questions": [` key is balanced. Tracking opening braces identifies that
+    section object without guessing from titles in earlier sections or question
+    text. The values themselves are decoded with ``json.loads`` so escaped
+    titles remain correct.
+    """
+    stack: list[int] = []
+    in_string = False
+    escape = False
+    for index, ch in enumerate(text[:position]):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            stack.append(index)
+        elif ch == "}" and stack:
+            stack.pop()
+    if not stack:
+        return {}
+
+    prefix = text[stack[-1]:position]
+    result: dict = {}
+    quoted = r'("(?:\\.|[^"\\])*")'
+    for field in ("section_id", "title"):
+        match = re.search(rf'"{field}"\s*:\s*{quoted}', prefix)
+        if not match:
+            continue
+        try:
+            result[field] = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+    return result

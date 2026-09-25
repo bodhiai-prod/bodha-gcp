@@ -64,6 +64,7 @@ from workers import (
     paper_target_count,
     reconcile_solution_shell,
     regenerate_question_background,
+    restore_recovered_sections,
     TOPUP_MAX,
 )
 import student_routes  # noqa: F401  registers /api/student/* endpoints
@@ -1538,6 +1539,14 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
+    repaired_sections, repaired_recovery = restore_recovered_sections(
+        p.get("sections") or [], p.get("generation_requirements") or {}
+    )
+    if repaired_recovery:
+        await db.papers.update_one(
+            {"id": paper_id}, {"$set": {"sections": repaired_sections}}
+        )
+        p["sections"] = repaired_sections
     textbook_ids = p.get("textbook_ids") or ([p["textbook_id"]] if p.get("textbook_id") else [])
     textbook_rows = await db.textbooks.find(
         {"id": {"$in": textbook_ids}, "is_deleted": False},

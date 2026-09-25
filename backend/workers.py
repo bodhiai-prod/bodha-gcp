@@ -780,6 +780,62 @@ def merge_topup_sections(existing: list, new: list, limit: int = 0) -> list:
     return merged
 
 
+def restore_recovered_sections(sections: list, spec: dict) -> tuple[list, bool]:
+    """Put legacy recovered blueprint questions back in their allocated sections.
+
+    Older truncation recovery stored every surviving question under a synthetic
+    ``Recovered Questions`` heading. The question allocation IDs were still
+    intact, so this is a lossless repair for papers already saved in that
+    shape. Unknown questions remain in the recovery section for manual review.
+    """
+    allocations = spec.get("section_allocations") or []
+    recovered = [
+        s for s in sections or [] if (s.get("title") or "").strip().casefold() == "recovered questions"
+    ]
+    if not allocations or not recovered:
+        return sections, False
+
+    by_allocation = {row.get("allocation_id"): row for row in allocations}
+    blueprint_titles = {
+        section.get("id"): section.get("title") or section.get("id")
+        for section in (spec.get("blueprint") or {}).get("sections", [])
+    }
+    repaired = [dict(s, questions=list(s.get("questions") or [])) for s in sections if s not in recovered]
+    by_id = {s.get("section_id"): s for s in repaired if s.get("section_id")}
+    changed = False
+    leftovers: list = []
+    for source in recovered:
+        for question in source.get("questions") or []:
+            row = by_allocation.get(question.get("allocation_id"))
+            if not row:
+                leftovers.append(question)
+                continue
+            section_id = row["section_id"]
+            target = by_id.get(section_id)
+            if target is None:
+                target = {
+                    "section_id": section_id,
+                    "title": blueprint_titles.get(section_id, f"Section {section_id}"),
+                    "questions": [],
+                }
+                repaired.append(target)
+                by_id[section_id] = target
+            target["questions"].append(question)
+            changed = True
+    if leftovers:
+        repaired.append({"title": "Recovered Questions", "questions": leftovers})
+    # The flat recovery block may have contained a later section before an
+    # earlier one. Restore the blueprint's display order as well as its
+    # membership so the global Q1, Q2, … counter remains meaningful.
+    blueprint_order = [
+        section.get("id") for section in (spec.get("blueprint") or {}).get("sections", [])
+    ]
+    ordered = [by_id[section_id] for section_id in blueprint_order if section_id in by_id]
+    ordered_ids = {id(section) for section in ordered}
+    repaired = ordered + [section for section in repaired if id(section) not in ordered_ids]
+    return (repaired, changed) if changed else (sections, False)
+
+
 async def _finish_topup(
     paper_id: str, sections: list, added: int, pending_count: int, target: int
 ) -> None:
@@ -964,6 +1020,15 @@ async def generate_missing_questions_background(
             return
 
         existing_sections = p.get("sections") or []
+        existing_sections, repaired_recovery = restore_recovered_sections(
+            existing_sections, p.get("generation_requirements") or {}
+        )
+        if repaired_recovery:
+            # Persist before generating so merge_topup_sections has the same
+            # canonical section layout as the paper the teacher sees.
+            await db.papers.update_one(
+                {"id": paper_id}, {"$set": {"sections": existing_sections}}
+            )
         difficulty = p.get("difficulty", "medium")
         # The teacher's instructions govern the top-up too -- a paper told
         # to stay in syllabus must not drift on the questions added to fix
