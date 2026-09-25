@@ -2069,7 +2069,11 @@ async def paper_pdf(
     # math rasterisation at 600dpi, and up to 5 blocking S3 fetches inside
     # _diagram_loader. Runs on pdf_utils' dedicated pool so a ~50ms render never
     # queues behind a 30-120s Bedrock call (which is what pushed p95 to 1500ms).
-    pdf_bytes = await render_paper_pdf_async(p, diagram_loader=_diagram_loader)
+    pdf_bytes = await render_paper_pdf_async(
+        p,
+        diagram_loader=_diagram_loader,
+        branding_loader=lambda path: _diagram_loader("", path),
+    )
     safe_title = "".join(c for c in p["title"] if c.isalnum() or c in (" ", "-", "_")).strip()[:60] or "paper"
     return Response(
         content=pdf_bytes,
@@ -2595,7 +2599,11 @@ async def solution_pdf(
             return None
 
     # Same as the paper PDF above — dedicated pool, never behind an LLM call.
-    pdf_bytes = await render_solution_pdf_async(p, diagram_loader=_diagram_loader)
+    pdf_bytes = await render_solution_pdf_async(
+        p,
+        diagram_loader=_diagram_loader,
+        branding_loader=lambda path: _diagram_loader("", path),
+    )
     safe_title = (
         "".join(c for c in p["title"] if c.isalnum() or c in (" ", "-", "_"))
         .strip()[:60]

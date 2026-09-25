@@ -634,7 +634,7 @@ export default function PaperView() {
           >
             <ArrowLeft size={16} weight="bold" /> Dashboard
           </Link>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {editing ? (
               <>
                 <button
@@ -739,7 +739,7 @@ export default function PaperView() {
                     data-testid="edit-marks-input"
                   />
                 ) : (
-                  <b>{view.total_marks}</b>
+                  <b>{formatMark(view.total_marks)}</b>
                 )}
               </span>
               <span>

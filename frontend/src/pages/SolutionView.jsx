@@ -359,7 +359,7 @@ export default function SolutionView() {
               <div className="mt-3 font-mono text-sm text-neutral-700">
                 Class <b>{paper.class_name}</b> · Subject{" "}
                 <b>{paper.subject}</b> · Total Marks{" "}
-                <b>{paper.total_marks}</b>
+                <b>{formatMark(paper.total_marks)}</b>
               </div>
               {paper.branding_tagline && <div className="mt-2 text-sm italic text-neutral-500">{paper.branding_tagline}</div>}
             </div>

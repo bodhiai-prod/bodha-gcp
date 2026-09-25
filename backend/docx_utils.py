@@ -467,7 +467,7 @@ def render_paper_docx(
     metadata = (
         f"Class: {paper.get('class_name', '')}    "
         f"Subject: {paper.get('subject', '')}    "
-        f"Total Marks: {paper.get('total_marks', '')}    "
+        f"Total Marks: {format_mark(paper.get('total_marks', ''))}    "
         f"Duration: {paper.get('duration_minutes', '')} min"
     )
     metadata_paragraph = document.add_paragraph()

@@ -36,6 +36,7 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+from export_utils import format_mark, printable_instructions
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +288,11 @@ def _make_diagram_image(img_bytes: bytes, max_width_mm: float = 100, max_height_
         from PIL import Image as PILImage
         bio = io.BytesIO(img_bytes)
         with PILImage.open(bio) as pim:
+            pim = pim.convert("L")
             iw, ih = pim.size
+            grayscale = io.BytesIO()
+            pim.save(grayscale, format="PNG")
+            img_bytes = grayscale.getvalue()
         if iw <= 0 or ih <= 0:
             return None
         max_w_pt = max_width_mm * mm
@@ -693,7 +698,30 @@ def chunk_text(text: str, chunk_size: int = 2500, overlap: int = 200) -> List[st
     return [c for c in chunks if c]
 
 
-def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
+def _page_branding(paper: dict):
+    footer = (paper.get("branding_footer") or "").strip()
+    watermark = (paper.get("branding_watermark") or "").strip()
+
+    def draw(canvas, document):
+        canvas.saveState()
+        if watermark:
+            canvas.setFillColor(colors.HexColor("#D0D0D0"))
+            canvas.setFont(BODY_FONT_BOLD, 28)
+            canvas.translate(A4[0] / 2, A4[1] / 2)
+            canvas.rotate(35)
+            canvas.drawCentredString(0, 0, watermark.upper())
+            canvas.rotate(-35)
+            canvas.translate(-A4[0] / 2, -A4[1] / 2)
+        canvas.setFillColor(colors.black)
+        canvas.setFont(BODY_FONT, 8)
+        label = f"{footer}  ·  " if footer else ""
+        canvas.drawCentredString(A4[0] / 2, 9 * mm, f"{label}Page {document.page}")
+        canvas.restoreState()
+
+    return draw
+
+
+def render_paper_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> bytes:
     """Render the structured paper dict into a printable PDF.
 
     diagram_loader: optional callable(question_id, diagram_path) -> bytes|None,
@@ -727,7 +755,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
         fontSize=10,
         leading=14,
         alignment=1,
-        textColor=colors.HexColor("#525252"),
+        textColor=colors.black,
     )
     section_h = ParagraphStyle(
         "section",
@@ -737,7 +765,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
         leading=16,
         spaceBefore=10,
         spaceAfter=6,
-        textColor=colors.HexColor("#002FA7"),
+        textColor=colors.black,
     )
     q_style = ParagraphStyle(
         "q",
@@ -753,15 +781,30 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
         fontName=BODY_FONT_ITALIC,
         fontSize=8,
         leading=10,
-        textColor=colors.HexColor("#525252"),
+        textColor=colors.black,
     )
 
     story = []
+    if paper.get("header_image_path") and branding_loader:
+        try:
+            logo_bytes = branding_loader(paper["header_image_path"])
+            if logo_bytes:
+                logo = _make_diagram_image(logo_bytes, max_width_mm=28, max_height_mm=24)
+                if logo is not None:
+                    logo.hAlign = "CENTER"
+                    story.append(logo)
+                    story.append(Spacer(1, 2 * mm))
+        except Exception:
+            pass
+    if paper.get("school_name"):
+        story.append(Paragraph(str(paper["school_name"]), h1))
     story.append(Paragraph(paper.get("title", "Question Paper"), h1))
+    if paper.get("branding_tagline"):
+        story.append(Paragraph(str(paper["branding_tagline"]), meta))
 
     subject = paper.get("subject", "")
     klass = paper.get("class_name", "")
-    marks = paper.get("total_marks", "")
+    marks = format_mark(paper.get("total_marks", ""))
     duration = paper.get("duration_minutes", "")
     story.append(
         Paragraph(
@@ -784,15 +827,17 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
     story.append(sep)
     story.append(Spacer(1, 4 * mm))
 
-    instructions = paper.get("instructions")
-    if instructions:
-        story.append(
-            Paragraph(
-                f"<b>Instructions:</b> {_math_to_paragraph_html(instructions)}",
-                q_style,
-            )
+    instructions = printable_instructions(
+        paper.get("instructions"),
+        custom_instructions=paper.get("custom_instructions") or "",
+    )
+    story.append(
+        Paragraph(
+            f"<b>Instructions:</b> {_math_to_paragraph_html(instructions)}",
+            q_style,
         )
-        story.append(Spacer(1, 4 * mm))
+    )
+    story.append(Spacer(1, 4 * mm))
 
     # Group questions by section (type)
     sections = paper.get("sections") or []
@@ -812,7 +857,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
             story.append(
                 Paragraph(
                     f"<b>Q{q_counter}.</b> {important}{q_html} "
-                    f"<font color='#525252'>[{marks_q} marks]</font>",
+                    f"<font color='#000000'>[{format_mark(marks_q)} marks]</font>",
                     q_style,
                 )
             )
@@ -830,12 +875,6 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
                             q_style,
                         )
                     )
-            tags = [t for t in [qtype, q.get("format", ""), difficulty] if t]
-            if tags:
-                # Make format display human-friendly (snake_case -> spaces)
-                tags = [str(t).replace("_", " ") for t in tags]
-                story.append(Paragraph(" · ".join(tags), tag_style))
-
             # Embed diagram if present
             if q.get("diagram_path") and diagram_loader:
                 try:
@@ -852,7 +891,8 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
             story.append(Spacer(1, 2 * mm))
             q_counter += 1
 
-    doc.build(story)
+    page_branding = _page_branding(paper)
+    doc.build(story, onFirstPage=page_branding, onLaterPages=page_branding)
     out = buf.getvalue()
     # Clean up temp math PNGs
     for path in list(_MATH_CACHE.values()):
@@ -864,7 +904,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None) -> bytes:
     return out
 
 
-def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
+def render_solution_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> bytes:
     """Render the answer-key PDF for a paper. Mirrors the paper structure but
     places each question's answer below it."""
     sol = paper.get("solution") or {}
@@ -901,7 +941,7 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
         fontSize=10,
         leading=14,
         alignment=1,
-        textColor=colors.HexColor("#525252"),
+        textColor=colors.black,
     )
     section_h = ParagraphStyle(
         "section",
@@ -911,7 +951,7 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
         leading=16,
         spaceBefore=10,
         spaceAfter=6,
-        textColor=colors.HexColor("#002FA7"),
+        textColor=colors.black,
     )
     q_style = ParagraphStyle(
         "q",
@@ -929,7 +969,7 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
         leading=15,
         spaceAfter=8,
         leftIndent=12,
-        textColor=colors.HexColor("#0A0A0A"),
+        textColor=colors.black,
     )
     tag_style = ParagraphStyle(
         "tag",
@@ -937,17 +977,32 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
         fontName=BODY_FONT_ITALIC,
         fontSize=8,
         leading=10,
-        textColor=colors.HexColor("#525252"),
+        textColor=colors.black,
     )
 
     story = []
+    if paper.get("header_image_path") and branding_loader:
+        try:
+            logo_bytes = branding_loader(paper["header_image_path"])
+            if logo_bytes:
+                logo = _make_diagram_image(logo_bytes, max_width_mm=28, max_height_mm=24)
+                if logo is not None:
+                    logo.hAlign = "CENTER"
+                    story.append(logo)
+                    story.append(Spacer(1, 2 * mm))
+        except Exception:
+            pass
+    if paper.get("school_name"):
+        story.append(Paragraph(str(paper["school_name"]), h1))
     story.append(Paragraph(paper.get("title", "Question Paper"), h1))
+    if paper.get("branding_tagline"):
+        story.append(Paragraph(str(paper["branding_tagline"]), meta))
     story.append(Paragraph("— ANSWER KEY —", meta))
     story.append(
         Paragraph(
             f"Class: <b>{paper.get('class_name','')}</b> &nbsp;&nbsp; "
             f"Subject: <b>{paper.get('subject','')}</b> &nbsp;&nbsp; "
-            f"Total Marks: <b>{paper.get('total_marks','')}</b>",
+            f"Total Marks: <b>{format_mark(paper.get('total_marks', ''))}</b>",
             meta,
         )
     )
@@ -984,7 +1039,7 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
             story.append(
                 Paragraph(
                     f"Q{q_counter}. {qtext_html} "
-                    f"<font color='#525252'>[{marks_q} marks]</font>",
+                    f"<font color='#000000'>[{format_mark(marks_q)} marks]</font>",
                     q_style,
                 )
             )
@@ -1007,7 +1062,8 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
             story.append(Paragraph(f"<b>Ans:</b> {ans_html}", a_style))
             q_counter += 1
 
-    doc.build(story)
+    page_branding = _page_branding(paper)
+    doc.build(story, onFirstPage=page_branding, onLaterPages=page_branding)
     out = buf.getvalue()
     for path in list(_MATH_CACHE.values()):
         try:
@@ -1022,17 +1078,17 @@ def render_solution_pdf(paper: dict, diagram_loader=None) -> bytes:
 # Async wrappers — run the renderers on the dedicated pool defined above.
 # Call these from async endpoints; the sync versions remain the primitive.
 # ---------------------------------------------------------------------------
-async def render_paper_pdf_async(paper: dict, diagram_loader=None) -> bytes:
+async def render_paper_pdf_async(paper: dict, diagram_loader=None, branding_loader=None) -> bytes:
     """render_paper_pdf() on the dedicated PDF pool."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
-        _PDF_POOL, render_paper_pdf, paper, diagram_loader
+        _PDF_POOL, render_paper_pdf, paper, diagram_loader, branding_loader
     )
 
 
-async def render_solution_pdf_async(paper: dict, diagram_loader=None) -> bytes:
+async def render_solution_pdf_async(paper: dict, diagram_loader=None, branding_loader=None) -> bytes:
     """render_solution_pdf() on the dedicated PDF pool."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
-        _PDF_POOL, render_solution_pdf, paper, diagram_loader
+        _PDF_POOL, render_solution_pdf, paper, diagram_loader, branding_loader
     )

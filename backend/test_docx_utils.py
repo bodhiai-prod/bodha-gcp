@@ -110,6 +110,7 @@ def test_docx_keeps_placeholder_for_pending_diagram():
 
 def test_marks_instructions_and_cases_are_normalized():
     paper = _paper()
+    paper["total_marks"] = 10.0
     paper["custom_instructions"] = ""
     paper["instructions"] = "Ensure proper LaTeX formatting."
     question = paper["sections"][0]["questions"][0]
@@ -124,6 +125,7 @@ def test_marks_instructions_and_cases_are_normalized():
     assert DEFAULT_INSTRUCTIONS in document_xml
     assert "[5]" in document_xml
     assert "[5.0]" not in document_xml
+    assert "Total Marks: 10.0" not in document_xml
     assert r"\begin" not in document_xml
     assert r"\end" not in document_xml
     assert ">cases<" not in document_xml
