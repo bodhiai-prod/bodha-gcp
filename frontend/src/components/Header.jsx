@@ -9,7 +9,7 @@ const NavItem = ({ to, label, testid }) => (
     end
     data-testid={testid}
     className={({ isActive }) =>
-      `px-3 py-2 text-sm font-bold uppercase tracking-wider transition-colors ${
+      `whitespace-nowrap px-2 py-2 text-xs font-bold uppercase tracking-wide transition-colors xl:px-3 xl:text-sm xl:tracking-wider ${
         isActive
           ? "bg-black text-white"
           : "text-black hover:bg-neutral-100"
@@ -31,11 +31,11 @@ export default function Header() {
 
   return (
     <header className="border-b-2 border-black bg-white sticky top-0 z-40">
-      <div className="max-w-7xl mx-auto flex items-center justify-between px-6 py-4">
+      <div className="mx-auto flex w-full items-center gap-4 px-5 py-3 sm:px-8 xl:px-12 2xl:px-16">
         <Link
           to={user?.role === "student" ? "/student" : "/"}
           data-testid="app-logo-link"
-          className="flex items-center gap-3 group"
+          className="flex shrink-0 items-center gap-3 group"
         >
           <img
             src="/assets/bodhaai-app-icon-512.png"
@@ -52,7 +52,7 @@ export default function Header() {
           </div>
         </Link>
 
-        <nav className="hidden md:flex items-center gap-1">
+        <nav className="hidden min-w-0 flex-1 items-center justify-center gap-0 md:flex xl:gap-2">
           {user?.role === "student" ? (
             <>
               <NavItem to="/student" label="My Tests" testid="nav-student-dashboard" />
@@ -76,8 +76,8 @@ export default function Header() {
           )}
         </nav>
 
-          <div className="flex items-center gap-3">
-          <div className="hidden sm:block text-right">
+        <div className="flex shrink-0 items-center gap-2 xl:gap-3">
+          <div className="hidden xl:block whitespace-nowrap text-right">
             <div className="text-sm font-bold">{user?.full_name}</div>
             <div className="overline text-neutral-500 text-[10px]">
               {user?.role}

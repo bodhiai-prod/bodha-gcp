@@ -65,6 +65,7 @@ chainlit.md
 .terraform/
 terraform.tfvars
 *.tfplan
+.firebase/
 crash.log
 
 # Data and databases

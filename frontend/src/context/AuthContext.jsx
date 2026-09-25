@@ -5,7 +5,7 @@ import {
   onAuthStateChanged,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
-  signInWithRedirect,
+  signInWithPopup,
   signOut,
   updateProfile as updateFirebaseProfile,
 } from "firebase/auth";
@@ -76,9 +76,16 @@ export const AuthProvider = ({ children }) => {
     return unsubscribe;
   }, []);
 
-  const loginWithGoogle = (profile = null) => {
+  const loginWithGoogle = async (profile = null) => {
     if (profile) saveOnboardingProfile(profile);
-    return signInWithRedirect(requireFirebaseAuth(), new GoogleAuthProvider());
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+      const credential = await signInWithPopup(requireFirebaseAuth(), provider);
+      await syncUser(credential.user);
+    } catch (error) {
+      throw new Error(authError(error));
+    }
   };
 
   const loginWithPassword = async (email, password) => {

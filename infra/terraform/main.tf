@@ -14,6 +14,7 @@ locals {
     "dns.googleapis.com",
     "firestore.googleapis.com",
     "firebase.googleapis.com",
+    "firebasehosting.googleapis.com",
     "iam.googleapis.com",
     "identitytoolkit.googleapis.com",
     "logging.googleapis.com",
