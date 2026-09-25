@@ -453,9 +453,9 @@ export default function NewPaper() {
           {["Setup", "Questions", "Review"].map((label, index) => <button key={label} type="button" className={step === index ? "is-active" : ""} aria-current={step === index ? "step" : undefined} onClick={() => setStep(index)}>{index + 1}. {label}</button>)}
         </nav>
 
-        <form onSubmit={onGenerate} className="grid grid-cols-1 gap-6 md:gap-8 lg:grid-cols-[minmax(0,1.25fr)_minmax(28rem,1fr)]">
+        <form onSubmit={onGenerate} className={`paper-workspace paper-workspace--${["setup", "questions", "review"][step]}`}>
           {/* Left: Metadata + distribution */}
-          <div className="space-y-6">
+          <div className="paper-workspace-main space-y-6">
             {step === 0 && <>
             <ExpandableCard id="metadata" title="Paper details" summary={`${selectedTbIds.length} textbooks · ${totalMarks} marks · ${duration} minutes`} defaultOpen>
               <div className="mb-4">
@@ -845,15 +845,30 @@ Make Q23 as hard as possible`}
           </div>
 
           {/* Right: Topics + submit */}
-          <div className="space-y-5">
+          <div className="paper-workspace-rail space-y-5">
             {step !== 2 && <section className="qp-card" data-testid="persistent-difficulty-card">
               <h2 className="font-bold uppercase text-sm tracking-wide mb-4">Difficulty</h2>
               <div className="grid grid-cols-3 border-2 border-black">
                 {DIFFICULTIES.map((d, i) => <button key={d} type="button" onClick={() => setDifficulty(d)} data-testid={`difficulty-${d}-button`} className={`py-3 font-bold uppercase tracking-wider text-sm transition-colors ${difficulty === d ? "bg-black text-white" : "bg-white hover:bg-neutral-100"} ${i !== 2 ? "border-r-2 border-black" : ""}`}>{DIFFICULTY_LABELS[d]}</button>)}
               </div>
             </section>}
-            <ConfigurationSummary compact preview={preview?.requestKey === requestKey ? preview : null} loading={previewLoading} error={previewError} />
-            {!blueprint && <ExpandableCard id="topics" title="Topic selection (no blueprint)" summary={`${selectedTopics.length} selected · Default: ${DIFFICULTY_LABELS[difficulty]}`} defaultOpen>
+            {step !== 2 && <PaperAtGlance
+              title={title}
+              textbookCount={selectedTbIds.length}
+              topicCount={selectedTopics.length}
+              totalMarks={totalMarks}
+              duration={duration}
+              questionCount={promptOverride ? "Blueprint" : effectiveQuestionCount}
+              difficulty={DIFFICULTY_LABELS[difficulty]}
+            />}
+            {step === 0 && <section className="qp-card topics-next-card">
+              <div className="overline text-neutral-500 mb-2">// NEXT UP</div>
+              <h2 className="font-bold uppercase text-sm tracking-wide">Choose topics</h2>
+              <p className="text-sm text-neutral-500 mt-2">Select chapters and subtopics in the Questions step.</p>
+              <div className="topics-next-count">{selectedTopics.length} topics selected so far</div>
+            </section>}
+            {step === 2 && <ConfigurationSummary preview={preview?.requestKey === requestKey ? preview : null} loading={previewLoading} error={previewError} />}
+            {step === 1 && !blueprint && <ExpandableCard id="topics" title="Choose topics" summary={`${selectedTopics.length} selected · Default: ${DIFFICULTY_LABELS[difficulty]}`} defaultOpen className="topic-workspace">
 
               {selectedTbIds.length === 0 && (
                 <div className="text-sm text-neutral-500">
@@ -1120,12 +1135,28 @@ Make Q23 as hard as possible`}
   );
 }
 
+function PaperAtGlance({ title, textbookCount, topicCount, totalMarks, duration, questionCount, difficulty }) {
+  return (
+    <section className="qp-card paper-at-a-glance" aria-live="polite">
+      <div className="overline text-neutral-500 mb-2">// PAPER AT A GLANCE</div>
+      <h2 className="font-bold uppercase text-sm tracking-wide truncate">{title || "Untitled paper"}</h2>
+      <dl className="paper-glance-facts">
+        <div><dt>Textbooks</dt><dd>{textbookCount}</dd></div>
+        <div><dt>Topics selected</dt><dd>{topicCount}</dd></div>
+        <div><dt>Marks / duration</dt><dd>{totalMarks} · {duration} min</dd></div>
+        <div><dt>Questions</dt><dd>{questionCount}</dd></div>
+        <div><dt>Default level</dt><dd>{difficulty}</dd></div>
+      </dl>
+    </section>
+  );
+}
+
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v)));
 
-function ExpandableCard({ id, title, summary, defaultOpen = false, disabled = false, children }) {
+function ExpandableCard({ id, title, summary, defaultOpen = false, disabled = false, children, className = "" }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <section className="qp-card" data-testid={`${id}-card`}>
+    <section className={`qp-card ${className}`} data-testid={`${id}-card`}>
       <button
         type="button"
         className="flex w-full items-start justify-between gap-4 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#002FA7]"

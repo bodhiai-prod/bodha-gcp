@@ -430,6 +430,22 @@ pre.math-fallback {
 .new-paper-steps button.is-active { border-color:#002fa7; background:#002fa7; color:#fff; }
 .new-paper-page .qp-card { padding:22px; }
 .new-paper-page .qp-card > button:first-child > span:first-child > span:first-child { letter-spacing:.07em; }
+.paper-workspace { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(20rem,.8fr); gap:24px 32px; align-items:start; }
+.paper-workspace-main { grid-column:1; min-width:0; }
+.paper-workspace-rail { grid-column:2; min-width:0; }
+.paper-at-a-glance { border-color:#002fa7; background:#f7f9ff; }
+.paper-glance-facts { margin-top:14px; border-top:1px solid #cbd5e1; }
+.paper-glance-facts > div { display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid #dbe3f0; font-size:12px; }
+.paper-glance-facts dt { color:#525252; }
+.paper-glance-facts dd { font-weight:700; text-align:right; }
+.topics-next-card { border-style:dashed; background:#fafafa; }
+.topics-next-count { display:inline-flex; margin-top:14px; border:1px solid #002fa7; background:#eef2ff; color:#002fa7; padding:6px 8px; font-size:11px; font-weight:700; }
+.paper-workspace--questions .paper-workspace-rail { display:contents; }
+.paper-workspace--questions [data-testid="persistent-difficulty-card"] { grid-column:2; }
+.paper-workspace--questions .paper-at-a-glance { grid-column:2; }
+.paper-workspace--questions .topic-workspace { grid-column:1 / -1; border-width:2px; }
+.paper-workspace--questions .topic-workspace > button:first-child { padding-bottom:2px; }
+.paper-workspace--questions .paper-action-bar { grid-column:1 / -1; }
 .configuration-summary-compact { padding:18px !important; }
 .configuration-summary-compact .blueprint-summary-facts > div { padding:7px 0; }
 .configuration-summary-compact h2 { margin-bottom:10px; }
@@ -483,6 +499,10 @@ pre.math-fallback {
 
 @media (max-width: 1023px) {
     .new-paper-steps { margin:0 0 22px; }
+    .paper-workspace { display:block; }
+    .paper-workspace-main, .paper-workspace-rail { display:block; }
+    .paper-workspace-rail > * + * { margin-top:20px; }
+    .paper-workspace--questions .paper-workspace-rail { display:block; }
     .chapter-selection-scroll { height:440px; }
     .paper-action-bar { bottom:0; margin:0 -24px; padding:12px 24px max(12px, env(safe-area-inset-bottom)); background:rgba(250,250,250,.96); border-top:1px solid #d4d4d4; }
 }
