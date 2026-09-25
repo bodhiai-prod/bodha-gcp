@@ -426,30 +426,8 @@ pre.math-fallback {
 /* Section allocation and backend summary panels. */
 .section-tabs { display:flex; flex-wrap:wrap; gap:4px; border-bottom:2px solid #111; }
 .new-paper-steps { display:flex; flex-wrap:wrap; gap:6px; margin:-20px 0 28px; }
-.new-paper-steps button { border:1px solid #a3a3a3; padding:10px 16px; background:#fff; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+.new-paper-steps button { border:1px solid #a3a3a3; padding:9px 14px; background:#fff; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
 .new-paper-steps button.is-active { border-color:#002fa7; background:#002fa7; color:#fff; }
-.new-paper-page .qp-card { padding:22px; }
-.new-paper-page .qp-card > button:first-child > span:first-child > span:first-child { letter-spacing:.07em; }
-.paper-workspace { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(20rem,.8fr); gap:24px 32px; align-items:start; }
-.paper-workspace-main { grid-column:1; min-width:0; }
-.paper-workspace-rail { grid-column:2; min-width:0; }
-.paper-at-a-glance { border-color:#002fa7; background:#f7f9ff; }
-.paper-glance-facts { margin-top:14px; border-top:1px solid #cbd5e1; }
-.paper-glance-facts > div { display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid #dbe3f0; font-size:12px; }
-.paper-glance-facts dt { color:#525252; }
-.paper-glance-facts dd { font-weight:700; text-align:right; }
-.topics-next-card { border-style:dashed; background:#fafafa; }
-.topics-next-count { display:inline-flex; margin-top:14px; border:1px solid #002fa7; background:#eef2ff; color:#002fa7; padding:6px 8px; font-size:11px; font-weight:700; }
-.paper-workspace--questions .paper-workspace-rail { display:contents; }
-.paper-workspace--questions [data-testid="persistent-difficulty-card"] { grid-column:2; }
-.paper-workspace--questions .paper-at-a-glance { grid-column:2; }
-.paper-workspace--questions .topic-workspace { grid-column:1 / -1; border-width:2px; }
-.paper-workspace--questions .topic-workspace > button:first-child { padding-bottom:2px; }
-.paper-workspace--questions .paper-action-bar { grid-column:1 / -1; }
-.configuration-summary-compact { padding:18px !important; }
-.configuration-summary-compact .blueprint-summary-facts > div { padding:7px 0; }
-.configuration-summary-compact h2 { margin-bottom:10px; }
-.configuration-summary-compact h3 { margin-top:14px; }
 .section-tabs button { flex:1 1 110px; text-align:left; padding:10px; border:1px solid #d4d4d4; font-size:11px; }
 .section-tabs button small { display:block; margin-top:4px; }
 .section-tabs button.is-active { background:#111; color:#fff; }
@@ -481,31 +459,12 @@ pre.math-fallback {
 .blueprint-unit-toggle { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; border-top:1px solid #ddd; padding:8px 12px; color:#002fa7; background:#fff; font-size:11px; font-weight:700; text-align:left; }
 .blueprint-subtopics { border-top:1px solid #ddd; padding:0 8px 8px 24px; background:#fff; }
 .blueprint-subtopics .section-topic-row { margin:8px 0 0; background:#fff; }
-/* Keep the chapter picker contained while making its selected-book context,
-   search, and selection total immediately visible. */
-.topic-book-switcher { display:flex; gap:6px; overflow-x:auto; margin-bottom:12px; padding-bottom:2px; }
-.topic-book-switcher button { display:flex; min-width:154px; max-width:220px; flex:1 0 154px; flex-direction:column; gap:2px; border:1px solid #a3a3a3; background:#fff; padding:9px 10px; text-align:left; font-size:11px; font-weight:700; }
-.topic-book-switcher button > span:last-child { color:#737373; font-size:10px; font-weight:500; }
-.topic-book-switcher button.is-active { border-color:#002fa7; background:#eef2ff; color:#002fa7; }
-.topic-book-switcher button.is-active > span:last-child { color:#002fa7; }
-.topic-search-wrap { margin-bottom:12px; }
-.topic-search-input { min-height:44px; background:#fafafa; }
-.topic-search-empty { border:1px dashed #a3a3a3; color:#737373; padding:16px; text-align:center; font-size:12px; }
-.chapter-selection-scroll { height:480px; overflow-y:auto; overscroll-behavior:contain; padding-right:4px; scrollbar-gutter:stable; }
-.paper-action-bar { position:sticky; bottom:18px; z-index:10; padding-top:2px; }
-.paper-action-bar .qp-btn { min-height:52px; box-shadow:4px 4px 0 0 #0a0a0a; }
+/* Keep the chapter picker compact: roughly five collapsed chapters stay in view.
+   Expanded subtopics remain in the same scroll context, so moving to later
+   chapters never requires collapsing the current chapter first. */
+.chapter-selection-scroll { height:430px; overflow-y:auto; overscroll-behavior:contain; padding-right:4px; scrollbar-gutter:stable; }
 .blueprint-chapter-scroll { margin-top:6px; }
 .blueprint-summary-facts>div { display:flex; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px solid #eee; font-size:11px; }
-
-@media (max-width: 1023px) {
-    .new-paper-steps { margin:0 0 22px; }
-    .paper-workspace { display:block; }
-    .paper-workspace-main, .paper-workspace-rail { display:block; }
-    .paper-workspace-rail > * + * { margin-top:20px; }
-    .paper-workspace--questions .paper-workspace-rail { display:block; }
-    .chapter-selection-scroll { height:440px; }
-    .paper-action-bar { bottom:0; margin:0 -24px; padding:12px 24px max(12px, env(safe-area-inset-bottom)); background:rgba(250,250,250,.96); border-top:1px solid #d4d4d4; }
-}
 .blueprint-summary-facts dt { color:#737373; }
 .blueprint-summary-facts dd { text-align:right; font-weight:600; max-width:65%; overflow-wrap:anywhere; }
 .review-topic-list { border-top:1px solid #e5e5e5; }
