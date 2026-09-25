@@ -235,6 +235,13 @@ class FirestoreCollection:
             await snapshot.reference.delete()
         return _WriteResult(deleted_count=len(matches))
 
+    async def delete_one(self, query: dict[str, Any]) -> _WriteResult:
+        matches = await self._matching_snapshots(query)
+        if not matches:
+            return _WriteResult()
+        await matches[0][0].reference.delete()
+        return _WriteResult(deleted_count=1)
+
     async def count_documents(self, query: dict[str, Any]) -> int:
         return len(await self._matching_snapshots(query))
 

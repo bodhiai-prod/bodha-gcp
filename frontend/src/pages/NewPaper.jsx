@@ -8,6 +8,7 @@ import { apportionCounts } from "@/lib/questionCounts";
 import Header from "@/components/Header";
 import SectionBlueprintEditor from "@/components/SectionBlueprintEditor";
 import ConfigurationSummary from "@/components/ConfigurationSummary";
+import SavedPaperConfigurations from "@/components/SavedPaperConfigurations";
 import { retainCompatibleAllocations } from "@/lib/sectionBlueprint";
 import useConfigurationPreview from "@/hooks/useConfigurationPreview";
 import { toast } from "sonner";
@@ -85,6 +86,47 @@ export default function NewPaper() {
     () => formats.some((f) => Number(f.value || 0) > 0),
     [formats]
   );
+
+  const currentConfiguration = useMemo(() => ({
+    difficulty,
+    duration_minutes: Number(duration),
+    total_marks: Number(totalMarks),
+    total_questions: sectionBlueprint.trim() ? null : effectiveQuestionCount,
+    diagram_count: diagramCount === "" ? null : Number(diagramCount),
+    distribution: { information: Number(info), concept: Number(concept), application: Number(application) },
+    format_distribution: formatMode === "percentages" ? Object.fromEntries(formats.filter((f) => Number(f.value) > 0).map((f) => [f.key, Number(f.value)])) : null,
+    custom_instructions: customInstructions.trim() || null,
+    section_blueprint: sectionBlueprint.trim() || null,
+    blueprint_id: blueprint?.id || null,
+    blueprint_version: blueprint?.version || null,
+    section_topic_allocations: blueprint ? allocations : null,
+    textbook_ids: selectedTbIds,
+    topics: selectedTopics.map(({ key, ...topic }) => ({ ...topic, difficulty: topicDifficulties[key] || null })),
+  }), [difficulty, duration, totalMarks, effectiveQuestionCount, diagramCount, info, concept, application, formatMode, formats, customInstructions, sectionBlueprint, blueprint, allocations, selectedTbIds, selectedTopics, topicDifficulties]);
+
+  const applySavedConfiguration = (config) => {
+    const available = new Set(textbooks.map((book) => book.id));
+    const validBookIds = (config.textbook_ids || []).filter((bookId) => available.has(bookId));
+    if (validBookIds.length !== (config.textbook_ids || []).length) toast.warning("Some saved textbooks are unavailable and were skipped.");
+    setDifficulty(config.difficulty || "medium");
+    setDuration(config.duration_minutes || 60);
+    setTotalMarks(config.total_marks || 50);
+    if (config.total_questions != null) setQuestionCount(config.total_questions);
+    setDiagramCount(config.diagram_count == null ? "" : config.diagram_count);
+    setInfo(Number(config.distribution?.information ?? 40));
+    setConcept(Number(config.distribution?.concept ?? 40));
+    if (config.format_distribution) setFormats(DEFAULT_FORMATS.map((format) => ({ ...format, value: Number(config.format_distribution[format.key] || 0), custom: false })));
+    setCustomInstructions(config.custom_instructions || "");
+    setSectionBlueprint(config.section_blueprint || "");
+    setBlueprint(config.blueprint_id ? blueprintCatalog.find((item) => item.id === config.blueprint_id && (!config.blueprint_version || item.version === config.blueprint_version)) || null : null);
+    setAllocations(config.section_topic_allocations || []);
+    setSelectedTbIds(validBookIds);
+    const topics = (config.topics || []).filter((topic) => validBookIds.includes(topic.textbook_id)).map((topic) => ({ ...topic, key: topicKey(topic.textbook_id, topic.name, topic.parent_topic || "") }));
+    setSelectedTopics(topics);
+    setTopicDifficulties(Object.fromEntries(topics.filter((topic) => topic.difficulty).map((topic) => [topic.key, topic.difficulty])));
+    setStep(0);
+    toast.success(`Applied ${config.name}. Review the restored sources before generating.`);
+  };
 
   // A Paper Blueprint defines the sections itself, so the slider-based
   // Question Distribution and Format Mix would fight it and are greyed out.
@@ -395,6 +437,7 @@ export default function NewPaper() {
           <br />
           <span className="text-[#002FA7]">generator.</span>
         </h1>
+        <SavedPaperConfigurations currentConfiguration={currentConfiguration} onApply={applySavedConfiguration} />
         <nav className="new-paper-steps" aria-label="Paper creation steps">
           {["Setup", "Questions", "Review"].map((label, index) => <button key={label} type="button" className={step === index ? "is-active" : ""} aria-current={step === index ? "step" : undefined} onClick={() => setStep(index)}>{index + 1}. {label}</button>)}
         </nav>

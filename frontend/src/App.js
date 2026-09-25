@@ -27,6 +27,8 @@ import MockTestExam from "@/pages/student/MockTestExam";
 import MockTestResult from "@/pages/student/MockTestResult";
 import CompetitiveExams from "@/pages/CompetitiveExams";
 import CompetitiveExamDetail from "@/pages/CompetitiveExamDetail";
+import GeneratedPapers from "@/pages/GeneratedPapers";
+import BrandingSettings from "@/pages/BrandingSettings";
 
 function App() {
   return (
@@ -73,6 +75,22 @@ function App() {
               element={
                 <ProtectedRoute>
                   <NewPaper />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/papers"
+              element={
+                <ProtectedRoute>
+                  <GeneratedPapers />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/settings/branding"
+              element={
+                <ProtectedRoute>
+                  <BrandingSettings />
                 </ProtectedRoute>
               }
             />

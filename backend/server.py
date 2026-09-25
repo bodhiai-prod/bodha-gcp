@@ -21,7 +21,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from starlette.middleware.cors import CORSMiddleware
 
 from auth import (
@@ -44,6 +44,7 @@ from pdf_utils import (
     render_solution_pdf_async,
     shutdown_pdf_pool,
 )
+from docx_utils import render_paper_docx_async, shutdown_docx_pool
 from prompts import (
     derive_target_question_count,
     qpaper_extract_prompt,
@@ -295,6 +296,11 @@ class PaperRequest(BaseModel):
     blueprint_id: Optional[str] = None
     blueprint_version: Optional[int] = None
     section_topic_allocations: Optional[List[Allocation]] = None
+    school_name: Optional[str] = Field(default=None, max_length=200)
+    header_image_path: Optional[str] = None
+    branding_tagline: Optional[str] = Field(default=None, max_length=300)
+    branding_footer: Optional[str] = Field(default=None, max_length=300)
+    branding_watermark: Optional[str] = Field(default=None, max_length=100)
 
 
 class QuestionInput(BaseModel):
@@ -326,6 +332,88 @@ class PaperUpdate(BaseModel):
     duration_minutes: Optional[int] = None
     total_marks: Optional[int] = None
     sections: Optional[List[SectionUpdate]] = None
+
+
+class BrandingUpdate(BaseModel):
+    school_name: Optional[str] = Field(default=None, max_length=200)
+    tagline: Optional[str] = Field(default=None, max_length=300)
+    footer: Optional[str] = Field(default=None, max_length=300)
+    watermark: Optional[str] = Field(default=None, max_length=100)
+
+
+class SavedTopic(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    textbook_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=500)
+    parent_topic: str = Field(default="", max_length=500)
+    weight: int = Field(default=5, ge=1, le=10)
+    difficulty: Optional[str] = Field(default=None, pattern="^(easy|medium|hard)$")
+
+
+class PaperConfigurationBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    difficulty: str = Field(default="medium", pattern="^(easy|medium|hard)$")
+    duration_minutes: int = Field(default=60, ge=1, le=1440)
+    total_marks: int = Field(default=50, ge=1, le=1000)
+    total_questions: Optional[int] = Field(default=None, ge=1, le=200)
+    diagram_count: Optional[int] = Field(default=None, ge=0, le=200)
+    distribution: Dict[str, int] = Field(default_factory=dict)
+    format_distribution: Optional[Dict[str, int]] = None
+    custom_instructions: Optional[str] = Field(default=None, max_length=5000)
+    section_blueprint: Optional[str] = Field(default=None, max_length=20000)
+    blueprint_id: Optional[str] = Field(default=None, max_length=200)
+    blueprint_version: Optional[int] = Field(default=None, ge=1)
+    section_topic_allocations: Optional[List[Allocation]] = None
+    textbook_ids: List[str] = Field(default_factory=list, max_length=20)
+    topics: List[SavedTopic] = Field(default_factory=list, max_length=500)
+
+    @field_validator("name")
+    @classmethod
+    def non_blank_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("name must not be blank")
+        return value
+
+
+class PaperConfigurationCreate(PaperConfigurationBase):
+    pass
+
+
+class PaperConfigurationUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    difficulty: Optional[str] = Field(default=None, pattern="^(easy|medium|hard)$")
+    duration_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
+    total_marks: Optional[int] = Field(default=None, ge=1, le=1000)
+    total_questions: Optional[int] = Field(default=None, ge=1, le=200)
+    diagram_count: Optional[int] = Field(default=None, ge=0, le=200)
+    distribution: Optional[Dict[str, int]] = None
+    format_distribution: Optional[Dict[str, int]] = None
+    custom_instructions: Optional[str] = Field(default=None, max_length=5000)
+    section_blueprint: Optional[str] = Field(default=None, max_length=20000)
+    blueprint_id: Optional[str] = Field(default=None, max_length=200)
+    blueprint_version: Optional[int] = Field(default=None, ge=1)
+    section_topic_allocations: Optional[List[Allocation]] = None
+    textbook_ids: Optional[List[str]] = Field(default=None, max_length=20)
+    topics: Optional[List[SavedTopic]] = Field(default=None, max_length=500)
+
+    @field_validator("name")
+    @classmethod
+    def non_blank_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("name must not be blank")
+        return value
+
+
+class PaperConfigurationPublic(PaperConfigurationBase):
+    id: str
+    created_at: str
+    updated_at: str
 
 
 class AnswerUpdate(BaseModel):
@@ -498,6 +586,7 @@ async def startup():
 async def shutdown():
     client.close()
     shutdown_pdf_pool()
+    shutdown_docx_pool()
 
 
 # =========================================================
@@ -542,6 +631,120 @@ async def me(user: dict = Depends(get_current_user)):
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
     return UserPublic(**serialize_user(u))
+
+
+def _branding_for_user(doc: dict) -> dict:
+    return {
+        "school_name": doc.get("school_name") or "",
+        "header_image_path": doc.get("header_image_path"),
+        "tagline": doc.get("branding_tagline") or "",
+        "footer": doc.get("branding_footer") or "",
+        "watermark": doc.get("branding_watermark") or "",
+    }
+
+
+def _serialize_paper_configuration(doc: dict) -> dict:
+    result = dict(doc)
+    result.pop("owner_id", None)
+    result.pop("_id", None)
+    return result
+
+
+@api_router.get("/paper-configurations", response_model=List[PaperConfigurationPublic])
+async def list_paper_configurations(user: dict = Depends(get_current_user)):
+    records = await db.paper_configurations.find(
+        {"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}
+    ).sort("updated_at", -1).to_list(500)
+    return [_serialize_paper_configuration(record) for record in records]
+
+
+@api_router.post("/paper-configurations", response_model=PaperConfigurationPublic, status_code=201)
+async def create_paper_configuration(
+    payload: PaperConfigurationCreate, user: dict = Depends(get_current_user)
+):
+    now = utcnow_iso()
+    record = payload.model_dump()
+    record["section_topic_allocations"] = [
+        allocation.model_dump() for allocation in payload.section_topic_allocations or []
+    ] or None
+    record.update({"id": str(uuid.uuid4()), "owner_id": user["id"], "created_at": now, "updated_at": now})
+    await db.paper_configurations.insert_one(record)
+    return _serialize_paper_configuration(record)
+
+
+@api_router.patch("/paper-configurations/{configuration_id}", response_model=PaperConfigurationPublic)
+async def update_paper_configuration(
+    configuration_id: str, payload: PaperConfigurationUpdate, user: dict = Depends(get_current_user)
+):
+    existing = await db.paper_configurations.find_one(
+        {"id": configuration_id, "owner_id": user["id"]}, {"_id": 0}
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Paper configuration not found")
+    values = payload.model_dump(exclude_unset=True)
+    if not values:
+        raise HTTPException(status_code=400, detail="No configuration fields supplied")
+    if "section_topic_allocations" in values:
+        values["section_topic_allocations"] = [
+            allocation.model_dump() for allocation in payload.section_topic_allocations or []
+        ] or None
+    values["updated_at"] = utcnow_iso()
+    await db.paper_configurations.update_one({"id": configuration_id, "owner_id": user["id"]}, {"$set": values})
+    updated = await db.paper_configurations.find_one({"id": configuration_id, "owner_id": user["id"]}, {"_id": 0})
+    return _serialize_paper_configuration(updated)
+
+
+@api_router.delete("/paper-configurations/{configuration_id}")
+async def delete_paper_configuration(configuration_id: str, user: dict = Depends(get_current_user)):
+    result = await db.paper_configurations.delete_one({"id": configuration_id, "owner_id": user["id"]})
+    if result.deleted_count != 1:
+        raise HTTPException(status_code=404, detail="Paper configuration not found")
+    return {"ok": True}
+
+
+@api_router.get("/branding")
+async def get_branding(user: dict = Depends(get_current_user)):
+    profile = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    return _branding_for_user(profile or {})
+
+
+@api_router.patch("/branding")
+async def update_branding(payload: BrandingUpdate, user: dict = Depends(get_current_user)):
+    values = payload.model_dump(exclude_unset=True)
+    if "school_name" in values:
+        values["school_name"] = (values["school_name"] or "").strip()
+    for request_name, stored_name in (("tagline", "branding_tagline"), ("footer", "branding_footer"), ("watermark", "branding_watermark")):
+        if request_name in values:
+            values[stored_name] = (values.pop(request_name) or "").strip()
+    await db.users.update_one({"id": user["id"]}, {"$set": values})
+    profile = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    return _branding_for_user(profile or {})
+
+
+@api_router.post("/branding/image")
+async def upload_branding_image(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    content_type = (file.content_type or "").lower()
+    extension = os.path.splitext(file.filename or "")[1].lower()
+    allowed = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+    if extension not in allowed or allowed[extension] != content_type:
+        raise HTTPException(status_code=400, detail="Only JPG and PNG images are accepted")
+    data = await file.read()
+    if not data or len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Header image must be between 1 byte and 5 MB")
+    path = f"{APP_NAME}/branding/{user['id']}/{uuid.uuid4().hex}{extension}"
+    put_object(path, data, content_type)
+    await db.users.update_one({"id": user["id"]}, {"$set": {"header_image_path": path}})
+    return {"header_image_path": path}
+
+
+@api_router.get("/branding/image")
+async def get_branding_image(user: dict = Depends(get_current_user)):
+    profile = await db.users.find_one({"id": user["id"]}, {"_id": 0, "header_image_path": 1})
+    path = (profile or {}).get("header_image_path")
+    if not path:
+        raise HTTPException(status_code=404, detail="No header image configured")
+    data, content_type = get_object(path)
+    return Response(content=data, media_type=content_type, headers={"Cache-Control": "private, max-age=300"})
 
 
 @api_router.patch("/auth/profile", response_model=UserPublic)
@@ -1099,6 +1302,11 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     fmt_dist = {k: int(v) for k, v in (req.format_distribution or {}).items() if int(v) > 0}
     custom_instructions = (req.custom_instructions or "").strip()
     section_blueprint = (req.section_blueprint or "").strip()
+    profile = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    default_branding = _branding_for_user(profile or {})
+    header_image_path = req.header_image_path or default_branding["header_image_path"]
+    if header_image_path and not header_image_path.startswith(f"{APP_NAME}/branding/{user['id']}/"):
+        raise HTTPException(status_code=400, detail="Invalid header image")
     paper_doc = {
         "id": paper_id,
         "owner_id": user["id"],
@@ -1121,6 +1329,13 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "blueprint_id": req.blueprint_id,
         "blueprint_version": req.blueprint_version,
         "section_topic_allocations": [a.model_dump() for a in req.section_topic_allocations or []],
+        # Branding is copied into the paper so future profile edits cannot
+        # silently alter documents that have already been generated.
+        "school_name": (req.school_name if req.school_name is not None else default_branding["school_name"]).strip(),
+        "header_image_path": header_image_path,
+        "branding_tagline": (req.branding_tagline if req.branding_tagline is not None else default_branding["tagline"]).strip(),
+        "branding_footer": (req.branding_footer if req.branding_footer is not None else default_branding["footer"]).strip(),
+        "branding_watermark": (req.branding_watermark if req.branding_watermark is not None else default_branding["watermark"]).strip(),
         **({"generation_requirements": resolved} if resolved else {}),
         # A blueprint still states its count in prose nobody parses, so it
         # stores 0 and paper_target_count declines to guess. Additional
@@ -1265,6 +1480,40 @@ async def update_paper(
     if set_fields:
         await db.papers.update_one({"id": paper_id}, {"$set": set_fields})
     return await get_paper(paper_id, user)
+
+
+@api_router.post("/papers/{paper_id}/branding/apply")
+async def apply_branding_to_paper(paper_id: str, user: dict = Depends(get_current_user)):
+    paper = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if paper["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    profile = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    branding = _branding_for_user(profile or {})
+    if not any(branding.values()):
+        raise HTTPException(status_code=400, detail="Configure branding before applying it")
+    await db.papers.update_one({"id": paper_id}, {"$set": {
+        "school_name": branding["school_name"],
+        "header_image_path": branding["header_image_path"],
+        "branding_tagline": branding["tagline"],
+        "branding_footer": branding["footer"],
+        "branding_watermark": branding["watermark"],
+    }})
+    return await get_paper(paper_id, user)
+
+
+@api_router.get("/papers/{paper_id}/header-image")
+async def get_paper_header_image(paper_id: str, user: dict = Depends(get_current_user)):
+    paper = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if paper["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not paper.get("header_image_path"):
+        raise HTTPException(status_code=404, detail="No header image configured")
+    data, content_type = get_object(paper["header_image_path"])
+    return Response(content=data, media_type=content_type, headers={"Cache-Control": "private, max-age=300"})
 
 
 @api_router.get("/papers")
@@ -1549,6 +1798,46 @@ async def paper_pdf(
         headers={
             "Content-Disposition": f'attachment; filename="{safe_title}.pdf"'
         },
+    )
+
+
+@api_router.get("/papers/{paper_id}/docx")
+async def paper_docx(
+    paper_id: str,
+    authorization: Optional[str] = Header(None),
+    auth: Optional[str] = Query(None),
+):
+    token = authorization.split(" ", 1)[1] if authorization and authorization.lower().startswith("bearer ") else auth
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = await get_token_user(token)
+    paper = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if paper["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if paper.get("generation_status") == "pending":
+        raise HTTPException(status_code=409, detail="Paper is still being generated")
+    if paper.get("generation_status") == "failed":
+        raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
+
+    def asset_loader(path: str):
+        try:
+            return get_object(path)[0]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("DOCX asset load failed for %s: %s", path, exc)
+            return None
+
+    docx_bytes = await render_paper_docx_async(
+        paper,
+        diagram_loader=lambda _question_id, path: asset_loader(path),
+        branding_loader=asset_loader,
+    )
+    safe_title = "".join(c for c in paper["title"] if c.isalnum() or c in (" ", "-", "_")).strip()[:60] or "paper"
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{safe_title}.docx"'},
     )
 
 

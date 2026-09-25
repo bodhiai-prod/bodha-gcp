@@ -67,8 +67,10 @@ export default function Header() {
               <NavItem to="/" label="Dashboard" testid="nav-dashboard" />
               <NavItem to="/textbooks" label="Textbooks" testid="nav-textbooks" />
               <NavItem to="/papers/new" label="New Paper" testid="nav-new-paper" />
+              <NavItem to="/papers" label="Papers" testid="nav-papers" />
               <NavItem to="/competitive-exams" label="Competitive" testid="nav-competitive" />
               <NavItem to="/qbank" label="Question Bank" testid="nav-qbank" />
+              <NavItem to="/settings/branding" label="Branding" testid="nav-branding" />
               {user?.role === "admin" && (
                 <NavItem to="/admin" label="Admin" testid="nav-admin" />
               )}

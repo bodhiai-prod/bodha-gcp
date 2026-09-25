@@ -54,6 +54,8 @@ export default function PaperView() {
   // truth for the spinner.
   const [regenId, setRegenId] = useState(null);
   const [cancellingGeneration, setCancellingGeneration] = useState(false);
+  const [docxDownloading, setDocxDownloading] = useState(false);
+  const [brandingApplying, setBrandingApplying] = useState(false);
 
   const load = async () => {
     const { data } = await api.get(`/papers/${id}`);
@@ -279,6 +281,37 @@ export default function PaperView() {
       return;
     }
     printDocument(paper.title);
+  };
+
+  const downloadDocx = async () => {
+    setDocxDownloading(true);
+    try {
+      const { data } = await api.get(`/papers/${id}/docx`, { responseType: "blob" });
+      const url = URL.createObjectURL(data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${(paper.title || "paper").replace(/[^a-z0-9 _-]/gi, "").slice(0, 60) || "paper"}.docx`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success("Editable DOCX downloaded");
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not download DOCX");
+    } finally {
+      setDocxDownloading(false);
+    }
+  };
+
+  const applyBranding = async () => {
+    setBrandingApplying(true);
+    try {
+      const { data } = await api.post(`/papers/${id}/branding/apply`);
+      setPaper(data);
+      toast.success("Current branding applied to this paper");
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not apply branding");
+    } finally {
+      setBrandingApplying(false);
+    }
   };
 
   if (!paper) {
@@ -606,6 +639,12 @@ export default function PaperView() {
                 >
                   <CheckCircle size={16} weight="bold" /> Solution
                 </Link>
+                <button onClick={applyBranding} disabled={brandingApplying} className="qp-btn qp-btn-secondary" data-testid="apply-paper-branding">
+                  {brandingApplying ? "Applying..." : "Apply Branding"}
+                </button>
+                <button onClick={downloadDocx} disabled={docxDownloading} className="qp-btn qp-btn-secondary" data-testid="download-docx-button">
+                  <Download size={16} weight="bold" /> {docxDownloading ? "Preparing..." : "DOCX"}
+                </button>
                 <button
                   onClick={download}
                   className="qp-btn qp-btn-primary"
@@ -624,7 +663,9 @@ export default function PaperView() {
           className="bg-white border-2 border-black p-8 md:p-12 hard-shadow-static-lg"
           data-testid="paper-preview"
         >
+          {view.branding_watermark && <div className="text-center text-xs uppercase tracking-[0.35em] text-neutral-300 mb-2" aria-hidden="true">{view.branding_watermark}</div>}
           <div className="text-center border-b-2 border-black pb-6 mb-6">
+            {view.school_name && <div className="font-bold text-lg uppercase tracking-wide mb-2">{view.school_name}</div>}
             {editing ? (
               <input
                 value={view.title}
@@ -643,6 +684,7 @@ export default function PaperView() {
             <div className="mt-3 font-mono text-sm text-neutral-700">
               Class <b>{view.class_name}</b> · Subject <b>{view.subject}</b>
             </div>
+            {view.branding_tagline && <div className="mt-2 text-sm italic text-neutral-500">{view.branding_tagline}</div>}
             <div className="mt-1 font-mono text-sm text-neutral-700 flex flex-wrap gap-3 justify-center items-center">
               <span>
                 Total Marks:{" "}
