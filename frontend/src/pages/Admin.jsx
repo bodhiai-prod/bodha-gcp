@@ -13,13 +13,20 @@ import {
   UploadSimple,
   ArrowClockwise,
   Eye,
+  MagnifyingGlass,
+  WarningCircle,
+  Clock,
+  GraduationCap,
+  ChartBar,
+  X,
 } from "@phosphor-icons/react";
 
 const TABS = [
   { key: "library", label: "Shared Library" },
   { key: "textbooks", label: "All Textbooks" },
   { key: "papers", label: "All Papers" },
-  { key: "users", label: "Teachers" },
+  { key: "users", label: "Users" },
+  { key: "activity", label: "Activity" },
   { key: "upload", label: "Bulk Upload" },
 ];
 
@@ -29,6 +36,10 @@ export default function Admin() {
   const [textbooks, setTextbooks] = useState([]);
   const [papers, setPapers] = useState([]);
   const [users, setUsers] = useState([]);
+  const [userTotal, setUserTotal] = useState(0);
+  const [userFilters, setUserFilters] = useState({ q: "", role: "", board: "", profile: "", activity: "" });
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [activity, setActivity] = useState([]);
   const [loading, setLoading] = useState(false);
   const [reindexingId, setReindexingId] = useState(null);
 
@@ -61,13 +72,34 @@ export default function Admin() {
     }
   };
 
-  const loadUsers = async () => {
+  const loadUsers = async (filters = userFilters) => {
     setLoading(true);
     try {
-      const { data } = await api.get("/admin/users");
-      setUsers(data);
+      const params = Object.fromEntries(Object.entries(filters).filter(([, value]) => value));
+      const { data } = await api.get("/admin/users", { params: { ...params, page_size: 100 } });
+      setUsers(data.items);
+      setUserTotal(data.total);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadActivity = async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get("/admin/activity", { params: { page_size: 50 } });
+      setActivity(data.items);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openUser = async (id) => {
+    try {
+      const { data } = await api.get(`/admin/users/${id}`);
+      setSelectedUser(data);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not load user details");
     }
   };
 
@@ -79,6 +111,7 @@ export default function Admin() {
   useEffect(() => {
     if (tab === "papers" && papers.length === 0) loadPapers();
     if (tab === "users" && users.length === 0) loadUsers();
+    if (tab === "activity" && activity.length === 0) loadActivity();
   }, [tab]); // eslint-disable-line
 
   const toggleShare = async (tb) => {
@@ -145,8 +178,8 @@ export default function Admin() {
           >
             <StatCard
               icon={<Users size={20} weight="bold" />}
-              label="Teachers"
-              value={overview.teachers}
+              label="All users"
+              value={overview.users_total}
               testid="stat-teachers"
             />
             <StatCard
@@ -177,6 +210,8 @@ export default function Admin() {
             />
           </div>
         )}
+
+        {overview && <OperationalOverview overview={overview} />}
 
         {/* Tabs */}
         <div
@@ -218,11 +253,13 @@ export default function Admin() {
           />
         )}
         {tab === "papers" && <AllPapersTab papers={papers} loading={loading} />}
-        {tab === "users" && <UsersTab users={users} loading={loading} />}
+        {tab === "users" && <UsersTab users={users} total={userTotal} filters={userFilters} onFiltersChange={(next) => { setUserFilters(next); loadUsers(next); }} onOpen={openUser} loading={loading} />}
+        {tab === "activity" && <ActivityTab activity={activity} loading={loading} />}
         {tab === "upload" && (
           <BulkUploadTab onDone={() => Promise.all([loadTextbooks(), loadOverview()])} />
         )}
       </main>
+      {selectedUser && <UserDetailDrawer detail={selectedUser} onClose={() => setSelectedUser(null)} />}
     </div>
   );
 }
@@ -453,15 +490,53 @@ const AllPapersTab = ({ papers, loading }) => {
   );
 };
 
-const UsersTab = ({ users, loading }) => {
-  if (loading) return <Loading />;
-  if (users.length === 0) return <Empty message="No users." />;
+const OperationalOverview = ({ overview }) => {
+  const attention = overview.attention || {};
+  const attentionCount = (attention.failed_textbooks?.length || 0) + (attention.failed_papers?.length || 0) + (attention.stuck_papers?.length || 0) + (overview.profiles_incomplete || 0);
   return (
-    <div className="space-y-2" data-testid="users-tab">
+    <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-10" data-testid="admin-operational-overview">
+      <div className="border-2 border-black bg-white p-5">
+        <div className="flex items-center gap-2 font-bold"><ChartBar size={20} weight="bold" /> User pulse</div>
+        <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
+          <Metric label="New (7 days)" value={overview.new_users_7d} />
+          <Metric label="Active (30 days)" value={overview.active_users_30d} />
+          <Metric label="Students" value={overview.students} />
+          <Metric label="Profiles complete" value={`${overview.profiles_complete}/${overview.users_total}`} />
+        </div>
+      </div>
+      <div className="border-2 border-black bg-white p-5">
+        <div className="flex items-center gap-2 font-bold"><GraduationCap size={20} weight="bold" /> School coverage</div>
+        <div className="text-3xl font-display mt-3">{overview.schools_total}</div><div className="text-xs font-mono text-neutral-500">schools registered</div>
+        <div className="mt-3 flex flex-wrap gap-1">{(overview.board_breakdown || []).map((item) => <span key={item.label} className="qp-badge qp-badge-blue">{item.label} · {item.count}</span>)}</div>
+      </div>
+      <div className={`border-2 border-black p-5 ${attentionCount ? "bg-[#FFF4C7]" : "bg-white"}`}>
+        <div className="flex items-center gap-2 font-bold"><WarningCircle size={20} weight="bold" /> Needs attention</div>
+        <div className="text-3xl font-display mt-3">{attentionCount}</div>
+        <div className="text-xs font-mono text-neutral-700">{overview.profiles_incomplete} incomplete profiles · {attention.failed_textbooks?.length || 0} failed books · {attention.failed_papers?.length || 0} failed papers · {attention.stuck_papers?.length || 0} stuck papers</div>
+      </div>
+    </section>
+  );
+};
+
+const Metric = ({ label, value }) => <div><div className="font-display text-2xl">{value}</div><div className="text-xs font-mono text-neutral-500">{label}</div></div>;
+
+const UsersTab = ({ users, total, filters, onFiltersChange, onOpen, loading }) => {
+  if (loading) return <Loading />;
+  return (
+    <div data-testid="users-tab">
+      <div className="grid grid-cols-1 md:grid-cols-6 gap-2 mb-4">
+        <label className="md:col-span-2 relative"><MagnifyingGlass size={17} className="absolute left-3 top-3 text-neutral-500" /><input className="qp-input pl-9" value={filters.q} onChange={(e) => onFiltersChange({ ...filters, q: e.target.value })} placeholder="Search name, email, school, board" /></label>
+        <select className="qp-input" value={filters.role} onChange={(e) => onFiltersChange({ ...filters, role: e.target.value })}><option value="">All roles</option><option value="teacher">Teachers</option><option value="student">Students</option><option value="admin">Admins</option></select>
+        <input className="qp-input" value={filters.board} onChange={(e) => onFiltersChange({ ...filters, board: e.target.value })} placeholder="Filter board" />
+        <select className="qp-input" value={filters.profile} onChange={(e) => onFiltersChange({ ...filters, profile: e.target.value })}><option value="">All profiles</option><option value="complete">Complete</option><option value="incomplete">Incomplete</option></select>
+        <select className="qp-input" value={filters.activity} onChange={(e) => onFiltersChange({ ...filters, activity: e.target.value })}><option value="">Any activity</option><option value="active">Active in 30 days</option><option value="inactive">Inactive 30+ days</option></select>
+      </div>
+      <div className="text-xs font-mono text-neutral-500 mb-3">{total} user{total === 1 ? "" : "s"} found</div>
+      {users.length === 0 ? <Empty message="No users match these filters." /> : <div className="space-y-2">
       {users.map((u) => (
-        <div
+        <button type="button" onClick={() => onOpen(u.id)}
           key={u.id}
-          className="border-2 border-black bg-white p-3 flex items-center gap-3 flex-wrap"
+          className="w-full text-left border-2 border-black bg-white p-3 flex items-center gap-3 flex-wrap hover:bg-neutral-50"
           data-testid={`admin-user-${u.id}`}
         >
           <div className="flex-1 min-w-0">
@@ -470,7 +545,10 @@ const UsersTab = ({ users, loading }) => {
               <span className="text-xs text-neutral-500 ml-2">{u.email}</span>
             </div>
             <div className="text-xs font-mono text-neutral-500 mt-0.5">
-              {u.textbook_count} textbooks · {u.paper_count} papers
+              {u.school_name || "School not provided"} · {u.board === "Other" ? u.board_other_name : u.board || "Board not provided"}
+            </div>
+            <div className="text-xs font-mono text-neutral-500 mt-0.5">
+              {u.textbook_count} textbooks · {u.paper_count} papers · {u.question_count} saved questions · {u.test_count} tests
             </div>
           </div>
           <span
@@ -480,11 +558,62 @@ const UsersTab = ({ users, loading }) => {
           >
             {u.role}
           </span>
+          <div className="text-xs text-neutral-500 flex items-center gap-1"><Clock size={14} /> {formatDate(u.last_active_at) || "Not active yet"}</div>
+        </button>
+      ))}
+      </div>}
+    </div>
+  );
+};
+
+const ActivityTab = ({ activity, loading }) => {
+  if (loading) return <Loading />;
+  if (!activity.length) return <Empty message="No activity recorded yet." hint="New authenticated and content actions will appear here." />;
+  return (
+    <div className="space-y-2" data-testid="admin-activity-tab">
+      {activity.map((event) => (
+        <div key={event.id} className="border-2 border-black bg-white p-3 flex justify-between gap-3 flex-wrap">
+          <div>
+            <div className="font-bold">{eventLabel(event.event_type)}</div>
+            <div className="text-xs font-mono text-neutral-500">{event.user?.full_name || event.user?.email || "Deleted user"} · {event.user?.email || ""}</div>
+          </div>
+          <div className="text-xs font-mono text-neutral-500">{formatDate(event.occurred_at)}</div>
         </div>
       ))}
     </div>
   );
 };
+
+const UserDetailDrawer = ({ detail, onClose }) => {
+  const { user, papers, textbooks, questions, tests, activity } = detail;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex justify-end" role="dialog" aria-modal="true">
+      <aside className="w-full max-w-2xl h-full overflow-y-auto bg-[#FAFAFA] border-l-4 border-black p-6 md:p-8">
+        <div className="flex justify-between gap-4 mb-7">
+          <div><div className="overline text-neutral-500">// USER RECORD</div><h2 className="font-display text-4xl mt-2">{user.full_name || user.email}</h2><div className="text-sm text-neutral-600">{user.email}</div></div>
+          <button type="button" className="qp-btn-ghost h-fit" onClick={onClose} aria-label="Close user details"><X size={20} /></button>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6"><Metric label="Textbooks" value={user.textbook_count} /><Metric label="Papers" value={user.paper_count} /><Metric label="Questions" value={user.question_count} /><Metric label="Tests" value={user.test_count} /></div>
+        <section className="border-2 border-black bg-white p-4 mb-5"><div className="font-bold mb-2">Profile</div><dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm"><Detail label="Role" value={user.role} /><Detail label="Provider" value={user.auth_provider} /><Detail label="School" value={user.school_name || "Not provided"} /><Detail label="Board" value={user.board === "Other" ? user.board_other_name : user.board || "Not provided"} /><Detail label="Created" value={formatDate(user.created_at)} /><Detail label="Last active" value={formatDate(user.last_active_at) || "Not active yet"} /></dl></section>
+        <ActivitySection title="Recent activity" items={activity} primary={(item) => eventLabel(item.event_type)} secondary={(item) => formatDate(item.occurred_at)} />
+        <ActivitySection title="Recent papers" items={papers} primary={(item) => item.title || item.subject || "Untitled paper"} secondary={(item) => `${item.generation_status || "ready"} · ${formatDate(item.created_at)}`} />
+        <ActivitySection title="Recent textbooks" items={textbooks} primary={(item) => item.original_filename} secondary={(item) => `${item.status} · ${formatDate(item.created_at)}`} />
+        <ActivitySection title="Recent tests" items={tests} primary={(item) => item.status} secondary={(item) => `${item.score?.percent != null ? `${item.score.percent}%` : "Not graded"} · ${formatDate(item.created_at)}`} />
+        <ActivitySection title="Saved questions" items={questions} primary={(item) => item.subject || "Question"} secondary={(item) => formatDate(item.created_at)} />
+      </aside>
+    </div>
+  );
+};
+
+const Detail = ({ label, value }) => <div><dt className="text-xs font-mono text-neutral-500">{label}</dt><dd>{value}</dd></div>;
+const ActivitySection = ({ title, items, primary, secondary }) => (
+  <section className="mb-5">
+    <h3 className="font-bold mb-2">{title}</h3>
+    {items?.length ? <div className="space-y-2">{items.map((item) => <div key={item.id} className="border border-neutral-300 bg-white p-3 text-sm flex justify-between gap-3"><span className="min-w-0 truncate font-medium">{primary(item)}</span><span className="text-neutral-500 text-right shrink-0">{secondary(item)}</span></div>)}</div> : <div className="text-sm text-neutral-500 border border-dashed border-neutral-400 p-3">None yet.</div>}
+  </section>
+);
+const formatDate = (value) => value ? new Date(value).toLocaleString() : "";
+const eventLabel = (value) => (value || "activity").replaceAll("_", " ").replaceAll(".", " · ");
 
 const BulkUploadTab = ({ onDone }) => {
   const [files, setFiles] = useState([]);

@@ -30,6 +30,7 @@ from auth import (
     get_token_user,
     require_role,
 )
+from activity import record_activity
 from llm_adapter import chat_complete, parse_json_response
 from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_errors,
                                 compile_allocations, paper_summary, BlueprintStructure,
@@ -428,6 +429,7 @@ async def startup():
             ("competitive_exams", ["id", "owner_id"]),
             ("past_papers", ["exam_id"]),
             ("past_questions", ["exam_id", "paper_id"]),
+            ("activity_events", ["user_id", "occurred_at", "event_type"]),
         ):
             for key in keys:
                 await db[coll].create_index(key)
@@ -522,6 +524,7 @@ async def sync_firebase_user(
             **profile,
         }
         await db.users.insert_one(user)
+        await record_activity(identity["id"], "account.created", {"provider": "firebase"})
     elif profile:
         # Sync may happen more than once after Firebase state changes. Only an
         # explicitly supplied onboarding profile updates these user-owned fields.
@@ -529,6 +532,7 @@ async def sync_firebase_user(
             profile["full_name"] = payload.full_name.strip()
         await db.users.update_one({"id": identity["id"]}, {"$set": profile})
         user.update(profile)
+    await record_activity(identity["id"], "auth.sync", {"provider": "firebase"})
     return UserPublic(**serialize_user(user))
 
 
@@ -553,6 +557,7 @@ async def update_profile(
     updated = await db.users.find_one({"id": identity["id"]}, {"_id": 0})
     if not updated:
         raise HTTPException(status_code=401, detail="Account setup is incomplete")
+    await record_activity(identity["id"], "profile.completed", {"board": values["board"]})
     return UserPublic(**serialize_user(updated))
 
 
@@ -667,6 +672,7 @@ async def upload_textbook(
         "is_deleted": False,
     }
     await db.textbooks.insert_one(doc)
+    await record_activity(user["id"], "textbook.uploaded", {"textbook_id": textbook_id, "subject": subject, "class_name": class_name})
 
     async def _ingest():
         try:
@@ -677,6 +683,7 @@ async def upload_textbook(
                 {"id": textbook_id},
                 {"$set": {"status": "extraction_failed"}},
             )
+            await record_activity(user["id"], "textbook.indexing_failed", {"textbook_id": textbook_id})
             return
         chunks = chunk_text(text)
         await db.textbooks.update_one(
@@ -689,6 +696,7 @@ async def upload_textbook(
                 "chunks": spread_chunks(chunks),
             }},
         )
+        await record_activity(user["id"], "textbook.indexed" if chunks else "textbook.indexing_failed", {"textbook_id": textbook_id, "chunks": len(chunks)})
 
     # Keep a strong process-level reference to ingestion. A bare create_task()
     # is only weakly held by asyncio and can disappear after the upload request
@@ -1134,6 +1142,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "is_deleted": False,
     }
     await db.papers.insert_one(paper_doc)
+    await record_activity(user["id"], "paper.requested", {"paper_id": paper_id, "subject": req.subject, "class_name": req.class_name})
     paper_doc.pop("_id", None)
 
     import asyncio as _asyncio
@@ -2021,6 +2030,7 @@ async def save_question(
                     "is_deleted": False,
                 }
                 await db.qbank.insert_one(doc)
+                await record_activity(user["id"], "question.saved", {"question_id": doc["id"], "paper_id": paper_id})
                 doc.pop("_id", None)
                 return doc
     raise HTTPException(status_code=404, detail="Question not found")
@@ -2043,6 +2053,7 @@ async def create_qbank_question(
         "is_deleted": False,
     }
     await db.qbank.insert_one(doc)
+    await record_activity(user["id"], "question.created", {"question_id": doc["id"]})
     doc.pop("_id", None)
     return doc
 

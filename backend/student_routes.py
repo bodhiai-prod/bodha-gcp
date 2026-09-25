@@ -23,6 +23,7 @@ from fastapi import Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from auth import get_current_user
+from activity import record_activity
 from deps import api_router, db, logger, utcnow_iso
 from workers import generate_paper_background
 
@@ -192,6 +193,7 @@ async def create_mock_test(req: MockTestCreate, user: dict = Depends(get_current
         "created_at": utcnow_iso(),
     }
     await db.mock_tests.insert_one(test_doc)
+    await record_activity(user["id"], "mock_test.created", {"test_id": test_id, "paper_id": paper_id})
 
     _asyncio.create_task(
         generate_paper_background(
@@ -400,6 +402,7 @@ async def submit_mock_test(test_id: str, user: dict = Depends(get_current_user))
         {"id": test_id},
         {"$set": {"status": "submitted", "submitted_at": now, "score": score}},
     )
+    await record_activity(user["id"], "mock_test.submitted", {"test_id": test_id, "percent": score["percent"]})
     t.update({"status": "submitted", "submitted_at": now, "score": score})
     t["paper"] = paper  # full paper with answers exposed
     logger.info(

@@ -15,6 +15,7 @@ from typing import Optional
 from fastapi import HTTPException
 
 from deps import db, logger, utcnow_iso
+from activity import record_activity
 from diagram_policy import apply_diagram_policy, normalise_spec
 from latex_repair import repair_answers, repair_sections, repair_text
 from llm_adapter import chat_complete, generate_diagram, parse_json_response
@@ -504,6 +505,7 @@ async def generate_paper_background(
                 "generation_error": str(e)[:500],
             }},
         )
+        await record_activity(owner_id, "paper.failed", {"paper_id": paper_id})
         return
 
     sections = data.get("sections") or []
@@ -659,6 +661,7 @@ async def generate_paper_background(
             ),
         }},
     )
+    await record_activity(owner_id, "paper.ready", {"paper_id": paper_id, "questions": count_questions(sections)})
 
     # Kick off diagram generation asynchronously.
     if pending_count > 0:

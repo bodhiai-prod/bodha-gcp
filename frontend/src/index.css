@@ -175,6 +175,14 @@ body {
     border-color: var(--ink);
 }
 
+.textbook-filename {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow-wrap: anywhere;
+}
+
 /* Upload zone */
 .qp-drop {
     @apply border-2 border-dashed border-black bg-neutral-50 p-12 text-center cursor-pointer flex flex-col items-center justify-center transition-colors;

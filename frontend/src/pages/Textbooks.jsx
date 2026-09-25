@@ -243,60 +243,61 @@ export default function Textbooks() {
                     className="border-2 border-black bg-white"
                     data-testid={`textbook-${tb.id}`}
                   >
-                    <div className="p-4 flex flex-col md:flex-row md:items-center gap-3 min-w-0">
+                    <div className="grid min-h-[108px] gap-3 p-4 sm:grid-cols-[auto_minmax(0,1fr)] md:grid-cols-[auto_minmax(0,1fr)_9rem_auto] md:items-center">
                       <button
                         onClick={() => toggleExpand(tb)}
-                        className="flex-1 min-w-0 flex items-start gap-3 text-left"
+                        className="self-start pt-0.5 text-left md:self-center"
                         data-testid={`textbook-toggle-${tb.id}`}
+                        aria-label={`${expanded[tb.id] ? "Collapse" : "Expand"} ${tb.original_filename}`}
                       >
                         {expanded[tb.id] ? (
-                          <CaretDown size={20} weight="bold" className="shrink-0" />
+                          <CaretDown size={20} weight="bold" />
                         ) : (
-                          <CaretRight size={20} weight="bold" className="shrink-0" />
+                          <CaretRight size={20} weight="bold" />
                         )}
+                      </button>
+                      <button
+                        onClick={() => toggleExpand(tb)}
+                        className="min-w-0 self-start text-left md:self-center"
+                        data-testid={`textbook-title-${tb.id}`}
+                        title={`View topics for ${tb.original_filename}`}
+                      >
                         <div className="flex-1 min-w-0">
                           <div
-                            className="font-bold leading-snug break-words [overflow-wrap:anywhere]"
+                            className="textbook-filename font-bold leading-snug"
                             title={tb.original_filename}
                           >
                             {tb.original_filename}
                           </div>
-                          <div className="text-xs font-mono text-neutral-500 mt-0.5">
+                          <div className="mt-1 text-xs font-mono text-neutral-500">
                             {tb.subject} · Class {tb.class_name}
+                            {tb.is_shared && " · Shared library"}
                           </div>
                         </div>
-                        <div className="flex flex-wrap gap-1 shrink-0">
-                          {tb.is_shared && (
-                            <span
-                              className="qp-badge qp-badge-yellow"
-                              data-testid={`shared-badge-${tb.id}`}
-                            >
-                              shared library
-                            </span>
-                          )}
-                          <span
-                            className={`qp-badge ${
-                              tb.status === "topics_ready"
-                                ? "qp-badge-success"
-                                : tb.status === "indexed"
-                                ? "qp-badge-blue"
-                                : "qp-badge-red"
-                            }`}
-                          >
-                            {tb.status.replace("_", " ")}
-                          </span>
-                          {tb.topic_count > 0 && (
-                            <span className="qp-badge">
-                              {tb.topic_count} topics
-                            </span>
-                          )}
-                        </div>
                       </button>
-                      <div className="flex flex-wrap gap-2 shrink-0">
+                      <div className="col-span-full flex min-w-0 flex-wrap items-center gap-1 sm:col-span-1 md:w-36 md:flex-col md:items-start md:justify-center">
+                        <span
+                          className={`qp-badge whitespace-nowrap ${
+                            tb.status === "topics_ready"
+                              ? "qp-badge-success"
+                              : tb.status === "indexed"
+                              ? "qp-badge-blue"
+                              : "qp-badge-red"
+                          }`}
+                        >
+                          {tb.status.replace("_", " ")}
+                        </span>
+                        {tb.topic_count > 0 && (
+                          <span className="qp-badge whitespace-nowrap">
+                            {tb.topic_count} topics
+                          </span>
+                        )}
+                      </div>
+                      <div className="col-span-full flex shrink-0 gap-2 sm:col-span-1 md:col-span-1 md:justify-self-end">
                         <button
                           onClick={() => extractTopics(tb.id)}
                           disabled={extractingId === tb.id || tb.is_owned === false}
-                          className="qp-btn qp-btn-secondary text-xs"
+                          className="qp-btn qp-btn-secondary min-w-40 justify-center whitespace-nowrap text-xs"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`extract-topics-${tb.id}`}
                         >
@@ -310,7 +311,7 @@ export default function Textbooks() {
                         <button
                           onClick={() => deleteTextbook(tb.id)}
                           disabled={tb.is_owned === false}
-                          className="qp-btn qp-btn-secondary text-xs"
+                          className="qp-btn qp-btn-secondary h-10 w-10 justify-center px-0 text-xs"
                           aria-label="Delete textbook"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`delete-textbook-${tb.id}`}
