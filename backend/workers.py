@@ -780,19 +780,25 @@ def merge_topup_sections(existing: list, new: list, limit: int = 0) -> list:
     return merged
 
 
-def restore_recovered_sections(sections: list, spec: dict) -> tuple[list, bool]:
-    """Put legacy recovered blueprint questions back in their allocated sections.
+def align_blueprint_sections(sections: list, spec: dict) -> tuple[list, bool]:
+    """Route synthetic recovery/top-up blocks to their allocation sections.
 
-    Older truncation recovery stored every surviving question under a synthetic
-    ``Recovered Questions`` heading. The question allocation IDs were still
-    intact, so this is a lossless repair for papers already saved in that
-    shape. Unknown questions remain in the recovery section for manual review.
+    The model can label a refill block ``Section A - Top-Up Questions`` even
+    though each question correctly carries the immutable allocation identity.
+    Section labels are presentation text; allocation IDs are the source of
+    truth. Move those questions before rendering or merging, preserving the
+    blueprint order and leaving any unidentifiable questions visible for review.
     """
     allocations = spec.get("section_allocations") or []
-    recovered = [
-        s for s in sections or [] if (s.get("title") or "").strip().casefold() == "recovered questions"
-    ]
-    if not allocations or not recovered:
+    if not allocations:
+        return sections, False
+
+    def is_synthetic(section: dict) -> bool:
+        title = (section.get("title") or "").strip().casefold()
+        return title == "recovered questions" or title.endswith("top-up questions")
+
+    synthetic = [section for section in sections or [] if is_synthetic(section)]
+    if not synthetic:
         return sections, False
 
     by_allocation = {row.get("allocation_id"): row for row in allocations}
@@ -800,11 +806,14 @@ def restore_recovered_sections(sections: list, spec: dict) -> tuple[list, bool]:
         section.get("id"): section.get("title") or section.get("id")
         for section in (spec.get("blueprint") or {}).get("sections", [])
     }
-    repaired = [dict(s, questions=list(s.get("questions") or [])) for s in sections if s not in recovered]
-    by_id = {s.get("section_id"): s for s in repaired if s.get("section_id")}
+    repaired = [
+        dict(section, questions=list(section.get("questions") or []))
+        for section in sections if section not in synthetic
+    ]
+    by_id = {section.get("section_id"): section for section in repaired if section.get("section_id")}
     changed = False
     leftovers: list = []
-    for source in recovered:
+    for source in synthetic:
         for question in source.get("questions") or []:
             row = by_allocation.get(question.get("allocation_id"))
             if not row:
@@ -824,9 +833,6 @@ def restore_recovered_sections(sections: list, spec: dict) -> tuple[list, bool]:
             changed = True
     if leftovers:
         repaired.append({"title": "Recovered Questions", "questions": leftovers})
-    # The flat recovery block may have contained a later section before an
-    # earlier one. Restore the blueprint's display order as well as its
-    # membership so the global Q1, Q2, … counter remains meaningful.
     blueprint_order = [
         section.get("id") for section in (spec.get("blueprint") or {}).get("sections", [])
     ]
@@ -834,6 +840,17 @@ def restore_recovered_sections(sections: list, spec: dict) -> tuple[list, bool]:
     ordered_ids = {id(section) for section in ordered}
     repaired = ordered + [section for section in repaired if id(section) not in ordered_ids]
     return (repaired, changed) if changed else (sections, False)
+
+
+def restore_recovered_sections(sections: list, spec: dict) -> tuple[list, bool]:
+    """Put legacy recovered blueprint questions back in their allocated sections.
+
+    Older truncation recovery stored every surviving question under a synthetic
+    ``Recovered Questions`` heading. The question allocation IDs were still
+    intact, so this is a lossless repair for papers already saved in that
+    shape. Unknown questions remain in the recovery section for manual review.
+    """
+    return align_blueprint_sections(sections, spec)
 
 
 async def _finish_topup(
@@ -1087,6 +1104,10 @@ async def generate_missing_questions_background(
         new_sections = data.get("sections") or []
         coercions: dict = {}
         _normalise_paper_questions(new_sections, difficulty, coercions)
+        # The provider occasionally decorates a real title with "Top-Up
+        # Questions". Route by allocation identity before merge so it cannot
+        # create a second Section A at the end of the document.
+        new_sections, _ = align_blueprint_sections(new_sections, legacy_spec)
         if not count_questions(new_sections):
             raise RuntimeError("The model returned no usable questions.")
 

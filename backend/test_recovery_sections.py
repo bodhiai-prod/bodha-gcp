@@ -2,7 +2,7 @@ import json
 import unittest
 
 from llm_adapter import parse_json_response
-from workers import restore_recovered_sections
+from workers import align_blueprint_sections, restore_recovered_sections
 
 
 class RecoverySectionTests(unittest.TestCase):
@@ -48,6 +48,20 @@ class RecoverySectionTests(unittest.TestCase):
             [(s["section_id"], s["title"], [q["id"] for q in s["questions"]]) for s in sections],
             [("A", "Part A", ["one"]), ("B", "Part B", ["two"])],
         )
+
+    def test_topup_heading_is_merged_into_its_real_blueprint_section(self):
+        spec = {
+            "section_allocations": [{"allocation_id": "a", "section_id": "A"}],
+            "blueprint": {"sections": [{"id": "A", "title": "Section A - Information"}]},
+        }
+        sections, changed = align_blueprint_sections([
+            {"section_id": "A", "title": "Section A - Information", "questions": [{"id": "old"}]},
+            {"title": "Section A - Top-Up Questions", "questions": [{"id": "new", "allocation_id": "a"}]},
+        ], spec)
+
+        self.assertTrue(changed)
+        self.assertEqual(len(sections), 1)
+        self.assertEqual([question["id"] for question in sections[0]["questions"]], ["old", "new"])
 
 
 if __name__ == "__main__":
