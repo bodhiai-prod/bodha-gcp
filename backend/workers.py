@@ -31,7 +31,8 @@ from prompts import (
     STEM_CHARS,
 )
 from instruction_spec import parse_instructions, verify as verify_instructions
-from export_utils import printable_instructions
+from export_utils import canonical_question_type, printable_instructions
+from section_blueprints import hydrate_section_instructions, printable_template_instructions
 from generation_requirements import compile_requirements, remaining_requirements
 from section_blueprints import allocation_coverage
 from question_dedupe import dedupe_sections, is_duplicate
@@ -218,7 +219,11 @@ def _normalise_paper_questions(
                 q["id"] = str(uuid.uuid4())
             q.setdefault("important", False)
             q.setdefault("marks", 2)
-            q.setdefault("type", "concept")
+            canonical_type = canonical_question_type(q.get("type"))
+            if canonical_type is None:
+                _flag(flags, q, "invalid_question_type")
+                canonical_type = "concept"
+            q["type"] = canonical_type
             q.setdefault("difficulty", difficulty)
             q.setdefault("needs_diagram", False)
             q.setdefault("format", "")
@@ -524,6 +529,13 @@ async def generate_paper_background(
     # One bounded correction attempt for a complete but noncompliant paper.
     # Truncated papers use the existing top-up path instead.
     initial_check = verify_instructions(sections, spec)
+    invalid_type_misses = [
+        f"Question {index}: generated an invalid cognitive type."
+        for index, q in enumerate((q for s in sections for q in s.get("questions", [])), start=1)
+        if "invalid_question_type" in coercions.get(q.get("id"), [])
+    ]
+    initial_check["misses"].extend(invalid_type_misses)
+    initial_check["honoured"] = not initial_check["misses"]
     # `prompt is not None` excludes batched papers. The correction regenerates
     # the WHOLE paper in a single call, which is the exact thing that truncates
     # at that size -- retrying it would reintroduce the salvage-and-top-up chain
@@ -550,10 +562,17 @@ async def generate_paper_background(
             )
             corrected_data = parse_json_response(corrected_raw)
             corrected = corrected_data.get("sections") or []
-            _normalise_paper_questions(corrected, difficulty)
+            corrected_coercions: dict = {}
+            _normalise_paper_questions(corrected, difficulty, corrected_coercions)
             (allocation_coverage(corrected, spec) if spec.get("section_allocations") else measure_coverage(corrected, topics_weighted, spec.get("total_questions") or derive_target_question_count(total_marks)))
-            if corrected and len(verify_instructions(corrected, spec)["misses"]) < len(initial_check["misses"]):
+            corrected_check = verify_instructions(corrected, spec)
+            corrected_check["misses"].extend(
+                "generated an invalid cognitive type"
+                for flags in corrected_coercions.values() if "invalid_question_type" in flags
+            )
+            if corrected and len(corrected_check["misses"]) < len(initial_check["misses"]):
                 data, sections = corrected_data, corrected
+                coercions = corrected_coercions
         except Exception as exc:
             logger.warning(f"Requirement correction skipped for {paper_id}: {exc}")
 
@@ -561,6 +580,7 @@ async def generate_paper_background(
     # plan. From here on recovered and top-up questions are routed by ID, not
     # by whatever display title the provider happens to emit.
     sections, section_plan, _ = reconcile_section_plan(sections, None, spec)
+    hydrate_section_instructions({"generation_requirements": spec, "sections": sections})
 
     # Finish the questions that arrived structurally incomplete: an MCQ with
     # two options, a stem cut mid-sentence, an answer key pointing at
@@ -628,19 +648,34 @@ async def generate_paper_background(
     if not still_pending:
         logger.info("Paper generation cancelled before publish: %s", paper_id)
         return
+    final_check = verify_instructions(sections, spec)
+    final_type_misses = [flags for flags in coercions.values() if "invalid_question_type" in flags]
+    if final_type_misses:
+        final_check["misses"].append("One or more questions had an invalid cognitive type.")
+        final_check["honoured"] = False
+    # A short response is recoverable by the existing top-up worker, so do not
+    # fail it here. Marks and invalid cognitive types are not recoverable by
+    # adding questions, and must block publication/export until regenerated.
+    mark_misses = [
+        miss for miss in final_check["misses"]
+        if "total marks" in miss.lower()
+        or ("expected " in miss.lower() and " marks" in miss.lower())
+    ]
+    validation_error = "; ".join([*mark_misses, *( ["One or more questions had an invalid cognitive type."] if final_type_misses else [])])[:500] or None
     await db.papers.update_one(
         {"id": paper_id, "generation_status": "pending"},
         {"$set": {
             "instructions": printable_instructions(
                 data.get("instructions", ""),
+                template_instructions=printable_template_instructions({"generation_requirements": spec}),
                 custom_instructions=custom_instructions,
             ),
             "sections": sections,
             "section_plan": section_plan,
             "question_count": count_questions(sections),
             "diagrams_pending": pending_count,
-            "generation_status": "ready",
-            "generation_error": None,
+            "generation_status": "ready" if not validation_error else "failed",
+            "generation_error": validation_error,
             "generation_progress.completed": count_questions(sections),
             "generation_progress.total": target_q,
             "generation_progress.status": "ready",
@@ -649,7 +684,7 @@ async def generate_paper_background(
             "completeness_check": completeness_stats,
             "dedupe_check": dedupe_stats,
             "topic_coverage": coverage,
-            "instruction_check": verify_instructions(sections, spec),
+            "instruction_check": final_check,
             # A stated count makes the target knowable, which is what
             # re-enables auto-top-up and the missing-questions banner for
             # instruction-driven papers -- both were dead while this was 0.
@@ -672,10 +707,10 @@ async def generate_paper_background(
             ),
         }},
     )
-    await record_activity(owner_id, "paper.ready", {"paper_id": paper_id, "questions": count_questions(sections)})
+    await record_activity(owner_id, "paper.ready" if not validation_error else "paper.failed", {"paper_id": paper_id, "questions": count_questions(sections)})
 
     # Kick off diagram generation asynchronously.
-    if pending_count > 0:
+    if pending_count > 0 and not validation_error:
         await generate_diagrams_background(paper_id, owner_id)
 
     # Last: if the paper is still short of what it was meant to be, top it

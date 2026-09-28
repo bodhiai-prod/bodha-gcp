@@ -358,7 +358,7 @@ export default function CompetitiveExamDetail() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="qp-label">Questions</label>
                     <input
@@ -422,11 +422,11 @@ export default function CompetitiveExamDetail() {
                 />
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <button
                   type="button"
                   onClick={previewRag}
-                  className="qp-btn qp-btn-secondary"
+                  className="qp-btn qp-btn-secondary w-full sm:w-auto"
                   data-testid="comp-rag-preview-btn"
                 >
                   <Brain size={16} weight="bold" /> Preview RAG anchors
@@ -435,7 +435,7 @@ export default function CompetitiveExamDetail() {
                   type="button"
                   onClick={generate}
                   disabled={genBusy || selectedTopics.size === 0}
-                  className="qp-btn qp-btn-primary flex-1"
+                  className="qp-btn qp-btn-primary w-full flex-1"
                   data-testid="comp-generate-btn"
                 >
                   <Sparkle size={16} weight="bold" />

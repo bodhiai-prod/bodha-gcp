@@ -15,7 +15,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 from PIL import Image
-from export_utils import format_mark, printable_instructions
+from export_utils import format_mark, hydrate_question_types, printable_instructions
+from section_blueprints import hydrate_section_instructions, printable_template_instructions
 
 
 DOCX_POOL_MAX_WORKERS = int(os.environ.get("DOCX_POOL_MAX_WORKERS", "4"))
@@ -88,10 +89,22 @@ def _latex_to_ast(source: str):
                 denominator, cursor = _latex_group(source, cursor)
                 nodes.append(("frac", _latex_to_ast(numerator), _latex_to_ast(denominator)))
                 continue
-            if command in {"begin", "end"}:
+            if command == "begin":
                 environment, cursor = _latex_group(source, end)
-                if command == "begin" and environment in {"cases", "array", "aligned"}:
+                closing = f"\\end{{{environment}}}"
+                close_at = source.find(closing, cursor)
+                if environment in {"matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix"} and close_at >= 0:
+                    rows = []
+                    for row in source[cursor:close_at].split("\\\\"):
+                        rows.append([_latex_to_ast(cell) for cell in row.split("&")])
+                    nodes.append(("matrix", environment, rows))
+                    cursor = close_at + len(closing)
+                    continue
+                if environment in {"cases", "array", "aligned"}:
                     nodes.append(("text", "{ " if environment == "cases" else ""))
+                continue
+            if command == "end":
+                _environment, cursor = _latex_group(source, end)
                 continue
             if command == "sqrt":
                 if end < len(source) and source[end] == "[":
@@ -182,6 +195,35 @@ def _omml_node(node):
             _omml_container("m:sup" if kind == "sup" else "m:sub", node[2])
         )
         return element
+    if kind == "matrix":
+        delimiters = {
+            "matrix": ("", ""), "pmatrix": ("(", ")"), "bmatrix": ("[", "]"),
+            "Bmatrix": ("{", "}"), "vmatrix": ("|", "|"), "Vmatrix": ("‖", "‖"),
+        }
+        matrix = OxmlElement("m:m")
+        for row in node[2]:
+            matrix_row = OxmlElement("m:mr")
+            for cell in row:
+                matrix_cell = OxmlElement("m:e")
+                for child in cell:
+                    matrix_cell.append(_omml_node(child))
+                matrix_row.append(matrix_cell)
+            matrix.append(matrix_row)
+        left, right = delimiters[node[1]]
+        if not left:
+            return matrix
+        delimiter = OxmlElement("m:d")
+        props = OxmlElement("m:dPr")
+        begin = OxmlElement("m:begChr")
+        begin.set(qn("m:val"), left)
+        finish = OxmlElement("m:endChr")
+        finish.set(qn("m:val"), right)
+        props.extend([begin, finish])
+        delimiter.append(props)
+        delimiter.append(_omml_arg([("raw_omml", matrix)]))
+        return delimiter
+    if kind == "raw_omml":
+        return node[1]
     return _omml_run(str(node))
 
 
@@ -420,6 +462,8 @@ def render_paper_docx(
     *,
     include_solutions: bool = False,
 ) -> bytes:
+    hydrate_section_instructions(paper)
+    hydrate_question_types(paper)
     document = Document()
     section = document.sections[0]
     section.top_margin = Inches(0.7)
@@ -477,6 +521,7 @@ def render_paper_docx(
 
     instructions = printable_instructions(
         paper.get("instructions"),
+        template_instructions=printable_template_instructions(paper),
         custom_instructions=paper.get("custom_instructions") or "",
     )
     if not include_solutions:
@@ -518,6 +563,12 @@ def render_paper_docx(
         section_run.font.name = "Arial"
         section_run.font.size = Pt(13)
         section_run.font.color.rgb = RGBColor(0, 0, 0)
+        section_instructions = (section_data.get("section_instructions") or "").strip()
+        if section_instructions and not include_solutions:
+            lead = document.add_paragraph()
+            lead.paragraph_format.space_after = Pt(4)
+            lead.paragraph_format.left_indent = Inches(0.12)
+            lead.add_run(section_instructions).italic = True
         for question in section_data.get("questions", []):
             if include_solutions and question_number > 1 and (
                 previous_had_diagram or (question_number - 1) % 5 == 0
@@ -582,17 +633,22 @@ def render_paper_docx(
             else:
                 previous_had_diagram = False
             if include_solutions:
-                answer_heading = document.add_paragraph()
-                answer_heading.paragraph_format.left_indent = Inches(0.25)
+                # Keep each answer in the same full-width question block.  The
+                # previous standalone paragraphs started at document margins,
+                # while the question lived in a narrow table, producing the
+                # visibly jagged answer key shown in LibreOffice and Word.
+                answer_heading = question_cell.add_paragraph()
+                answer_heading.paragraph_format.left_indent = Inches(0.15)
                 answer_heading.paragraph_format.space_before = Pt(5)
                 answer_heading.paragraph_format.space_after = Pt(2)
+                _set_keep(answer_heading, keep_together=True)
                 answer_heading.add_run("Answer").bold = True
-                answer_paragraph = document.add_paragraph()
-                answer_paragraph.paragraph_format.left_indent = Inches(0.25)
+                answer_paragraph = question_cell.add_paragraph()
+                answer_paragraph.paragraph_format.left_indent = Inches(0.15)
                 answer_paragraph.paragraph_format.space_after = Pt(7)
                 _append_rich_text(
                     answer_paragraph,
-                    document,
+                    question_cell,
                     answer_by_question.get(question.get("id")) or "(no answer)",
                 )
             question_number += 1

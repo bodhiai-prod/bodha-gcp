@@ -134,9 +134,15 @@ class BlueprintTests(unittest.TestCase):
         self.assertEqual(summary["attemptable_marks"], 6)
         sections[0]["questions"][0].update(needs_diagram=True, diagram_status="failed", marks=3)
         summary = paper_summary(paper)
-        self.assertEqual(summary["offered_marks"], 8)
+        self.assertEqual(summary["offered_marks"], 6)
+        self.assertEqual(summary["printed_marks"], 8)
         self.assertEqual(summary["diagrams"]["failed"], 1)
-        self.assertIsNone(summary["attemptable_marks"])
+        self.assertEqual(summary["attemptable_marks"], 6)
+
+    def test_builtin_templates_expose_printable_and_section_instructions(self):
+        for blueprint in catalog():
+            self.assertTrue(blueprint["student_instructions"])
+            self.assertTrue(any(section.get("section_instructions") for section in blueprint["sections"]))
 
     def test_legacy_summary_marks_unknown_classifications(self):
         summary = paper_summary({"sections": [{"title": "Old", "questions": [{"marks": 3}]}]})

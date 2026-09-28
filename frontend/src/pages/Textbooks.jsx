@@ -195,7 +195,11 @@ export default function Textbooks() {
               data-testid="upload-drop-zone"
             >
               <UploadSimple size={32} weight="bold" />
-              <div className="mt-3 font-bold uppercase tracking-wider text-sm">
+              <div
+                className="mt-3 max-w-full break-all text-center text-sm font-bold uppercase tracking-wider line-clamp-2"
+                title={file?.name}
+                aria-label={file ? `Selected PDF: ${file.name}` : undefined}
+              >
                 {file ? file.name : "Drop PDF or click to browse"}
               </div>
               <div className="text-xs text-neutral-500 font-mono mt-1">
@@ -243,10 +247,10 @@ export default function Textbooks() {
                     className="border-2 border-black bg-white"
                     data-testid={`textbook-${tb.id}`}
                   >
-                    <div className="grid min-h-[108px] gap-3 p-4 sm:grid-cols-[auto_minmax(0,1fr)] md:grid-cols-[auto_minmax(0,1fr)_9rem_auto] md:items-center">
+                    <div className="grid min-h-[108px] gap-3 p-4 sm:grid-cols-[auto_minmax(0,1fr)] lg:grid-cols-[auto_minmax(0,1fr)_9rem_auto] lg:items-center">
                       <button
                         onClick={() => toggleExpand(tb)}
-                        className="self-start pt-0.5 text-left md:self-center"
+                        className="self-start pt-0.5 text-left lg:self-center"
                         data-testid={`textbook-toggle-${tb.id}`}
                         aria-label={`${expanded[tb.id] ? "Collapse" : "Expand"} ${tb.original_filename}`}
                       >
@@ -258,7 +262,7 @@ export default function Textbooks() {
                       </button>
                       <button
                         onClick={() => toggleExpand(tb)}
-                        className="min-w-0 self-start text-left md:self-center"
+                        className="min-w-0 self-start text-left lg:self-center"
                         data-testid={`textbook-title-${tb.id}`}
                         title={`View topics for ${tb.original_filename}`}
                       >
@@ -275,7 +279,7 @@ export default function Textbooks() {
                           </div>
                         </div>
                       </button>
-                      <div className="col-span-full flex min-w-0 flex-wrap items-center gap-1 sm:col-span-1 md:w-36 md:flex-col md:items-start md:justify-center">
+                      <div className="col-span-full flex min-w-0 flex-wrap items-center gap-1 sm:col-span-1 lg:w-36 lg:flex-col lg:items-start lg:justify-center">
                         <span
                           className={`qp-badge whitespace-nowrap ${
                             tb.status === "topics_ready"
@@ -293,11 +297,11 @@ export default function Textbooks() {
                           </span>
                         )}
                       </div>
-                      <div className="col-span-full flex shrink-0 gap-2 sm:col-span-1 md:col-span-1 md:justify-self-end">
+                      <div className="col-span-full flex flex-wrap gap-2 sm:col-span-1 lg:col-span-1 lg:justify-self-end">
                         <button
                           onClick={() => extractTopics(tb.id)}
                           disabled={extractingId === tb.id || tb.is_owned === false}
-                          className="qp-btn qp-btn-secondary min-w-40 justify-center whitespace-nowrap text-xs"
+                          className="qp-btn qp-btn-secondary min-w-40 flex-1 justify-center whitespace-nowrap text-xs sm:flex-none"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`extract-topics-${tb.id}`}
                         >
@@ -311,7 +315,7 @@ export default function Textbooks() {
                         <button
                           onClick={() => deleteTextbook(tb.id)}
                           disabled={tb.is_owned === false}
-                          className="qp-btn qp-btn-danger min-h-11 justify-center whitespace-nowrap text-xs"
+                          className="qp-btn qp-btn-danger min-h-11 flex-1 justify-center whitespace-nowrap text-xs sm:flex-none"
                           aria-label="Delete textbook"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`delete-textbook-${tb.id}`}

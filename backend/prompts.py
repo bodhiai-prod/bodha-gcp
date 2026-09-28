@@ -895,7 +895,7 @@ def qgen_prompt(
         "{\n"
         '  "instructions": "short student-facing exam instruction line",\n'
         '  "sections": [\n'
-        '    { "title": "Section A - Information Based",\n'
+        '    { "title": "Section A - Information Based", "section_instructions": "",\n'
         '      "questions": [\n'
         '        { "question": "...", "topic": "Topic name", "type": "information",\n'
         '          "format": "mcq|short_answer|long_answer|fill_blank|true_false|custom_label|\\"\\"",\n'
@@ -913,6 +913,7 @@ def qgen_prompt(
         f"{syllabus_rule}"
         "- Set 'topic' field on every question to the matching topic name from the list above.\n"
         "- Set 'format' field on every question (use one of the provided format labels, or empty string if none specified).\n"
+        "- Put any section-wide directions, lead-ins, or rules in that section's 'section_instructions' field. Never turn a section instruction into Q1. Every entry in 'questions' must be an assessable numbered question with its own student task.\n"
         "- For format='mcq', 'options' MUST be an array of EXACTLY 4 plain strings, and 'correct_option' MUST be one of 0,1,2,3 pointing to the correct entry. Omit these fields for non-MCQ questions.\n"
         + ("" if has_blueprint or topup_count else
            "- Ensure sum of marks of all questions equals the total marks.\n")

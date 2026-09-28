@@ -138,10 +138,10 @@ export default function QBank() {
                 />
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <label className="qp-btn qp-btn-secondary cursor-pointer">
+            <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
+              <label className="qp-btn qp-btn-secondary min-w-0 cursor-pointer sm:max-w-[60%]">
                 <FilePdf size={16} weight="bold" />
-                {file ? file.name : "Choose PDF"}
+                <span className="min-w-0 truncate">{file ? file.name : "Choose PDF"}</span>
                 <input
                   ref={fileRef}
                   type="file"
@@ -219,8 +219,8 @@ export default function QBank() {
                 className="border-2 border-black bg-white p-4 flex items-start gap-3"
                 data-testid={`qbank-item-${q.id}`}
               >
-                <div className="flex-1">
-                  <div className="font-body">{q.question}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-body break-words">{q.question}</div>
                   <div className="flex flex-wrap gap-1 mt-2">
                     <span className="qp-badge qp-badge-blue">{q.type}</span>
                     <span className="qp-badge">{q.difficulty}</span>

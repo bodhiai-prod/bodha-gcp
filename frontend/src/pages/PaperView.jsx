@@ -26,6 +26,7 @@ import BrandingLogo from "@/components/BrandingLogo";
 import { printDocument, diagramsReady } from "@/lib/print";
 import { canRegenerate, regeneratingId } from "@/lib/regenerate";
 import { DEFAULT_PAPER_INSTRUCTIONS, formatMark } from "@/lib/exportFormat";
+import { canonicalQuestionType, questionTypeLabel } from "@/lib/questionType";
 
 const typeBadge = (t) => {
   if (t === "information") return "qp-badge qp-badge-blue";
@@ -791,6 +792,11 @@ export default function PaperView() {
               <h2 className="font-display text-xl md:text-2xl text-[#002FA7] mb-4 border-b border-neutral-300 pb-2">
                 {section.title}
               </h2>
+              {section.section_instructions && (
+                <p className="mb-4 italic text-sm" data-testid={`section-instructions-${si}`}>
+                  <MathText text={section.section_instructions} />
+                </p>
+              )}
               <ol className="space-y-4">
                 {(section.questions || []).map((q, qi) => {
                   const qNum = counter++;
@@ -821,7 +827,7 @@ export default function PaperView() {
                             <Trash size={14} weight="bold" />
                           </button>
                         </div>
-                        <div className="grid grid-cols-3 gap-2 mt-2 pl-6">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2 sm:pl-6">
                           <select
                             value={q.type}
                             onChange={(e) =>
@@ -832,7 +838,7 @@ export default function PaperView() {
                           >
                             {TYPE_OPTIONS.map((t) => (
                               <option key={t} value={t}>
-                                {t}
+                                {questionTypeLabel(t)}
                               </option>
                             ))}
                           </select>
@@ -974,7 +980,7 @@ export default function PaperView() {
                             </div>
                           )}
                         <div className="no-print mt-2 flex flex-wrap gap-1 pl-6">
-                          <span className={typeBadge(q.type)}>{q.type}</span>
+                          <span className={typeBadge(canonicalQuestionType(q.type))}>{questionTypeLabel(q.type)}</span>
                           <span className="qp-badge">{q.difficulty}</span>
                           {q.format && (
                             <span

@@ -4,7 +4,7 @@ from zipfile import ZipFile
 from PIL import Image
 
 from docx_utils import render_paper_docx, render_solution_docx
-from export_utils import DEFAULT_INSTRUCTIONS, format_mark, printable_instructions
+from export_utils import DEFAULT_INSTRUCTIONS, canonical_question_type, format_mark, hydrate_question_types, printable_instructions
 
 
 def _paper():
@@ -70,6 +70,33 @@ def test_docx_preserves_structure_as_native_word_equations():
     # Inline $g=9.8$ stays in its text paragraph; only the explicit $$...$$
     # expression becomes centered display math.
     assert document_xml.count("<m:oMathPara>") == 1
+
+
+def test_docx_renders_latex_matrices_as_native_word_matrices():
+    paper = _paper()
+    paper["sections"][0]["questions"][0]["question"] = (
+        r"For $A=\begin{pmatrix}2 & 1 \\ 1 & 1\end{pmatrix}$, find $\det A$."
+    )
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert "<m:m>" in document_xml
+    assert document_xml.count("<m:mr>") == 2
+    assert "<m:d>" in document_xml
+    assert "<m:begChr m:val=\"(\"" in document_xml
+
+
+def test_docx_renders_template_section_instruction_before_question_number():
+    paper = _paper()
+    paper["generation_requirements"] = {"blueprint": {
+        "id": "cbse12",
+        "sections": [{"id": "A"}],
+    }}
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert "Read the following instructions very carefully" in document_xml
+    assert document_xml.index("This section comprises 20 multiple choice questions") < document_xml.index("Q1.")
 
 
 def test_docx_embeds_available_diagrams():
@@ -144,6 +171,11 @@ def test_solution_docx_contains_answers_and_monochrome_heading():
     assert "Physics Test - Answer Key" in document_xml
     assert "The answer is " in document_xml
     assert "002FA7" not in document_xml
+    # Answer text stays in the same question table rather than beginning at
+    # the document margin in a separate paragraph.
+    table_start = document_xml.index("<w:tbl>")
+    table_end = document_xml.index("</w:tbl>", table_start)
+    assert "Answer" in document_xml[table_start:table_end]
 
 
 def test_export_text_helpers():
@@ -153,4 +185,10 @@ def test_export_text_helpers():
     assert printable_instructions(
         "Show working. Ensure proper LaTeX formatting.",
         custom_instructions="Show working.",
-    ) == "Show working."
+    ) == DEFAULT_INSTRUCTIONS
+    assert printable_instructions("", template_instructions="Board instruction.") == "Board instruction."
+    assert canonical_question_type("problem") == "concept"
+    assert canonical_question_type("numerical") == "application"
+    legacy = {"sections": [{"questions": [{"type": "problem"}]}]}
+    hydrate_question_types(legacy)
+    assert legacy["sections"][0]["questions"][0]["type"] == "concept"

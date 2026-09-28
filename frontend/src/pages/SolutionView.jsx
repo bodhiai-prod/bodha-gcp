@@ -19,6 +19,7 @@ import QuestionDiagram from "@/components/QuestionDiagram";
 import BrandingLogo from "@/components/BrandingLogo";
 import { printDocument, diagramsReady } from "@/lib/print";
 import { formatMark } from "@/lib/exportFormat";
+import { canonicalQuestionType, questionTypeLabel } from "@/lib/questionType";
 
 const typeBadge = (t) => {
   if (t === "information") return "qp-badge qp-badge-blue";
@@ -504,7 +505,7 @@ export default function SolutionView() {
                           </span>
                         </div>
                         <div className="no-print mt-2 flex flex-wrap gap-1 pl-6">
-                          <span className={typeBadge(q.type)}>{q.type}</span>
+                          <span className={typeBadge(canonicalQuestionType(q.type))}>{questionTypeLabel(q.type)}</span>
                           <span className="qp-badge">{q.difficulty}</span>
                           {q.diagram_path && (
                             <span className="qp-badge">

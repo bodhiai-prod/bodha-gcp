@@ -145,7 +145,7 @@ export default function BrandingSettings() {
 
           <form onSubmit={save} className="lg:col-span-3 space-y-6">
             <section className="qp-card">
-              <div className="flex items-center justify-between gap-3 mb-5">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
                 <div className="overline text-neutral-500">// {draft.id ? "EDIT PRESET" : "NEW PRESET"}</div>
                 {draft.id && <button type="button" onClick={removePreset} className="qp-btn qp-btn-secondary text-xs" data-testid="delete-branding-preset"><Trash size={14} weight="bold" /> Delete preset</button>}
               </div>
@@ -167,7 +167,7 @@ export default function BrandingSettings() {
               <div className="branding-crest-preview">
                 {crestUrl ? <img src={crestUrl} alt="School logo" /> : <><ImageSquare size={34} /><span>NO LOGO UPLOADED</span></>}
               </div>
-              <div className="flex gap-2 mt-4">
+              <div className="flex flex-col gap-2 mt-4 sm:flex-row">
                 <label className={`qp-btn qp-btn-secondary flex-1 cursor-pointer ${!draft.id ? "opacity-50 pointer-events-none" : ""}`}>
                   <UploadSimple size={16} weight="bold" /> {uploading ? "Uploading..." : "Upload logo"}
                   <input type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" onChange={(event) => upload(event.target.files?.[0])} className="sr-only" disabled={uploading || !draft.id} />

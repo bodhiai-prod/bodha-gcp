@@ -36,7 +36,8 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
-from export_utils import format_mark, printable_instructions
+from export_utils import format_mark, hydrate_question_types, printable_instructions
+from section_blueprints import hydrate_section_instructions, printable_template_instructions
 
 logger = logging.getLogger(__name__)
 
@@ -722,6 +723,8 @@ def _page_branding(paper: dict):
 
 
 def render_paper_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> bytes:
+    hydrate_section_instructions(paper)
+    hydrate_question_types(paper)
     """Render the structured paper dict into a printable PDF.
 
     diagram_loader: optional callable(question_id, diagram_path) -> bytes|None,
@@ -829,6 +832,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> 
 
     instructions = printable_instructions(
         paper.get("instructions"),
+        template_instructions=printable_template_instructions(paper),
         custom_instructions=paper.get("custom_instructions") or "",
     )
     story.append(
@@ -848,6 +852,9 @@ def render_paper_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> 
     q_counter = 1
     for section in sections:
         story.append(Paragraph(section.get("title", "Section"), section_h))
+        section_instructions = (section.get("section_instructions") or "").strip()
+        if section_instructions:
+            story.append(Paragraph(_math_to_paragraph_html(section_instructions), q_style))
         for q in section.get("questions", []):
             marks_q = q.get("marks", 0)
             difficulty = q.get("difficulty", "")

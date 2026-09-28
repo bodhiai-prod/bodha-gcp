@@ -134,7 +134,7 @@ export default function GeneratedPapers() {
               <div
                 key={p.id}
                 data-testid={`generated-paper-row-${idx}`}
-                className={`flex items-center justify-between gap-4 p-4 hover:bg-neutral-50 ${
+                className={`flex items-center justify-between gap-3 p-4 hover:bg-neutral-50 ${
                   idx !== filtered.length - 1 ? "border-b border-neutral-200" : ""
                 }`}
               >
@@ -144,7 +144,7 @@ export default function GeneratedPapers() {
                   </div>
                   <div className="min-w-0">
                     <div className="font-bold truncate">{p.title}</div>
-                    <div className="text-xs text-neutral-500 font-mono mt-0.5">
+                    <div className="text-xs text-neutral-500 font-mono mt-0.5 break-words">
                       {p.subject} · Class {p.class_name} · {p.total_marks}{" "}
                       marks · {p.duration_minutes} min
                       {p.created_at

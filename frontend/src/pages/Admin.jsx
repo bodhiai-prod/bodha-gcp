@@ -173,7 +173,7 @@ export default function Admin() {
         {/* Stats */}
         {overview && (
           <div
-            className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-10"
+            className="grid grid-cols-1 min-[420px]:grid-cols-2 md:grid-cols-5 gap-4 mb-10"
             data-testid="admin-stats"
           >
             <StatCard
@@ -410,7 +410,7 @@ const TextbookRow = ({
         <span className="qp-badge">{tb.topic_count} topics</span>
       )}
     </div>
-    <div className="flex gap-2">
+    <div className="flex flex-wrap gap-2">
       {showShareToggle && (
         <button
           onClick={() => onToggleShare(tb)}
@@ -590,10 +590,10 @@ const UserDetailDrawer = ({ detail, onClose }) => {
     <div className="fixed inset-0 z-50 bg-black/40 flex justify-end" role="dialog" aria-modal="true">
       <aside className="w-full max-w-2xl h-full overflow-y-auto bg-[#FAFAFA] border-l-4 border-black p-6 md:p-8">
         <div className="flex justify-between gap-4 mb-7">
-          <div><div className="overline text-neutral-500">// USER RECORD</div><h2 className="font-display text-4xl mt-2">{user.full_name || user.email}</h2><div className="text-sm text-neutral-600">{user.email}</div></div>
+          <div className="min-w-0"><div className="overline text-neutral-500">// USER RECORD</div><h2 className="font-display text-4xl mt-2 break-words">{user.full_name || user.email}</h2><div className="text-sm text-neutral-600 break-all">{user.email}</div></div>
           <button type="button" className="qp-btn-ghost h-fit" onClick={onClose} aria-label="Close user details"><X size={20} /></button>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6"><Metric label="Textbooks" value={user.textbook_count} /><Metric label="Papers" value={user.paper_count} /><Metric label="Questions" value={user.question_count} /><Metric label="Tests" value={user.test_count} /></div>
+        <div className="grid grid-cols-1 min-[420px]:grid-cols-2 md:grid-cols-4 gap-3 mb-6"><Metric label="Textbooks" value={user.textbook_count} /><Metric label="Papers" value={user.paper_count} /><Metric label="Questions" value={user.question_count} /><Metric label="Tests" value={user.test_count} /></div>
         <section className="border-2 border-black bg-white p-4 mb-5"><div className="font-bold mb-2">Profile</div><dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm"><Detail label="Role" value={user.role} /><Detail label="Provider" value={user.auth_provider} /><Detail label="School" value={user.school_name || "Not provided"} /><Detail label="Board" value={user.board === "Other" ? user.board_other_name : user.board || "Not provided"} /><Detail label="Created" value={formatDate(user.created_at)} /><Detail label="Last active" value={formatDate(user.last_active_at) || "Not active yet"} /></dl></section>
         <ActivitySection title="Recent activity" items={activity} primary={(item) => eventLabel(item.event_type)} secondary={(item) => formatDate(item.occurred_at)} />
         <ActivitySection title="Recent papers" items={papers} primary={(item) => item.title || item.subject || "Untitled paper"} secondary={(item) => `${item.generation_status || "ready"} · ${formatDate(item.created_at)}`} />
@@ -609,7 +609,7 @@ const Detail = ({ label, value }) => <div><dt className="text-xs font-mono text-
 const ActivitySection = ({ title, items, primary, secondary }) => (
   <section className="mb-5">
     <h3 className="font-bold mb-2">{title}</h3>
-    {items?.length ? <div className="space-y-2">{items.map((item) => <div key={item.id} className="border border-neutral-300 bg-white p-3 text-sm flex justify-between gap-3"><span className="min-w-0 truncate font-medium">{primary(item)}</span><span className="text-neutral-500 text-right shrink-0">{secondary(item)}</span></div>)}</div> : <div className="text-sm text-neutral-500 border border-dashed border-neutral-400 p-3">None yet.</div>}
+    {items?.length ? <div className="space-y-2">{items.map((item) => <div key={item.id} className="border border-neutral-300 bg-white p-3 text-sm flex flex-col gap-1 sm:flex-row sm:justify-between sm:gap-3"><span className="min-w-0 break-words font-medium">{primary(item)}</span><span className="text-neutral-500 sm:text-right sm:shrink-0">{secondary(item)}</span></div>)}</div> : <div className="text-sm text-neutral-500 border border-dashed border-neutral-400 p-3">None yet.</div>}
   </section>
 );
 const formatDate = (value) => value ? new Date(value).toLocaleString() : "";

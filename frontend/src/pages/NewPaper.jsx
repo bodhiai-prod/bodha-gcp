@@ -524,7 +524,7 @@ export default function NewPaper() {
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="qp-label">Duration (min)</label>
                   <input
@@ -551,7 +551,7 @@ export default function NewPaper() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 mt-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
                 <div>
                   <label className="qp-label" htmlFor="question-count">Questions</label>
                   <input id="question-count" type="number" min={1} max={200}
@@ -574,7 +574,7 @@ export default function NewPaper() {
             </ExpandableCard>
 
             <ExpandableCard id="distribution" title="Question distribution" summary={promptOverride ? "Controlled by paper blueprint" : `${info}% direct · ${concept}% concept · ${application}% application`} disabled={promptOverride}>
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
                 <div className="overline">// QUESTION DISTRIBUTION</div>
                 {promptOverride ? (
                   <span
@@ -629,7 +629,7 @@ export default function NewPaper() {
 
             {step === 1 && <>
             <ExpandableCard id="format-mix" title="Question format mix" summary={promptOverride ? "Controlled by paper blueprint" : `${effectiveQuestionCount} questions · ${formats.filter(f => (formatQuestionCounts[f.key] || 0) > 0).length} active formats`} disabled={promptOverride}>
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                 <div className="overline">// QUESTION FORMAT MIX</div>
                 {promptOverride ? (
                   <span
@@ -673,7 +673,7 @@ export default function NewPaper() {
                   className="mb-3 last:mb-0"
                   data-testid={`format-${f.key}`}
                 >
-                  <div className="flex items-center justify-between mb-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                     <div className="font-bold text-sm uppercase tracking-wider flex items-center gap-2">
                       {f.label}
                       {f.custom && (

@@ -34,7 +34,8 @@ from activity import record_activity
 from llm_adapter import chat_complete, parse_json_response
 from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_errors,
                                 compile_allocations, paper_summary, BlueprintStructure,
-                                apply_allocation_overrides)
+                                apply_allocation_overrides, hydrate_section_instructions,
+                                printable_template_instructions)
 from textbook_topics import merge_topic_batches, topic_context
 from pdf_utils import (
     PDF_POOL_MAX_WORKERS,
@@ -49,7 +50,7 @@ from docx_utils import (
     render_solution_docx_async,
     shutdown_docx_pool,
 )
-from export_utils import printable_instructions
+from export_utils import hydrate_question_types, printable_instructions
 from prompts import (
     derive_target_question_count,
     qpaper_extract_prompt,
@@ -1807,8 +1808,11 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
         p["section_plan"] = section_plan
     p["instructions"] = printable_instructions(
         p.get("instructions"),
+        template_instructions=printable_template_instructions(p),
         custom_instructions=p.get("custom_instructions") or "",
     )
+    hydrate_section_instructions(p)
+    hydrate_question_types(p)
     textbook_ids = p.get("textbook_ids") or ([p["textbook_id"]] if p.get("textbook_id") else [])
     textbook_rows = await db.textbooks.find(
         {"id": {"$in": textbook_ids}, "is_deleted": False},

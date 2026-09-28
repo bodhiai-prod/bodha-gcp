@@ -25,6 +25,11 @@ body {
     -moz-osx-font-smoothing: grayscale;
 }
 
+#root,
+.App {
+    min-width: 0;
+}
+
 .mono,
 .font-mono {
     font-family: "Inter", sans-serif;
@@ -197,7 +202,7 @@ body {
 
 /* Upload zone */
 .qp-drop {
-    @apply border-2 border-dashed border-black bg-neutral-50 p-12 text-center cursor-pointer flex flex-col items-center justify-center transition-colors;
+    @apply border-2 border-dashed border-black bg-neutral-50 p-6 sm:p-12 text-center cursor-pointer flex flex-col items-center justify-center transition-colors;
 }
 .qp-drop:hover {
     background: #f2f2f2;

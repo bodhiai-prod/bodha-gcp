@@ -15,6 +15,30 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import Literal
 
 
+# Student-facing content is deliberately separate from the generation template.
+# The latter contains authoring directives and must never be copied verbatim to
+# a paper. These values are hydrated onto built-in catalog entries and stored in
+# each paper's compiled blueprint snapshot.
+_PRINTABLE_TEMPLATE_CONTENT = {
+    "icse10": {
+        "instructions": "Answer all questions. Internal choices, where provided, must be answered as directed.",
+        "sections": {"A": "Answer all questions in this section.", "B": "Answer this section according to the choices stated."},
+    },
+    "cbse10": {
+        "instructions": "Read the following instructions carefully. All questions are compulsory. This question paper is divided into Sections A, B, C, D and E. Use of calculator is not allowed.",
+        "sections": {"A": "This section contains objective questions.", "B": "This section contains very short answer questions.", "C": "This section contains short answer questions.", "D": "This section contains long answer questions.", "E": "This section contains case-study based questions."},
+    },
+    "isc12": {
+        "instructions": "Answer all questions as directed. Where alternative sections are provided, attempt only one complete alternative stream.",
+        "sections": {"A": "This section is compulsory.", "B": "Attempt this section only if you choose this optional stream.", "C": "Attempt this section only if you choose this optional stream."},
+    },
+    "cbse12": {
+        "instructions": "Read the following instructions very carefully and strictly follow them:\n(i) This question paper contains 38 questions. All questions are compulsory.\n(ii) This question paper is divided into five Sections – A, B, C, D and E.\n(iii) There is no overall choice. Internal choices are provided only where indicated.\n(iv) Use of calculator is not allowed.",
+        "sections": {"A": "This section comprises 20 multiple choice questions (MCQs) of 1 mark each.", "B": "This section comprises 5 Very Short Answer (VSA) type questions of 2 marks each.", "C": "This section comprises 6 Short Answer (SA) type questions of 3 marks each.", "D": "This section comprises 4 Long Answer (LA) type questions of 5 marks each.", "E": "This section comprises 3 case-study based questions of 4 marks each."},
+    },
+}
+
+
 class BlueprintGroup(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     label: str = ""
@@ -52,7 +76,35 @@ class Allocation(BaseModel):
 
 
 def catalog():
-    return json.loads(Path(__file__).with_name("blueprint_catalog.json").read_text(encoding="utf-8"))
+    rows = json.loads(Path(__file__).with_name("blueprint_catalog.json").read_text(encoding="utf-8"))
+    for row in rows:
+        printable = _PRINTABLE_TEMPLATE_CONTENT.get(row.get("id"), {})
+        row["student_instructions"] = printable.get("instructions", "")
+        section_instructions = printable.get("sections", {})
+        for section in row.get("sections") or []:
+            section["section_instructions"] = section_instructions.get(section.get("id"), "")
+    return rows
+
+
+def printable_template_instructions(paper: dict) -> str:
+    """Read student instructions from the compiled blueprint, not model output."""
+    blueprint = (paper.get("generation_requirements") or {}).get("blueprint") or {}
+    fallback = _PRINTABLE_TEMPLATE_CONTENT.get(blueprint.get("id"), {}).get("instructions", "")
+    return str(blueprint.get("student_instructions") or fallback).strip()
+
+
+def hydrate_section_instructions(paper: dict) -> None:
+    """Attach known template section lead-ins to persisted or legacy sections."""
+    blueprint = (paper.get("generation_requirements") or {}).get("blueprint") or {}
+    fallback = _PRINTABLE_TEMPLATE_CONTENT.get(blueprint.get("id"), {}).get("sections", {})
+    by_id = {
+        str(s.get("id")): s.get("section_instructions") or fallback.get(s.get("id"), "")
+        for s in blueprint.get("sections") or []
+    }
+    for section in paper.get("sections") or []:
+        section_id = str(section.get("section_id") or section_key(section.get("title", "")))
+        if by_id.get(section_id):
+            section["section_instructions"] = by_id[section_id]
 
 
 def topic_id(book_id, name, parent=""):
@@ -319,7 +371,7 @@ def paper_summary(paper):
             return max(0, float(q.get("marks") or 0))
         except (ValueError, TypeError):
             return 0
-    offered = sum(marks(q) for q in qs)
+    printed_marks = sum(marks(q) for q in qs)
     def mix(field, known):
         return [{"key": key, "count": sum(1 for q in qs if (q.get(field) if q.get(field) in known else "unspecified") == key),
                  "marks": sum(marks(q) for q in qs if (q.get(field) if q.get(field) in known else "unspecified") == key)} for key in [*known, "unspecified"]]
@@ -328,12 +380,12 @@ def paper_summary(paper):
     for s in sections:
         actual_sections.append({"id": s.get("section_id") or section_key(s.get("title", "")), "title": s.get("title", ""),
                                 "count": len(s.get("questions", [])), "marks": sum(marks(q) for q in s.get("questions", []))})
-    # Attemptable marks are only known when every offered section has its structure.
-    attemptable = None
-    if bp and not misses:
-        attemptable = bp["total_marks"]
+    # A compiled board blueprint is the source of truth for what a student can
+    # attempt. Raw question marks include every optional stream and therefore
+    # must never replace this total in the primary summary.
+    attemptable = bp.get("total_marks") if bp else printed_marks
     return {"question_count": len(qs), "target_question_count": spec.get("total_questions") or paper.get("target_question_count"),
-            "target_marks": paper.get("total_marks"), "offered_marks": offered, "attemptable_marks": attemptable,
+            "target_marks": paper.get("total_marks"), "offered_marks": attemptable, "printed_marks": printed_marks, "attemptable_marks": attemptable,
             "duration_minutes": paper.get("duration_minutes"), "sections": actual_sections,
             "difficulty": mix("difficulty", ["easy", "medium", "hard"]),
             "cognitive": mix("type", ["information", "concept", "application"]),

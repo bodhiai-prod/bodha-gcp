@@ -292,7 +292,7 @@ export default function MockTestExam() {
       <Header />
       <main className="max-w-6xl mx-auto p-4 md:p-6">
         <div
-          className={`flex items-center justify-between p-4 mb-4 border-2 border-black ${
+          className={`flex flex-wrap items-center justify-between gap-3 p-4 mb-4 border-2 border-black ${
             lowTime ? "bg-red-50" : "bg-white"
           }`}
           data-testid="mock-test-toolbar"
@@ -372,7 +372,7 @@ export default function MockTestExam() {
                 This question has no MCQ options (auto-grading skips it).
               </div>
             )}
-            <div className="flex items-center justify-between mt-8">
+            <div className="flex items-center justify-between gap-3 mt-8">
               <button
                 disabled={activeIdx === 0}
                 onClick={() => setActiveIdx((i) => Math.max(0, i - 1))}
@@ -399,7 +399,7 @@ export default function MockTestExam() {
             data-testid="mock-test-navigator"
           >
             <div className="overline text-neutral-500 mb-3">// NAVIGATOR</div>
-            <div className="grid grid-cols-5 gap-2">
+            <div className="grid grid-cols-4 min-[420px]:grid-cols-5 gap-2">
               {allQs.map((qq, idx) => {
                 const answered =
                   answers[qq.id] !== null && answers[qq.id] !== undefined;
