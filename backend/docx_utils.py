@@ -5,12 +5,8 @@ import io
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
 from typing import Callable, Optional
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -36,16 +32,6 @@ _MATH_RE = re.compile(
 _FULL_DISPLAY_MATH_RE = re.compile(
     r"^\s*(?:\$\$(?P<dollar>[\s\S]*?)\$\$|\\\[(?P<bracket>[\s\S]*?)\\\])\s*$"
 )
-
-# LibreOffice does not reliably lay out every native Word (OMML) construct,
-# especially n-ary operators and nested fractions.  PDF exports already use
-# rasterised math for this portability reason, so DOCX uses the same approach:
-# high-resolution PNGs that retain their expected appearance in both Word and
-# LibreOffice.  The cache avoids rendering repeated option values more than
-# once during a paper export.
-_DOCX_MATH_CACHE: dict[tuple[str, bool], tuple[bytes, float, float] | None] = {}
-_DOCX_MATH_LOCK = Lock()
-
 _LATEX_SYMBOLS = {
     "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ",
     "theta": "θ", "lambda": "λ", "mu": "μ", "pi": "π",
@@ -158,6 +144,13 @@ def _latex_to_ast(source: str):
                 end += 1
             command = source[cursor + 1:end]
             if not command and end < len(source):
+                # LaTeX spacing escapes such as ``\,`` and ``\!`` are not
+                # literal punctuation in the equation.  Treating them as
+                # commas was what made otherwise valid integral blocks look
+                # malformed in LibreOffice.
+                if source[end] in {",", ";", ":", "!", " "}:
+                    cursor = end + 1
+                    continue
                 nodes.append(("text", source[end]))
                 cursor = end + 1
                 continue
@@ -345,74 +338,6 @@ def _append_native_equation(paragraph, latex: str, *, display: bool = False) -> 
     paragraph._p.append(math)
 
 
-def _normalise_latex_for_image(latex: str) -> str:
-    """Apply the small compatibility layer supported by matplotlib mathtext."""
-    latex = re.sub(r"\\text(?:rm|bf|it|sf|tt)?\{([^{}]*)\}", r"\\mathrm{\1}", latex)
-    latex = re.sub(r"\\operatorname\*?\{([^{}]*)\}", r"\\mathrm{\1}", latex)
-    return latex.replace(r"\degree", r"^\circ")
-
-
-def _latex_fallback_text(latex: str) -> str:
-    """Keep an equation legible if its source exceeds the math renderer."""
-    text = _normalise_latex_for_image(latex)
-    text = re.sub(r"\\d?frac\{([^{}]*)\}\{([^{}]*)\}", r"(\1)/(\2)", text)
-    text = re.sub(r"\\sqrt\{([^{}]*)\}", r"√(\1)", text)
-    for command, symbol in _LATEX_SYMBOLS.items():
-        text = text.replace(f"\\{command}", symbol)
-    text = re.sub(r"\\([A-Za-z]+)", r"\1", text)
-    return text.replace("{", "").replace("}", "")
-
-
-def _equation_image(latex: str, *, display: bool) -> tuple[bytes, float, float] | None:
-    """Render one equation to a transparent PNG and return its size in points."""
-    source = _normalise_latex_for_image(latex.strip())
-    key = (source, display)
-    # Matplotlib's pyplot state is process-global, while DOCX exports run in a
-    # thread pool.  Serialize the small rendering operation to avoid figures
-    # being closed or reused by another export.
-    with _DOCX_MATH_LOCK:
-        if key in _DOCX_MATH_CACHE:
-            return _DOCX_MATH_CACHE[key]
-        try:
-            figure = plt.figure(figsize=(0.01, 0.01))
-            figure.text(0, 0, f"${source}$", fontsize=12 if display else 10.5)
-            output = io.BytesIO()
-            dpi = 400
-            figure.savefig(output, format="png", dpi=dpi, bbox_inches="tight", pad_inches=0.025,
-                           transparent=True)
-            plt.close(figure)
-            output.seek(0)
-            with Image.open(output) as image:
-                width_px, height_px = image.size
-            # Limit display equations to the question column, and inline equations
-            # to a comfortable text-height band, preserving their aspect ratio.
-            width_pt = width_px / dpi * 72
-            height_pt = height_px / dpi * 72
-            max_width, max_height = (430, 72) if display else (300, 19)
-            scale = min(1, max_width / max(width_pt, 1), max_height / max(height_pt, 1))
-            result = (output.getvalue(), width_pt * scale, height_pt * scale)
-            _DOCX_MATH_CACHE[key] = result
-            return result
-        except Exception:
-            try:
-                plt.close("all")
-            except Exception:
-                pass
-            _DOCX_MATH_CACHE[key] = None
-            return None
-
-
-def _append_equation_image(paragraph, latex: str, *, display: bool = False) -> None:
-    equation = _equation_image(latex, display=display)
-    if equation:
-        image, width_pt, height_pt = equation
-        paragraph.add_run().add_picture(
-            io.BytesIO(image), width=Pt(width_pt), height=Pt(height_pt)
-        )
-        return
-    paragraph.add_run(_latex_fallback_text(latex))
-
-
 def shutdown_docx_pool() -> None:
     _DOCX_POOL.shutdown(wait=False)
 
@@ -540,7 +465,7 @@ def _add_equation_block(container, latex: str):
     paragraph.paragraph_format.space_after = Pt(4)
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _set_keep(paragraph, keep_together=True)
-    _append_equation_image(paragraph, latex, display=True)
+    _append_native_equation(paragraph, latex, display=True)
     return paragraph
 
 
@@ -571,7 +496,7 @@ def _append_rich_text(paragraph, container, text: str):
         else:
             if paragraph is None:
                 paragraph = container.add_paragraph()
-            _append_equation_image(paragraph, latex, display=False)
+            _append_native_equation(paragraph, latex, display=False)
         cursor = match.end()
     if cursor < len(text):
         tail = text[cursor:]
@@ -866,11 +791,11 @@ def render_paper_docx(
                 answer_text = answer_by_question.get(question.get("id")) or "(no answer)"
                 full_display = _FULL_DISPLAY_MATH_RE.match(answer_text)
                 if full_display:
-                    # Keep a standalone answer equation inside the shaded
-                    # answer box rather than creating a detached paragraph
-                    # below it.
+                    # Keep a full display equation editable inside the shaded
+                    # answer block instead of adding a paragraph that can
+                    # separate from its answer label at a page boundary.
                     answer_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    _append_equation_image(
+                    _append_native_equation(
                         answer_paragraph,
                         full_display.group("dollar") or full_display.group("bracket") or "",
                         display=True,

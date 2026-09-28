@@ -639,6 +639,7 @@ export default function NewPaper() {
                 label="Application"
                 value={application}
                 readOnly
+                color="#E63946"
                 testid="dist-app"
                 count={typeQuestionCounts.application || 0}
               />
@@ -1160,13 +1161,20 @@ const distributeFormatValues = (formats, targetTotal) => {
   return formats.map((format, index) => ({ ...format, value: values[index] }));
 };
 
-const SliderRow = ({ label, value, count, onChange, readOnly, testid }) => (
+const SliderRow = ({ label, value, count, onChange, readOnly, color, testid }) => (
   <div className="mb-4 last:mb-0" data-testid={testid}>
     <div className="flex items-center justify-between mb-2">
       <div className="font-bold text-sm uppercase tracking-wider">{label}</div>
       <div className="font-mono text-sm font-bold">{value}% · {count} questions</div>
     </div>
-    {!readOnly && (
+    {readOnly ? (
+      <div className="relative h-2 bg-neutral-200" aria-label={`${label} progress`}>
+        <div
+          className="absolute top-0 left-0 h-full"
+          style={{ width: `${value}%`, background: color }}
+        />
+      </div>
+    ) : (
       <input
         type="range"
         min={0}

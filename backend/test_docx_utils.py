@@ -43,7 +43,7 @@ def _png_bytes():
     return output.getvalue()
 
 
-def test_docx_renders_equations_as_portable_images():
+def test_docx_preserves_structure_as_native_word_equations():
     data = render_paper_docx(_paper(), diagram_loader=lambda *_: None)
 
     with ZipFile(BytesIO(data)) as archive:
@@ -51,7 +51,12 @@ def test_docx_renders_equations_as_portable_images():
 
     assert "Physics Test" in document_xml
     assert "Section A" in document_xml
-    assert "<m:oMath>" not in document_xml
+    assert "<m:oMath>" in document_xml
+    assert "<m:sSup>" in document_xml
+    assert "<m:f>" in document_xml
+    assert "<m:num>" in document_xml
+    assert "<m:den>" in document_xml
+    assert "<m:rad>" in document_xml
     assert "Equation (LaTeX)" not in document_xml
     assert "x" in document_xml
     assert document_xml.count("Q1.") == 1
@@ -61,11 +66,10 @@ def test_docx_renders_equations_as_portable_images():
     assert "hard" not in document_xml
     assert "Diagram unavailable" in document_xml
     assert document_xml.count("Solve ") == 1
-    media_files = [name for name in archive.namelist() if name.startswith("word/media/")]
-    assert media_files
+    assert "<m:oMathPara>" not in document_xml
 
 
-def test_docx_renders_latex_matrices_as_portable_images():
+def test_docx_renders_latex_matrices_as_native_word_matrices():
     paper = _paper()
     paper["sections"][0]["questions"][0]["question"] = (
         r"For $A=\begin{pmatrix}2 & 1 \\ 1 & 1\end{pmatrix}$, find $\det A$."
@@ -73,11 +77,13 @@ def test_docx_renders_latex_matrices_as_portable_images():
     data = render_paper_docx(paper)
     with ZipFile(BytesIO(data)) as archive:
         document_xml = archive.read("word/document.xml").decode("utf-8")
-    assert "<m:oMath>" not in document_xml
-    assert "word/media/image1.png" in archive.namelist()
+    assert "<m:m>" in document_xml
+    assert document_xml.count("<m:mr>") == 2
+    assert "<m:d>" in document_xml
+    assert "<m:begChr m:val=\"(\"" in document_xml
 
 
-def test_docx_renders_integrals_and_summations_as_portable_images():
+def test_docx_renders_integrals_and_summations_as_native_nary_math():
     paper = _paper()
     paper["sections"][0]["questions"][0]["question"] = (
         r"Evaluate $\int_0^1 x\,dx$ and $$\sum_{k=1}^{n} k.$$"
@@ -85,9 +91,10 @@ def test_docx_renders_integrals_and_summations_as_portable_images():
     data = render_paper_docx(paper)
     with ZipFile(BytesIO(data)) as archive:
         document_xml = archive.read("word/document.xml").decode("utf-8")
-    assert "<m:oMath>" not in document_xml
-    media_files = [name for name in archive.namelist() if name.startswith("word/media/")]
-    assert len(media_files) >= 2
+    assert document_xml.count("<m:nary>") == 2
+    assert '<m:chr m:val="∫"' in document_xml
+    assert '<m:chr m:val="∑"' in document_xml
+    assert "<m:oMathPara>" not in document_xml
 
 
 def test_docx_renders_template_section_instruction_before_question_number():
@@ -110,14 +117,11 @@ def test_docx_embeds_available_diagrams():
         media_files = [name for name in archive.namelist() if name.startswith("word/media/")]
         document_xml = archive.read("word/document.xml").decode("utf-8")
 
-    # One diagram plus the display equation rendered as a portable image.
-    assert len(media_files) == 2
+    assert len(media_files) == 1
     assert 'wp:extent cx="3886200" cy="2914650"' in document_xml
     with ZipFile(BytesIO(data)) as archive:
-        image_modes = [
-            Image.open(BytesIO(archive.read(name))).mode for name in media_files
-        ]
-    assert "L" in image_modes
+        image = Image.open(BytesIO(archive.read(media_files[0])))
+        assert image.mode == "L"
 
 
 def test_docx_ignores_invalid_header_image():
