@@ -18,7 +18,7 @@ const NavItem = ({ to, label, testid, onClick, drawer = false }) => (
     data-testid={testid}
     onClick={onClick}
     className={({ isActive }) =>
-      `${drawer ? "w-full border-2 border-black px-4 py-3 text-left text-sm" : "whitespace-nowrap px-3 py-2 text-sm tracking-wider"} font-bold uppercase tracking-wide transition-colors ${
+      `${drawer ? "block w-full border-2 border-black px-4 py-3 text-left text-sm" : "whitespace-nowrap px-3 py-2 text-sm tracking-wider"} font-bold uppercase tracking-wide transition-colors ${
         isActive
           ? "bg-black text-white"
           : "text-black hover:bg-neutral-100"

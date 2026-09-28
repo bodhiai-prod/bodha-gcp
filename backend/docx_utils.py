@@ -16,7 +16,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 from PIL import Image
 from export_utils import format_mark, hydrate_question_types, printable_instructions
-from section_blueprints import hydrate_section_instructions, printable_template_instructions
+from section_blueprints import hydrate_section_instructions, normalize_template_sections, printable_template_instructions
 
 
 DOCX_POOL_MAX_WORKERS = int(os.environ.get("DOCX_POOL_MAX_WORKERS", "4"))
@@ -462,6 +462,9 @@ def render_paper_docx(
     *,
     include_solutions: bool = False,
 ) -> bytes:
+    normalized, misses = normalize_template_sections(paper.get("sections") or [], paper.get("generation_requirements") or {})
+    if not misses:
+        paper["sections"] = normalized
     hydrate_section_instructions(paper)
     hydrate_question_types(paper)
     document = Document()

@@ -32,7 +32,14 @@ from prompts import (
 )
 from instruction_spec import parse_instructions, verify as verify_instructions
 from export_utils import canonical_question_type, printable_instructions
-from section_blueprints import hydrate_section_instructions, printable_template_instructions
+from section_blueprints import (
+    allocation_misses,
+    attemptable_marks,
+    compact_validation_misses,
+    hydrate_section_instructions,
+    normalize_template_sections,
+    printable_template_instructions,
+)
 from generation_requirements import compile_requirements, remaining_requirements
 from section_blueprints import allocation_coverage
 from question_dedupe import dedupe_sections, is_duplicate
@@ -650,6 +657,13 @@ async def generate_paper_background(
         logger.info("Paper generation cancelled before publish: %s", paper_id)
         return
     final_check = verify_instructions(sections, spec)
+    allocation_issues = template_validation_misses(sections, spec) if spec.get("section_allocations") else []
+    final_check["misses"].extend(allocation_issues)
+    if not spec.get("section_allocations"):
+        actual_marks = sum(float(q.get("marks") or 0) for s in sections for q in (s.get("questions") or []))
+        if actual_marks != float(total_marks):
+            final_check["misses"].append(f"asked for {total_marks} total marks, got {actual_marks:g}")
+    final_check["honoured"] = not final_check["misses"]
     final_type_misses = [flags for flags in coercions.values() if "invalid_question_type" in flags]
     if final_type_misses:
         final_check["misses"].append("One or more questions had an invalid cognitive type.")
@@ -663,6 +677,9 @@ async def generate_paper_background(
         if "total marks" in miss.lower()
         or ("expected " in miss.lower() and " marks" in miss.lower())
     ]
+    structural_recovery = bool(spec.get("section_allocations") and any(
+        "allocation identity" in miss.lower() for miss in allocation_issues
+    ))
     validation_error = "; ".join([*mark_misses, *( ["One or more questions had an invalid cognitive type."] if final_type_misses else [])])[:500] or None
     await db.papers.update_one(
         {"id": paper_id, "generation_status": "pending"},
@@ -679,8 +696,14 @@ async def generate_paper_background(
             "generation_status": "ready",
             "generation_error": None,
             "generation_recovery": (
-                {"status": "queued", "mismatches": validation_error}
-                if validation_error else None
+                {"status": "queued", "reason": "allocation_metadata", "attempt": 0,
+                 "max_attempts": TEMPLATE_RECOVERY_MAX_ATTEMPTS, "started_at": None,
+                 "finished_at": None, "validation_summary": compact_validation_misses(allocation_issues)}
+                if structural_recovery else (
+                    {"status": "queued", "reason": "validation", "attempt": 0,
+                     "max_attempts": 0, "validation_summary": [validation_error]}
+                    if validation_error else None
+                )
             ),
             "generation_progress.completed": count_questions(sections),
             "generation_progress.total": target_q,
@@ -715,6 +738,12 @@ async def generate_paper_background(
     )
     await record_activity(owner_id, "paper.ready", {"paper_id": paper_id, "questions": count_questions(sections)})
 
+    if structural_recovery:
+        _spawn_recovery(recover_template_generation_background(
+            paper_id, owner_id, context_excerpt=context_excerpt, feedback_hints=feedback_hints
+        ))
+        return
+
     # Kick off diagram generation asynchronously.
     if pending_count > 0:
         await generate_diagrams_background(paper_id, owner_id)
@@ -743,6 +772,15 @@ async def generate_paper_background(
 # app will generate (CompetitivePaperRequest caps question_count at 200), so
 # it guards against absurd input without ever clamping a real shortfall.
 TOPUP_MAX = 200
+TEMPLATE_RECOVERY_MAX_ATTEMPTS = 2
+_RECOVERY_TASKS: set = set()
+
+
+def _spawn_recovery(coro) -> None:
+    """Keep an in-process recovery task alive until it has persisted a result."""
+    task = _asyncio.create_task(coro)
+    _RECOVERY_TASKS.add(task)
+    task.add_done_callback(_RECOVERY_TASKS.discard)
 
 
 def count_questions(sections: list) -> int:
@@ -787,6 +825,111 @@ def paper_target_count(paper: dict) -> int:
     if paper.get("section_blueprint"):
         return 0
     return derive_target_question_count(int(paper.get("total_marks") or 0))
+
+
+def template_validation_misses(sections: list, spec: dict) -> list[str]:
+    """Return the compact, deterministic gate for a template candidate."""
+    misses = allocation_misses(sections, spec)
+    check = verify_instructions(sections, spec)
+    misses.extend(check.get("misses") or [])
+    blueprint = spec.get("blueprint") or {}
+    expected_marks = blueprint.get("total_marks")
+    if expected_marks is not None:
+        actual_marks = attemptable_marks(sections)
+        if actual_marks != expected_marks:
+            misses.append(f"asked for {expected_marks} attemptable marks, got {actual_marks}")
+    return list(dict.fromkeys(misses))
+
+
+def template_requires_full_recovery(sections: list, spec: dict) -> bool:
+    """Only a complete candidate can repair unprovable allocation placement."""
+    return bool(spec.get("section_allocations") and any(
+        "allocation identity" in miss.lower()
+        for miss in template_validation_misses(sections, spec)
+    ))
+
+
+async def recover_template_generation_background(
+    paper_id: str,
+    owner_id: str,
+    context_excerpt: str = "",
+    feedback_hints: str = "",
+) -> None:
+    """Build replacement candidates without disturbing the visible paper."""
+    tag("paper_template_recovery", paper_id)
+    paper = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
+    if not paper:
+        return
+    spec = paper.get("generation_requirements") or {}
+    if not spec.get("section_allocations"):
+        return
+    recovery = paper.get("generation_recovery") or {}
+    attempt = int(recovery.get("attempt") or 0)
+    max_attempts = int(recovery.get("max_attempts") or TEMPLATE_RECOVERY_MAX_ATTEMPTS)
+    if recovery.get("status") not in {"queued", "recovering"} or attempt >= max_attempts:
+        return
+
+    prompt = qgen_prompt(
+        subject=paper.get("subject", ""), klass=paper.get("class_name", ""),
+        topics_weighted=paper.get("topics") or [], difficulty=paper.get("difficulty", "medium"),
+        distribution=paper.get("distribution") or {}, total_marks=int(paper.get("total_marks") or 0),
+        duration=int(paper.get("duration_minutes") or 0), context_excerpt=context_excerpt,
+        feedback_hints=feedback_hints, format_distribution=paper.get("format_distribution") or {},
+        custom_instructions=paper.get("custom_instructions") or "",
+        section_blueprint=paper.get("section_blueprint") or "", spec=spec,
+    )
+    latest_misses: list[str] = []
+    while attempt < max_attempts:
+        attempt += 1
+        await db.papers.update_one({"id": paper_id}, {"$set": {"generation_recovery": {
+            "status": "recovering", "reason": "allocation_metadata", "attempt": attempt,
+            "max_attempts": max_attempts, "started_at": utcnow_iso(), "validation_summary": [],
+        }}})
+        try:
+            raw = await chat_complete(
+                system_message="Create original exam questions in strict JSON. Return every required blueprint identity exactly.",
+                user_text=prompt + "\nRECOVERY: This is a complete replacement candidate. Every section and question identity is mandatory. Return only JSON.",
+            )
+            candidate = parse_json_response(raw)
+            sections = candidate.get("sections") or []
+            coercions: dict = {}
+            _normalise_paper_questions(sections, paper.get("difficulty", "medium"), coercions)
+            sections, section_plan, _ = reconcile_section_plan(sections, None, spec)
+            await complete_sections(sections, ref=f"{paper_id}:recovery", context={
+                "subject": paper.get("subject", ""), "klass": paper.get("class_name", ""),
+                "difficulty": paper.get("difficulty", "medium"),
+            }, flags=coercions)
+            await repair_sections(sections, ref=f"{paper_id}:recovery")
+            latest_misses = template_validation_misses(sections, spec)
+            if any("invalid_question_type" in flags for flags in coercions.values()):
+                latest_misses.append("One or more questions had an invalid cognitive type.")
+            if not latest_misses:
+                hydrate_section_instructions({"generation_requirements": spec, "sections": sections})
+                pending = apply_diagram_policy(sections, ref=f"{paper_id}:recovery", max_diagrams=spec.get("diagram_count", 200))
+                for section in sections:
+                    for question in section.get("questions") or []:
+                        question["diagram_status"] = "pending" if question.get("needs_diagram") else "none"
+                # Atomic candidate swap: all fields describe the same validated paper.
+                await db.papers.update_one({"id": paper_id}, {"$set": {
+                    "sections": sections, "section_plan": section_plan,
+                    "question_count": count_questions(sections), "diagrams_pending": pending,
+                    "instructions": printable_instructions("", template_instructions=printable_template_instructions({"generation_requirements": spec})),
+                    "instruction_check": verify_instructions(sections, spec),
+                    "generation_recovery": {"status": "ready", "reason": "allocation_metadata", "attempt": attempt,
+                                            "max_attempts": max_attempts, "finished_at": utcnow_iso(), "validation_summary": []},
+                }})
+                if pending:
+                    await generate_diagrams_background(paper_id, owner_id)
+                return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Template recovery attempt %s failed for %s: %s", attempt, paper_id, exc)
+            latest_misses = [str(exc)[:240]]
+
+    await db.papers.update_one({"id": paper_id}, {"$set": {"generation_recovery": {
+        "status": "needs_review", "reason": "allocation_metadata", "attempt": attempt,
+        "max_attempts": max_attempts, "finished_at": utcnow_iso(),
+        "validation_summary": compact_validation_misses(latest_misses),
+    }}})
 
 
 def merge_topup_sections(existing: list, new: list, limit: int = 0) -> list:
@@ -864,6 +1007,21 @@ def reconcile_section_plan(
     operation idempotent for existing papers.
     """
     spec = spec or {}
+    # A compiled blueprint owns all printable section metadata.  Valid
+    # allocation identities route questions into that skeleton; unprovable
+    # questions remain visible for recovery/review and never rename a section.
+    if spec.get("section_allocations") and (spec.get("blueprint") or {}).get("sections"):
+        normalized, _misses = normalize_template_sections(sections, spec)
+        if _misses:
+            # Ambiguous persisted papers are review-only: do not silently
+            # re-home their questions merely because a page was opened.
+            return sections or [], list(section_plan or []), False
+        plan = [
+            {"id": section["section_id"], "title": section["title"], "order": index}
+            for index, section in enumerate(normalized, start=1)
+            if section.get("section_id") != "unplaced-generated-questions"
+        ]
+        return normalized, plan, normalized != (sections or [])
     source = [dict(section, questions=list(section.get("questions") or [])) for section in sections or []]
     original = [(s.get("section_id"), s.get("title"), len(s.get("questions") or [])) for s in source]
     had_question_ids = all(

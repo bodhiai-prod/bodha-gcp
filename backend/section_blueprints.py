@@ -107,6 +107,93 @@ def hydrate_section_instructions(paper: dict) -> None:
             section["section_instructions"] = by_id[section_id]
 
 
+def blueprint_section_skeleton(spec: dict) -> list[dict]:
+    """Return the only display structure a compiled template is allowed to use."""
+    blueprint = (spec or {}).get("blueprint") or {}
+    return [
+        {
+            "section_id": section["id"],
+            "title": section.get("title") or f"Section {section['id']}",
+            "section_instructions": section.get("section_instructions", ""),
+            "choice_set": section.get("choice_set"),
+            "attempt_count": section.get("attempt_count"),
+            "questions": [],
+        }
+        for section in blueprint.get("sections") or []
+        if section.get("id")
+    ]
+
+
+def restore_allocation_identity(question: dict, spec: dict) -> bool:
+    """Fill a missing allocation id only from an exact immutable row match.
+
+    Titles, question order and human-readable topic labels are deliberately not
+    considered evidence.  They are provider presentation data and cannot
+    safely decide a blueprint slot.
+    """
+    rows = (spec or {}).get("section_allocations") or []
+    known = {row.get("allocation_id"): row for row in rows}
+    if question.get("allocation_id") in known:
+        return False
+    identity = tuple(question.get(key) for key in ("textbook_id", "topic_id", "group_id"))
+    if any(value in (None, "") for value in identity):
+        return False
+    matches = [
+        row for row in rows
+        if tuple(row.get(key) for key in ("textbook_id", "topic_id", "group_id")) == identity
+    ]
+    if len(matches) != 1:
+        return False
+    question["allocation_id"] = matches[0]["allocation_id"]
+    return True
+
+
+def normalize_template_sections(sections: list, spec: dict) -> tuple[list, list[str]]:
+    """Put valid template questions into the server-owned blueprint skeleton.
+
+    Questions without a provable allocation identity stay in one explicit
+    review section.  This keeps them visible while ensuring they cannot alter
+    a board template's titles, ordering or printable instructions.
+    """
+    rows = (spec or {}).get("section_allocations") or []
+    skeleton = blueprint_section_skeleton(spec)
+    if not rows or not skeleton:
+        return sections, []
+    by_allocation = {row.get("allocation_id"): row for row in rows}
+    by_section = {section["section_id"]: section for section in skeleton}
+    unknown, misses, index = [], [], 0
+    for source in sections or []:
+        for question in source.get("questions") or []:
+            index += 1
+            restore_allocation_identity(question, spec)
+            row = by_allocation.get(question.get("allocation_id"))
+            if not row:
+                unknown.append(question)
+                misses.append(f"Question {index}: missing or unknown section allocation identity.")
+                continue
+            # Allocation placement is authoritative; a model-supplied section
+            # id or title cannot override it.
+            question["section_id"] = row["section_id"]
+            by_section[row["section_id"]]["questions"].append(question)
+    normalized = [section for section in skeleton if section["questions"]]
+    if unknown:
+        normalized.append({
+            "section_id": "unplaced-generated-questions",
+            "title": "Generated Questions Requiring Review",
+            "questions": unknown,
+        })
+    return normalized, misses
+
+
+def compact_validation_misses(misses: list[str]) -> list[str]:
+    """Avoid turning one broken provider contract into dozens of UI errors."""
+    structural = [m for m in misses if "allocation identity" in m.lower()]
+    if structural:
+        other = [m for m in misses if m not in structural]
+        return ["Template allocation metadata is incomplete; recovery is required.", *other]
+    return list(misses)
+
+
 def topic_id(book_id, name, parent=""):
     return hashlib.sha256(json.dumps([book_id, parent, name], ensure_ascii=False).encode()).hexdigest()[:24]
 

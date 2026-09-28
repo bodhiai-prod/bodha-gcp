@@ -35,7 +35,8 @@ from llm_adapter import chat_complete, parse_json_response
 from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_errors,
                                 compile_allocations, paper_summary, BlueprintStructure,
                                 apply_allocation_overrides, hydrate_section_instructions,
-                                printable_template_instructions)
+                                printable_template_instructions, compact_validation_misses,
+                                allocation_misses)
 from textbook_topics import merge_topic_batches, topic_context
 from pdf_utils import (
     PDF_POOL_MAX_WORKERS,
@@ -69,6 +70,7 @@ from workers import (
     generate_solution_background,
     load_paper_feedback_hints,
     paper_target_count,
+    recover_template_generation_background,
     reconcile_solution_shell,
     regenerate_question_background,
     reconcile_section_plan,
@@ -1885,6 +1887,26 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
         )
         p["sections"] = repaired_sections
         p["section_plan"] = section_plan
+    # Migrate the brief metadata-only recovery rollout on read.  It is safe to
+    # restart only papers whose compiled contract proves the structural defect;
+    # provider failures remain terminal failures.
+    legacy_recovery = p.get("generation_recovery") or {}
+    structural_misses = allocation_misses(p.get("sections") or [], p.get("generation_requirements") or {})
+    if (
+        structural_misses
+        and any("allocation identity" in miss.lower() for miss in structural_misses)
+        and legacy_recovery.get("status") == "queued"
+        and not legacy_recovery.get("reason")
+    ):
+        queued = {"status": "queued", "reason": "allocation_metadata", "attempt": 0,
+                  "max_attempts": 2, "started_at": None, "finished_at": None,
+                  "validation_summary": compact_validation_misses(structural_misses)}
+        await db.papers.update_one({"id": paper_id}, {"$set": {"generation_recovery": queued}})
+        p["generation_recovery"] = queued
+        context_excerpt, feedback_hints = await _paper_generation_inputs(p)
+        _spawn(recover_template_generation_background(
+            paper_id, p["owner_id"], context_excerpt=context_excerpt, feedback_hints=feedback_hints
+        ))
     p["instructions"] = printable_instructions(
         p.get("instructions"),
         template_instructions=printable_template_instructions(p),
@@ -1903,9 +1925,14 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
     from instruction_spec import verify
     p["summary"] = paper_summary(p)
     checks = verify(p.get("sections") or [], p.get("generation_requirements") or {})
-    p["summary"]["mismatches"] = list(dict.fromkeys(p["summary"]["mismatches"] + checks.get("misses", [])))
+    p["summary"]["mismatches"] = compact_validation_misses(list(dict.fromkeys(
+        p["summary"]["mismatches"] + checks.get("misses", [])
+    )))
     if p["summary"]["mismatches"]:
         p["summary"]["status"] = "Needs review"
+    p["summary"]["review_status"] = (p.get("generation_recovery") or {}).get("status") or (
+        "needs_review" if p["summary"]["mismatches"] else "ready"
+    )
     return p
 
 
@@ -1976,6 +2003,12 @@ async def regenerate_question_endpoint(
         raise HTTPException(
             status_code=400,
             detail="Paper is not ready. Use 'Retry generation' instead.",
+        )
+    recovery = p.get("generation_recovery") or {}
+    if recovery.get("reason") == "allocation_metadata":
+        raise HTTPException(
+            status_code=409,
+            detail="Template recovery owns this paper. It will rebuild the complete template instead of adding an unplaced question.",
         )
     # A top-up is actively rewriting `sections`; two writers would race and one
     # of them would lose questions. The solution job is NOT blocked — it only
@@ -2469,6 +2502,12 @@ async def generate_missing_questions(
             status_code=400,
             detail="Paper is not ready. Use 'Retry generation' instead.",
         )
+    recovery = p.get("generation_recovery") or {}
+    if recovery.get("reason") == "allocation_metadata":
+        raise HTTPException(
+            status_code=409,
+            detail="Template recovery owns this paper. It will rebuild the complete template instead of adding an unplaced question.",
+        )
     existing = count_questions(p.get("sections") or [])
     if not existing:
         raise HTTPException(
@@ -2519,6 +2558,32 @@ async def generate_missing_questions(
     )
     logger.info(f"Queued top-up of {count} question(s) for paper {paper_id}")
     return {**topup, "queued": count}
+
+
+@api_router.post("/papers/{paper_id}/retry-template-recovery")
+async def retry_template_recovery(paper_id: str, user: dict = Depends(get_current_user)):
+    """Retry a bounded full-template candidate after recovery needs review."""
+    paper = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if paper["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    recovery = paper.get("generation_recovery") or {}
+    if recovery.get("reason") != "allocation_metadata":
+        raise HTTPException(status_code=400, detail="This paper does not need template recovery.")
+    if recovery.get("status") in {"queued", "recovering"}:
+        raise HTTPException(status_code=409, detail="Template recovery is already in progress.")
+    context_excerpt, feedback_hints = await _paper_generation_inputs(paper)
+    queued = {
+        "status": "queued", "reason": "allocation_metadata", "attempt": 0,
+        "max_attempts": 2, "started_at": None, "finished_at": None,
+        "validation_summary": [],
+    }
+    await db.papers.update_one({"id": paper_id}, {"$set": {"generation_recovery": queued}})
+    _spawn(recover_template_generation_background(
+        paper_id, paper["owner_id"], context_excerpt=context_excerpt, feedback_hints=feedback_hints
+    ))
+    return queued
 
 
 @api_router.post("/papers/solutions/bulk-generate")

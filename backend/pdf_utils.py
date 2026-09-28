@@ -37,7 +37,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 from export_utils import format_mark, hydrate_question_types, printable_instructions
-from section_blueprints import hydrate_section_instructions, printable_template_instructions
+from section_blueprints import hydrate_section_instructions, normalize_template_sections, printable_template_instructions
 
 logger = logging.getLogger(__name__)
 
@@ -723,6 +723,9 @@ def _page_branding(paper: dict):
 
 
 def render_paper_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> bytes:
+    normalized, misses = normalize_template_sections(paper.get("sections") or [], paper.get("generation_requirements") or {})
+    if not misses:
+        paper["sections"] = normalized
     hydrate_section_instructions(paper)
     hydrate_question_types(paper)
     """Render the structured paper dict into a printable PDF.
