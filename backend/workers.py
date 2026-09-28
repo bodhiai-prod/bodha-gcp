@@ -36,6 +36,7 @@ from section_blueprints import (
     allocation_misses,
     attemptable_marks,
     compact_validation_misses,
+    normalize_internal_choice_counts,
     hydrate_section_instructions,
     normalize_template_sections,
     printable_template_instructions,
@@ -256,6 +257,9 @@ def _normalise_paper_questions(
             else:
                 q.pop("options", None)
                 q.pop("correct_option", None)
+    # Do not trust provider bookkeeping for choice blocks.  This is repeated
+    # after repair below because repair may alter the final printable text.
+    normalize_internal_choice_counts(sections)
 
 
 # ---------------------------------------------------------------------------
@@ -639,6 +643,7 @@ async def generate_paper_background(
     # already-clean markup, and ahead of the $set below so generation_status
     # only reaches "ready" once the questions actually render.
     latex_stats = await repair_sections(sections, ref=paper_id)
+    normalize_internal_choice_counts(sections)
 
     # Drop figures the model asked for but the question must not have — the
     # student's own drawing task, a decorative illustration, or a spec carrying
@@ -900,6 +905,7 @@ async def recover_template_generation_background(
                 "difficulty": paper.get("difficulty", "medium"),
             }, flags=coercions)
             await repair_sections(sections, ref=f"{paper_id}:recovery")
+            normalize_internal_choice_counts(sections)
             latest_misses = template_validation_misses(sections, spec)
             if any("invalid_question_type" in flags for flags in coercions.values()):
                 latest_misses.append("One or more questions had an invalid cognitive type.")
@@ -1439,6 +1445,7 @@ async def generate_missing_questions_background(
         # Compare against the whole paper, and let only the NEW questions lose.
         await dedupe_sections(new_sections, ref=paper_id, against=existing_sections)
         await repair_sections(new_sections, ref=paper_id)
+        normalize_internal_choice_counts(new_sections)
         pending_count = apply_diagram_policy(new_sections, ref=paper_id,
             max_diagrams=topup_spec.get("diagram_count", count if legacy_spec.get("section_allocations") else max(0, 5 - sum(
                 bool(q.get("needs_diagram")) for s in existing_sections for q in s.get("questions", [])
@@ -1451,6 +1458,7 @@ async def generate_missing_questions_background(
         before = count_questions(existing_sections)
         merged = merge_topup_sections(existing_sections, new_sections, limit=target)
         merged, section_plan, _ = reconcile_section_plan(merged, section_plan, legacy_spec)
+        normalize_internal_choice_counts(merged)
         added = count_questions(merged) - before
 
         await _finish_topup(paper_id, merged, added, pending_count, target, section_plan)
@@ -1669,6 +1677,7 @@ async def regenerate_question(
     # After the gate, not before: a repair call spent on a question about to be
     # thrown away is the reason dedupe_sections documents this same ordering.
     await repair_sections([{"questions": [candidate]}], ref=paper_id)
+    normalize_internal_choice_counts([{"questions": [candidate]}])
 
     # The slot's figure budget, and nothing more. On a blueprint paper
     # allocation_misses complains BOTH ways -- a row that requires a diagram and
@@ -1758,9 +1767,11 @@ async def regenerate_question_background(
             context_excerpt=context_excerpt,
             feedback_hints=feedback_hints,
         )
+        normalize_internal_choice_counts(result["sections"])
 
         update = {
             "sections": result["sections"],
+            "instruction_check": verify_instructions(result["sections"], p.get("generation_requirements") or {}),
             "regen": {
                 "status": "ready",
                 "question_id": question_id,

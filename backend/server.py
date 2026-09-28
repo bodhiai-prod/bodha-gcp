@@ -31,12 +31,13 @@ from auth import (
     require_role,
 )
 from activity import record_activity
+from instruction_spec import verify
 from llm_adapter import chat_complete, parse_json_response
 from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_errors,
                                 compile_allocations, paper_summary, BlueprintStructure,
                                 apply_allocation_overrides, hydrate_section_instructions,
                                 printable_template_instructions, compact_validation_misses,
-                                allocation_misses)
+                                allocation_misses, normalize_internal_choice_counts)
 from textbook_topics import merge_topic_batches, topic_context
 from pdf_utils import (
     PDF_POOL_MAX_WORKERS,
@@ -1807,7 +1808,9 @@ async def update_paper(
                     "original": prev.get("question", ""),
                     "created_at": utcnow_iso(),
                 })
+        normalize_internal_choice_counts(new_sections)
         set_fields["sections"] = new_sections
+        set_fields["instruction_check"] = verify(new_sections, p.get("generation_requirements") or {})
 
         # If a solution already exists, mark it stale so the UI prompts the
         # teacher to regenerate.
@@ -1890,12 +1893,20 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
     repaired_sections, section_plan, repaired_recovery = reconcile_section_plan(
         p.get("sections") or [], p.get("section_plan"), p.get("generation_requirements") or {}
     )
-    if repaired_recovery or section_plan != (p.get("section_plan") or []):
+    choice_counts_changed = normalize_internal_choice_counts(repaired_sections)
+    if repaired_recovery or choice_counts_changed or section_plan != (p.get("section_plan") or []):
+        repaired_fields = {"sections": repaired_sections, "section_plan": section_plan}
+        if choice_counts_changed:
+            repaired_fields["instruction_check"] = verify(
+                repaired_sections, p.get("generation_requirements") or {}
+            )
         await db.papers.update_one(
-            {"id": paper_id}, {"$set": {"sections": repaired_sections, "section_plan": section_plan}}
+            {"id": paper_id}, {"$set": repaired_fields}
         )
         p["sections"] = repaired_sections
         p["section_plan"] = section_plan
+        if choice_counts_changed:
+            p["instruction_check"] = repaired_fields["instruction_check"]
     # Migrate the brief metadata-only recovery rollout on read.  It is safe to
     # restart only papers whose compiled contract proves the structural defect;
     # provider failures remain terminal failures.
@@ -1931,9 +1942,11 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
     textbook_names = {row["id"]: row.get("original_filename") or row["id"] for row in textbook_rows}
     # Preserve the paper's original ingestion order rather than database order.
     p["source_textbooks"] = [textbook_names[textbook_id] for textbook_id in textbook_ids if textbook_id in textbook_names]
-    from instruction_spec import verify
     p["summary"] = paper_summary(p)
     checks = verify(p.get("sections") or [], p.get("generation_requirements") or {})
+    # Always respond with validation computed from the current normalized
+    # content, so a stale historical check cannot reintroduce a false banner.
+    p["instruction_check"] = checks
     p["summary"]["mismatches"] = compact_validation_misses(list(dict.fromkeys(
         p["summary"]["mismatches"] + checks.get("misses", [])
     )))

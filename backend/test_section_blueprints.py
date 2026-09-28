@@ -3,7 +3,8 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from section_blueprints import (Allocation, catalog, blueprint_errors, compile_allocations,
-    topic_catalog, allocation_misses, paper_summary, apply_allocation_overrides)
+    topic_catalog, allocation_misses, paper_summary, apply_allocation_overrides,
+    derived_internal_choice_count, normalize_internal_choice_counts)
 from generation_requirements import remaining_requirements
 from textbook_topics import merge_topic_batches, topic_context
 from prompts import qgen_prompt
@@ -50,6 +51,19 @@ class BlueprintTests(unittest.TestCase):
         self.assertEqual(spec["total_questions"], 4)
         self.assertEqual([r["difficulty"] for r in spec["section_allocations"]], ["hard", "medium"])
         self.assertEqual(allocation_misses(sections, spec), [])
+
+    def test_internal_choices_are_derived_from_printed_or_separator(self):
+        _, _, _, spec, sections = fixture()
+        spec = copy.deepcopy(spec)
+        spec["blueprint"]["sections"][0]["groups"][0]["internal_choices"] = 1
+        question = sections[0]["questions"][0]
+        question["question"] = "(a) Solve the equation.\n\n   OR   \n\n(b) Solve the alternative equation."
+        question["internal_choice_count"] = "0"  # provider metadata is not trusted
+        self.assertEqual(derived_internal_choice_count(question), 1)
+        self.assertTrue(normalize_internal_choice_counts(sections))
+        self.assertEqual(question["internal_choice_count"], 1)
+        self.assertEqual(allocation_misses(sections, spec), [])
+        self.assertEqual(derived_internal_choice_count({"question": "Explain whether A or B applies."}), 0)
 
     def test_duplicate_stale_and_underallocated_rows_rejected(self):
         book, bp, rows, *_ = fixture()

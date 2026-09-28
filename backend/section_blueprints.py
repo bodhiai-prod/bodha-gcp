@@ -194,6 +194,33 @@ def compact_validation_misses(misses: list[str]) -> list[str]:
     return list(misses)
 
 
+# The provider can describe an internal choice correctly while omitting or
+# mistyping its bookkeeping field.  The printed separator is the student-facing
+# source of truth, so count only a standalone line (not prose such as "and/or").
+_OR_SEPARATOR_RE = re.compile(
+    r"(?im)^[ \t]*(?:\*{1,3}[ \t]*)?OR(?:[ \t]*\*{1,3})?[ \t]*$"
+)
+_BREAK_TAG_RE = re.compile(r"(?i)<\s*(?:br\s*/?|/?(?:p|div))\s*[^>]*>")
+
+
+def derived_internal_choice_count(question: dict) -> int:
+    """Count rendered OR separators in one numbered question block."""
+    text = _BREAK_TAG_RE.sub("\n", str(question.get("question") or ""))
+    return len(_OR_SEPARATOR_RE.findall(text.replace("\r\n", "\n").replace("\r", "\n")))
+
+
+def normalize_internal_choice_counts(sections: list) -> bool:
+    """Persist backend-derived internal-choice metadata; returns whether changed."""
+    changed = False
+    for section in sections or []:
+        for question in section.get("questions") or []:
+            count = derived_internal_choice_count(question)
+            if question.get("internal_choice_count") != count:
+                question["internal_choice_count"] = count
+                changed = True
+    return changed
+
+
 def topic_id(book_id, name, parent=""):
     return hashlib.sha256(json.dumps([book_id, parent, name], ensure_ascii=False).encode()).hexdigest()[:24]
 
