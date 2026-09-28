@@ -7,6 +7,13 @@ from section_blueprints import normalize_template_sections
 
 
 class RecoverySectionTests(unittest.TestCase):
+    def test_parser_repairs_unescaped_latex_backslashes_inside_json_strings(self):
+        parsed = parse_json_response(
+            '{"instructions":"Answer all.","sections":[{"title":"A","questions":['
+            '{"question":"Find \\vec v when \\theta = 0","marks":1}]}]}'
+        )
+        self.assertEqual(parsed["sections"][0]["questions"][0]["question"], "Find \\vec v when \\theta = 0")
+
     def test_truncated_response_retains_each_section_identity(self):
         response = '''{
           "instructions": "Answer all.",

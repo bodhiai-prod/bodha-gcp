@@ -430,9 +430,12 @@ export default function PaperView() {
   }
 
   if (paper.generation_status === "failed") {
-    const errMsg =
+    const savedError =
       paper.generation_error ||
       "The AI could not complete this paper. This is often a temporary LLM provider issue.";
+    const errMsg = /could not parse json|incomplete (response|output)|malformed json/i.test(savedError)
+      ? "The AI provider returned an incomplete response after automatic recovery. Please retry generation."
+      : savedError;
     const looksTransient = /502|503|504|gateway|timeout|connection|overloaded/i.test(
       errMsg
     );
@@ -563,8 +566,10 @@ export default function PaperView() {
             <div className="font-bold uppercase tracking-wider text-sm text-red-900">
               Could not add the missing questions
             </div>
-            <p className="text-sm text-red-800 mt-1 font-mono break-words">
-              {topup.error || "The AI provider did not respond."}
+            <p className="text-sm text-red-800 mt-1 break-words">
+              {/could not parse json|incomplete (response|output)|malformed json/i.test(topup.error || "")
+                ? "The AI provider returned an incomplete response after automatic recovery."
+                : (topup.error || "The AI provider did not respond.")}
             </p>
             <p className="text-xs text-red-700 mt-2">
               Nothing was lost — every question below is still here. Try again

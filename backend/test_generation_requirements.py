@@ -67,6 +67,22 @@ class RequirementsTests(unittest.TestCase):
         self.assertNotIn("Total marks: 50", prompt)
         self.assertNotIn("so the paper still totals 50", prompt)
 
+    def test_normal_paper_schema_does_not_request_template_identities(self):
+        prompt = self.prompt(self.compile())
+        self.assertNotIn('"section_id": "A"', prompt)
+        self.assertNotIn('"allocation_id": "exact contract id"', prompt)
+        self.assertNotIn('"textbook_id": "exact contract id"', prompt)
+
+    def test_template_schema_requests_only_the_identities_it_can_validate(self):
+        spec = dict(self.compile(has_blueprint=True), blueprint={"sections": [{"id": "A"}]})
+        prompt = self.prompt(spec, section_blueprint="Section A: one question")
+        self.assertIn('"section_id": "A"', prompt)
+        self.assertNotIn('"allocation_id": "exact contract id"', prompt)
+
+        allocated = dict(spec, section_allocations=[{"allocation_id": "a"}], blueprint={"sections": []})
+        prompt = self.prompt(allocated, section_blueprint="Section A: one question")
+        self.assertIn('"allocation_id": "exact contract id"', prompt)
+
     def test_topup_uses_only_gaps_and_remaining_marks(self):
         spec = self.compile(total_questions=4, total_marks=8,
                             format_counts={"mcq":2,"long_answer":2}, diagram_count=2)

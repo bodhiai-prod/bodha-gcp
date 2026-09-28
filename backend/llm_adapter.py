@@ -39,6 +39,14 @@ from botocore.config import Config
 
 logger = logging.getLogger(__name__)
 
+
+class MalformedProviderResponseError(ValueError):
+    """The provider returned text that cannot safely be interpreted as JSON.
+
+    Callers use this distinction to retry a transport/format failure without
+    confusing it with a validation failure in the generated paper itself.
+    """
+
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 # Diagrams run in their own region: Nova Canvas was retired and the Stability
@@ -1231,12 +1239,70 @@ async def generate_diagram(spec: str | dict) -> bytes | None:
         return None
 
 
+def _repair_json_string_escapes(text: str) -> str:
+    """Make the one safe JSON repair common in mathematical LLM output.
+
+    LaTeX such as ``\\vec`` is valid prose but not valid JSON unless the
+    backslash is escaped.  Only repair invalid escapes *inside JSON strings*;
+    this never changes JSON structure or invents a missing value.
+    """
+    out: list[str] = []
+    in_string = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if not in_string:
+            out.append(char)
+            if char == '"':
+                in_string = True
+            index += 1
+            continue
+        if char == '"':
+            out.append(char)
+            in_string = False
+            index += 1
+            continue
+        if char == "\\":
+            following = text[index + 1] if index + 1 < len(text) else ""
+            unicode_escape = (
+                following == "u"
+                and index + 5 < len(text)
+                and all(c in "0123456789abcdefABCDEF" for c in text[index + 2:index + 6])
+            )
+            if following in '"\\/bfnrt' or unicode_escape:
+                out.append(char)
+            else:
+                # Keep the visible character, but make its backslash literal.
+                out.append("\\\\")
+            index += 1
+            continue
+        if char in "\r\n":
+            out.append("\\n")
+        elif ord(char) < 0x20:
+            out.append(f"\\u{ord(char):04x}")
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _loads_json(text: str) -> Any:
+    """Load JSON, retrying once after a strictly syntax-only escape repair."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as original:
+        repaired = _repair_json_string_escapes(text)
+        if repaired == text:
+            raise original
+        return json.loads(repaired)
+
+
 def parse_json_response(text: str) -> Any:
     """Extract a JSON payload from an LLM response, tolerating code fences,
     prose, and partial/truncated output (will salvage a complete answers array
     from a truncated solution response)."""
     if not text:
-        raise ValueError("Empty LLM response")
+        raise MalformedProviderResponseError("The AI provider returned an empty response.")
 
     # Strip code fences
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
@@ -1247,7 +1313,7 @@ def parse_json_response(text: str) -> Any:
 
     # Direct parse
     try:
-        return json.loads(text)
+        return _loads_json(text)
     except json.JSONDecodeError:
         pass
 
@@ -1256,7 +1322,7 @@ def parse_json_response(text: str) -> Any:
         m = re.search(pattern, text)
         if m:
             try:
-                return json.loads(m.group(0))
+                return _loads_json(m.group(0))
             except json.JSONDecodeError:
                 continue
 
@@ -1304,7 +1370,11 @@ def parse_json_response(text: str) -> Any:
             "_recovered_from_truncation": True,
         }
 
-    raise ValueError(f"Could not parse JSON from: {text[:200]}")
+    # Do not include provider content in a user-visible exception. Besides
+    # being noisy, raw model output can contain source material and prompts.
+    raise MalformedProviderResponseError(
+        "The AI provider returned an incomplete response."
+    )
 
 
 def _walk_top_level_objects(body: str) -> list:
@@ -1342,7 +1412,7 @@ def _walk_top_level_objects(body: str) -> list:
             if depth == 0 and start is not None:
                 chunk = body[start : i + 1]
                 try:
-                    items.append(json.loads(chunk))
+                    items.append(_loads_json(chunk))
                 except json.JSONDecodeError:
                     pass
                 start = None

@@ -19,7 +19,12 @@ from deps import db, logger, utcnow_iso
 from activity import record_activity
 from diagram_policy import apply_diagram_policy, normalise_spec
 from latex_repair import repair_answers, repair_sections, repair_text
-from llm_adapter import chat_complete, generate_diagram, parse_json_response
+from llm_adapter import (
+    MalformedProviderResponseError,
+    chat_complete,
+    generate_diagram,
+    parse_json_response,
+)
 from prompts import (
     derive_target_question_count,
     regen_question_prompt,
@@ -286,6 +291,42 @@ SCHOOL_BATCH_SIZE = int(os.environ.get("SCHOOL_BATCH_SIZE", "20"))
 # disjoint topic slices keep them apart. Waves are what carry the avoid-list
 # forward, so this is a duplication/throughput trade, not just a rate limit.
 SCHOOL_BATCH_CONCURRENCY = int(os.environ.get("SCHOOL_BATCH_CONCURRENCY", "3"))
+# One response-format retry absorbs a malformed/truncated provider reply
+# without changing paper state. Validation failures are deliberately not
+# retried here; their dedicated recovery paths retain the existing candidate.
+PROVIDER_JSON_MAX_ATTEMPTS = int(os.environ.get("PROVIDER_JSON_MAX_ATTEMPTS", "2"))
+
+
+async def _request_paper_json(*, system_message: str, user_text: str, ref: str, attempts: int | None = None) -> dict:
+    """Request a JSON paper with bounded recovery for malformed provider text."""
+    max_attempts = max(1, attempts or PROVIDER_JSON_MAX_ATTEMPTS)
+    for attempt in range(1, max_attempts + 1):
+        retry_suffix = (
+            "\n\nRETRY FORMAT REQUIREMENT: Return one complete JSON object only. "
+            'Escape every backslash inside JSON strings as "\\\\".'
+            if attempt > 1 else ""
+        )
+        raw = await chat_complete(
+            system_message=system_message,
+            user_text=user_text + retry_suffix,
+        )
+        try:
+            data = parse_json_response(raw)
+        except MalformedProviderResponseError as exc:
+            logger.warning(
+                "Provider JSON parse failed for %s (attempt %s/%s; chars=%s): %s",
+                ref or "-", attempt, max_attempts, len(raw or ""), exc,
+            )
+            if attempt == max_attempts:
+                raise RuntimeError(
+                    "The AI provider returned incomplete output after automatic recovery. "
+                    "Please retry generation."
+                ) from exc
+            continue
+        if not isinstance(data, dict):
+            raise RuntimeError("The AI provider returned an unsupported paper response.")
+        return data
+    raise RuntimeError("The AI provider did not return a paper response.")
 
 
 def _batch_sizes(total: int, batch_size: int) -> list:
@@ -380,10 +421,11 @@ async def _generate_paper_in_batches(
                 existing_questions=_seen,
                 spec=batch_spec,
             )
-            raw = await chat_complete(
-                system_message=system_message, user_text=qgen_prompt(**kwargs)
+            return await _request_paper_json(
+                system_message=system_message,
+                user_text=qgen_prompt(**kwargs),
+                ref=f"{ref}:batch-{idx + 1}",
             )
-            return parse_json_response(raw)
 
         results = await _asyncio.gather(
             *[_run(i) for i in wave], return_exceptions=True
@@ -510,11 +552,11 @@ async def generate_paper_background(
                 prompt_kwargs=prompt_kwargs,
             )
         else:
-            raw = await chat_complete(
+            data = await _request_paper_json(
                 system_message=system_message,
                 user_text=prompt,
+                ref=paper_id,
             )
-            data = parse_json_response(raw)
     except Exception as e:  # noqa: BLE001
         logger.exception("Question generation failed")
         await db.papers.update_one(
@@ -566,13 +608,13 @@ async def generate_paper_background(
         and count_questions(sections) >= spec["total_questions"]
     ):
         try:
-            corrected_raw = await chat_complete(
+            corrected_data = await _request_paper_json(
                 system_message="Create original exam questions in strict JSON. Satisfy the resolved requirements exactly.",
                 user_text=prompt + "\nCORRECTION REQUIRED: A previous attempt failed these checks:\n" +
                     "\n".join(initial_check["misses"]) +
                     "\nGenerate the complete paper again, correcting these mismatches. Return only JSON.",
+                ref=f"{paper_id}:validation-correction",
             )
-            corrected_data = parse_json_response(corrected_raw)
             corrected = corrected_data.get("sections") or []
             corrected_coercions: dict = {}
             _normalise_paper_questions(corrected, difficulty, corrected_coercions)
@@ -891,11 +933,13 @@ async def recover_template_generation_background(
             "max_attempts": max_attempts, "started_at": utcnow_iso(), "validation_summary": [],
         }}})
         try:
-            raw = await chat_complete(
+            candidate = await _request_paper_json(
                 system_message="Create original exam questions in strict JSON. Return every required blueprint identity exactly.",
                 user_text=prompt + "\nRECOVERY: This is a complete replacement candidate. Every section and question identity is mandatory. Return only JSON.",
+                ref=f"{paper_id}:template-recovery-{attempt}",
+                # The enclosing recovery loop already owns its two candidates.
+                attempts=1,
             )
-            candidate = parse_json_response(raw)
             sections = candidate.get("sections") or []
             coercions: dict = {}
             _normalise_paper_questions(sections, paper.get("difficulty", "medium"), coercions)
@@ -1407,14 +1451,14 @@ async def generate_missing_questions_background(
             topic_targets=topic_targets or None,
             spec=topup_spec,
         )
-        raw = await chat_complete(
+        data = await _request_paper_json(
             system_message=(
                 "You create original, high-quality exam questions in strict JSON. "
                 "Never copy textbook content."
             ),
             user_text=prompt,
+            ref=f"{paper_id}:topup",
         )
-        data = parse_json_response(raw)
 
         new_sections = data.get("sections") or []
         coercions: dict = {}

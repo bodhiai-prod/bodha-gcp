@@ -870,6 +870,18 @@ def qgen_prompt(
         else f"Total marks: {total_marks}, Duration: {duration} minutes.\n"
     )
 
+    # Template identities are a server-owned contract. Including them in an
+    # ordinary paper's example made every normal response needlessly large and
+    # encouraged providers to emit template-shaped data with no contract.
+    template_sections = bool(spec.get("blueprint") or spec.get("section_allocations"))
+    allocation_contract = bool(spec.get("section_allocations"))
+    section_identity_field = '"section_id": "A", ' if template_sections else ""
+    allocation_identity_fields = (
+        '"allocation_id": "exact contract id", "textbook_id": "exact contract id", '
+        '"topic_id": "exact contract id", "group_id": "exact contract id", '
+        if allocation_contract else ""
+    )
+
     return (
         f"{topup_block}"
         f"{batch_block}"
@@ -895,12 +907,11 @@ def qgen_prompt(
         "{\n"
         '  "instructions": "short student-facing exam instruction line",\n'
         '  "sections": [\n'
-        '    { "section_id": "A", "title": "Section A - Information Based", "section_instructions": "",\n'
+        f'    {{ {section_identity_field}"title": "Section A - Information Based", "section_instructions": "",\n'
         '      "questions": [\n'
         '        { "question": "...", "topic": "Topic name", "type": "information",\n'
         '          "format": "mcq|short_answer|long_answer|fill_blank|true_false|custom_label|\\"\\"",\n'
-        '          "difficulty": "easy|medium|hard", "marks": 1, "allocation_id": "exact contract id",\n'
-        '          "textbook_id": "exact contract id", "topic_id": "exact contract id", "group_id": "exact contract id", "needs_diagram": false,\n'
+        f'          "difficulty": "easy|medium|hard", "marks": 1, {allocation_identity_fields}"needs_diagram": false,\n'
         '          "diagram_spec": { "figure": "...", "labels": [], "given_values": [],\n'
         '                            "unknowns": [], "why_required": "..." },\n'
         '          "options": ["A","B","C","D"], "correct_option": 0 }\n'
