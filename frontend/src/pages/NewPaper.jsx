@@ -25,6 +25,7 @@ import {
 
 const DIFFICULTIES = ["easy", "medium", "hard"];
 const DIFFICULTY_LABELS = { easy: "Simple", medium: "Moderate", hard: "Challenging" };
+const isTopicExtractionActive = (textbook) => ["queued", "running"].includes(textbook?.topic_extraction?.status);
 const DEFAULT_FORMATS = [
   { key: "mcq", label: "MCQ", default: 0 },
   { key: "short_answer", label: "Short Answer", default: 40 },
@@ -53,7 +54,6 @@ export default function NewPaper() {
   // Scoped by book and parent so similarly named subtopics stay independent.
   const [topicDifficulties, setTopicDifficulties] = useState({});
   const [generating, setGenerating] = useState(false);
-  const [extractingId, setExtractingId] = useState(null);
   const [customInstructions, setCustomInstructions] = useState("");
   const [sectionBlueprint, setSectionBlueprint] = useState("");
   const [blueprintCatalog, setBlueprintCatalog] = useState([]);
@@ -234,7 +234,6 @@ export default function NewPaper() {
   };
 
   const extractTopicsFor = async (id) => {
-    setExtractingId(id);
     try {
       const { data } = await api.post(`/textbooks/${id}/extract-topics?background=true`);
       if (data.status === "running") {
@@ -246,10 +245,8 @@ export default function NewPaper() {
         [id]: { ...(curr[id] || {}), topics: data.topics, topic_catalog: data.topic_catalog },
       }));
       toast.success("Topics extracted");
-      setExtractingId(null);
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Failed");
-      setExtractingId(null);
     }
   };
 
@@ -382,25 +379,30 @@ export default function NewPaper() {
     } catch (err) { toast.error(err?.response?.data?.detail || "Blueprint analysis failed. Retry after clarifying the section counts and marks."); }
     finally { setAnalyzing(false); }
   };
+  const activeTopicExtractionIds = selectedTbIds.filter((id) => isTopicExtractionActive(tbDetails[id]));
+
   useEffect(() => {
-    if (!extractingId) return;
+    if (!activeTopicExtractionIds.length) return undefined;
     let cancelled = false;
     const poll = async () => {
       try {
-        const { data } = await api.get(`/textbooks/${extractingId}`);
+        const results = await Promise.all(activeTopicExtractionIds.map(async (id) => {
+          const { data } = await api.get(`/textbooks/${id}`);
+          return [id, data];
+        }));
         if (cancelled) return;
-        setTbDetails(curr => ({ ...curr, [extractingId]: data }));
-        const status = data.topic_extraction?.status;
-        if (status === "ready" || status === "failed") {
-          setExtractingId(null);
-          if (status === "failed") toast.error(data.topic_extraction.error || "Topic extraction failed. Retry.");
-          else toast.success("Textbook topics refreshed.");
-        }
-      } catch { if (!cancelled) { setExtractingId(null); toast.error("Could not read extraction progress. Refresh the textbook and retry."); } }
+        setTbDetails(curr => ({ ...curr, ...Object.fromEntries(results) }));
+        results.forEach(([, data]) => {
+          if (data.topic_extraction?.status === "failed") {
+            toast.error(data.topic_extraction.error || "Topic extraction failed. Retry.");
+          }
+        });
+      } catch { if (!cancelled) toast.error("Could not read extraction progress. Refresh the textbook and retry."); }
     };
+    poll();
     const timer = setInterval(poll, 2000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [extractingId]);
+  }, [activeTopicExtractionIds.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
   const requestKey = JSON.stringify({
     title, subject: tbDetails[selectedTbIds[0]]?.subject || "", class_name: tbDetails[selectedTbIds[0]]?.class_name || "",
     textbook_ids: selectedTbIds, topics: buildTopicPayload(selectedTopics, topicDifficulties, difficulty),
@@ -817,7 +819,7 @@ Section B (40 marks) - Attempt any FOUR of the following SIX questions
             </ExpandableCard>
 
             {sectionBlueprint.trim() && !blueprint && <button type="button" onClick={analyzeBlueprint} disabled={analyzing} className="qp-btn qp-btn-secondary" data-testid="analyze-blueprint">{analyzing ? "Analyzing blueprint…" : "Analyze blueprint"}</button>}
-            <SectionBlueprintEditor blueprint={blueprint} bookIds={selectedTbIds} details={tbDetails} allocations={allocations} onChange={setAllocations} difficulty={difficulty} extractingId={extractingId} onExtract={extractTopicsFor} />
+            <SectionBlueprintEditor blueprint={blueprint} bookIds={selectedTbIds} details={tbDetails} allocations={allocations} onChange={setAllocations} difficulty={difficulty} onExtract={extractTopicsFor} />
             <ExpandableCard id="custom-instructions" title="Additional instructions" summary={customInstructions.trim() ? customInstructions.trim() : "Optional · Refine how questions are generated"}>
               <p className="text-xs text-neutral-500 font-mono mb-3">
                 Optional. Your form settings already define the paper. Add only
@@ -923,11 +925,13 @@ Make Q23 as hard as possible`}
                         <button
                           type="button"
                           onClick={() => extractTopicsFor(bookId)}
-                          disabled={extractingId === bookId}
+                          disabled={isTopicExtractionActive(detail)}
                           className="qp-btn-ghost text-xs uppercase tracking-wider"
                           data-testid={`extract-topics-${bookId}`}
                         >
-                          {extractingId === bookId
+                          {detail?.topic_extraction?.status === "queued"
+                            ? "Queued"
+                            : detail?.topic_extraction?.status === "running"
                             ? "..."
                             : topics.length
                             ? "Re-extract"
@@ -943,12 +947,14 @@ Make Q23 as hard as possible`}
                         <button
                           type="button"
                           onClick={() => extractTopicsFor(bookId)}
-                          disabled={extractingId === bookId}
+                          disabled={isTopicExtractionActive(detail)}
                           className="qp-btn qp-btn-primary w-full text-xs"
                           data-testid={`extract-now-${bookId}`}
                         >
                           <Sparkle size={12} weight="bold" />
-                          {extractingId === bookId
+                          {detail?.topic_extraction?.status === "queued"
+                            ? "Queued"
+                            : detail?.topic_extraction?.status === "running"
                             ? "Extracting..."
                             : "Extract topics"}
                         </button>

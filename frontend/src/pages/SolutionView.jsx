@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   ArrowLeft,
   Download,
+  CaretDown,
   PencilSimple,
   FloppyDisk,
   X,
@@ -20,6 +21,12 @@ import BrandingLogo from "@/components/BrandingLogo";
 import { printDocument, diagramsReady } from "@/lib/print";
 import { formatMark } from "@/lib/exportFormat";
 import { canonicalQuestionType, questionTypeLabel } from "@/lib/questionType";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const typeBadge = (t) => {
   if (t === "information") return "qp-badge qp-badge-blue";
@@ -298,16 +305,21 @@ export default function SolutionView() {
                 >
                   <PencilSimple size={16} weight="bold" /> Edit
                 </button>
-                <button
-                  onClick={download}
-                  className="qp-btn qp-btn-primary"
-                  data-testid="download-solution-pdf-button"
-                >
-                  <Download size={16} weight="bold" /> Download Solution PDF
-                </button>
-                <button onClick={downloadDocx} disabled={docxDownloading} className="qp-btn qp-btn-secondary" data-testid="download-solution-docx-button">
-                  <Download size={16} weight="bold" /> {docxDownloading ? "Preparing..." : "Solution DOCX"}
-                </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button className="qp-btn qp-btn-primary" data-testid="download-solution-menu-button">
+                      <Download size={16} weight="bold" /> Download <CaretDown size={14} weight="bold" aria-hidden="true" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="z-50 min-w-36 rounded-none border-2 border-black bg-white p-1 shadow-none">
+                    <DropdownMenuItem onSelect={download} className="cursor-pointer rounded-none px-3 py-2 font-bold focus:bg-neutral-100" data-testid="download-solution-pdf-button">
+                      <Download size={16} weight="bold" /> PDF
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={downloadDocx} disabled={docxDownloading} className="cursor-pointer rounded-none px-3 py-2 font-bold focus:bg-neutral-100" data-testid="download-solution-docx-button">
+                      <Download size={16} weight="bold" /> {docxDownloading ? "Preparing..." : "DOCX"}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </>
             )}
           </div>

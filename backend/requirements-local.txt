@@ -1,7 +1,7 @@
 # Dependencies for running the backend locally (Windows / Python 3.12).
 #
-# requirements.txt is Emergent's frozen container image (135 exact pins,
-# including emergentintegrations which is not on PyPI). This file lists only
+# requirements.txt is the frozen container image (135 exact pins, including
+# packages that are not published on PyPI). This file lists only
 # what the backend actually imports, with floors instead of exact pins.
 #
 #   pip install -r requirements-local.txt
@@ -33,7 +33,7 @@ pdf2image>=1.17              # rasterizes PDF pages for OCR; needs poppler on PA
 # --- RAG ---------------------------------------------------------------------
 numpy>=1.26
 scikit-learn>=1.4            # rag.py: TfidfVectorizer + cosine_similarity.
-                             # Missing from Emergent's requirements.txt (it was
+                             # Missing from the container requirements.txt (it was
                              # baked into their image) — without it every
                              # competitive-exam route fails on import.
 

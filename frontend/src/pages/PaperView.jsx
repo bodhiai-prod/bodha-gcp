@@ -8,6 +8,7 @@ import {
   Star,
   ArrowLeft,
   Download,
+  CaretDown,
   BookmarkSimple,
   PencilSimple,
   FloppyDisk,
@@ -27,6 +28,12 @@ import { printDocument, diagramsReady } from "@/lib/print";
 import { canRegenerate, regeneratingId } from "@/lib/regenerate";
 import { DEFAULT_PAPER_INSTRUCTIONS, formatMark } from "@/lib/exportFormat";
 import { canonicalQuestionType, questionTypeLabel } from "@/lib/questionType";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const typeBadge = (t) => {
   if (t === "information") return "qp-badge qp-badge-blue";
@@ -716,16 +723,21 @@ export default function PaperView() {
                   {brandingApplying ? "Applying..." : hasAppliedBranding ? "Replace Branding" : "Apply Branding"}
                 </button>
                 {hasAppliedBranding && <button onClick={removeBranding} disabled={brandingApplying} className="qp-btn qp-btn-secondary" data-testid="remove-paper-branding">Remove</button>}
-                <button onClick={downloadDocx} disabled={docxDownloading} className="qp-btn qp-btn-secondary" data-testid="download-docx-button">
-                  <Download size={16} weight="bold" /> {docxDownloading ? "Preparing..." : "DOCX"}
-                </button>
-                <button
-                  onClick={download}
-                  className="qp-btn qp-btn-primary"
-                  data-testid="download-pdf-button"
-                >
-                  <Download size={16} weight="bold" /> Download PDF
-                </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button className="qp-btn qp-btn-primary" data-testid="download-menu-button">
+                      <Download size={16} weight="bold" /> Download <CaretDown size={14} weight="bold" aria-hidden="true" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="z-50 min-w-36 rounded-none border-2 border-black bg-white p-1 shadow-none">
+                    <DropdownMenuItem onSelect={download} className="cursor-pointer rounded-none px-3 py-2 font-bold focus:bg-neutral-100" data-testid="download-pdf-button">
+                      <Download size={16} weight="bold" /> PDF
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={downloadDocx} disabled={docxDownloading} className="cursor-pointer rounded-none px-3 py-2 font-bold focus:bg-neutral-100" data-testid="download-docx-button">
+                      <Download size={16} weight="bold" /> {docxDownloading ? "Preparing..." : "DOCX"}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </>
             )}
           </div>

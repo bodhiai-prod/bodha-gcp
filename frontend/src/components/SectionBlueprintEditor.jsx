@@ -11,7 +11,7 @@ function topicUnits(detail) {
   })).filter(unit => unit.name);
 }
 
-export default function SectionBlueprintEditor({ blueprint, bookIds, details, allocations, onChange, difficulty, extractingId, onExtract }) {
+export default function SectionBlueprintEditor({ blueprint, bookIds, details, allocations, onChange, difficulty, onExtract }) {
   const [active, setActive] = useState(blueprint?.sections?.[0]?.id || "");
   const [activeBook, setActiveBook] = useState(bookIds[0] || "");
   const [search, setSearch] = useState("");
@@ -67,7 +67,7 @@ export default function SectionBlueprintEditor({ blueprint, bookIds, details, al
     {!blueprint && <p className="text-sm mb-4">Choose a Paper Blueprint preset or analyze your custom blueprint to define sections.</p>}
     <div className="space-y-2 mb-4">
       {!bookIds.length && <p className="text-sm">Select a textbook to load its topics.</p>}
-      {bookIds.map(id => <div key={id} className="flex flex-wrap items-center justify-between gap-2 text-xs border-b pb-2"><span>{details[id]?.original_filename || "Loading textbook…"}</span><button type="button" className="qp-btn qp-btn-secondary text-xs" disabled={Boolean(extractingId)} onClick={() => onExtract(id)}>{extractingId === id ? `Extracting ${details[id]?.topic_extraction?.completed || 0}/${details[id]?.topic_extraction?.total || "…"}` : details[id]?.topic_catalog?.length ? "Refresh topics" : "Extract topics"}</button>{details[id]?.topic_extraction?.status === "failed" && <p role="alert" className="w-full text-red-700">{details[id].topic_extraction.error}</p>}</div>)}
+      {bookIds.map(id => { const extraction = details[id]?.topic_extraction; const active = ["queued", "running"].includes(extraction?.status); return <div key={id} className="flex flex-wrap items-center justify-between gap-2 text-xs border-b pb-2"><span>{details[id]?.original_filename || "Loading textbook…"}</span><button type="button" className="qp-btn qp-btn-secondary text-xs" disabled={active} onClick={() => onExtract(id)}>{extraction?.status === "queued" ? "Queued" : extraction?.status === "running" ? `Extracting ${extraction.completed || 0}/${extraction.total || "…"}` : details[id]?.topic_catalog?.length ? "Refresh topics" : "Extract topics"}</button>{extraction?.status === "failed" && <p role="alert" className="w-full text-red-700">{extraction.error}</p>}</div>; })}
     </div>
     {blueprint?.errors?.length > 0 && <div role="alert" className="text-sm text-red-700 mb-4">{blueprint.errors.join(" ")}</div>}
     {blueprint && <>

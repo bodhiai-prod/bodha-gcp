@@ -14,7 +14,8 @@ import {
 
 const ACTIVE_STATUSES = new Set(["queued", "ingesting", "topics_extracting"]);
 const ACTIVE_BOOKS_KEY = "bodha.activeTextbookIds";
-const isBookActive = (book) => ACTIVE_STATUSES.has(book.status) || book.topic_extraction?.status === "running";
+const isTopicExtractionActive = (book) => ["queued", "running"].includes(book.topic_extraction?.status);
+const isBookActive = (book) => ACTIVE_STATUSES.has(book.status) || isTopicExtractionActive(book);
 
 const rememberActiveBooks = (books) => {
   const ids = books.filter(isBookActive).map((book) => book.id);
@@ -28,7 +29,6 @@ export default function Textbooks() {
   const [file, setFile] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [extractingId, setExtractingId] = useState(null);
   const [expanded, setExpanded] = useState({});
   const [detailTopics, setDetailTopics] = useState({}); // id -> topics
 
@@ -124,42 +124,18 @@ export default function Textbooks() {
   };
 
   const extractTopics = async (id) => {
-    setExtractingId(id);
     try {
       const { data } = await api.post(`/textbooks/${id}/extract-topics?background=true`);
-      if (data.status === "running") {
-        toast.message("Topic extraction is continuing in the background");
-      } else {
+      if (data.status !== "running") {
         setDetailTopics({ ...detailTopics, [id]: data.topics });
         setExpanded({ ...expanded, [id]: true });
         toast.success("Topics extracted");
       }
       await load();
     } catch (err) {
-      setExtractingId(null);
       toast.error(err?.response?.data?.detail || "Extraction failed");
     }
   };
-
-  useEffect(() => {
-    if (!extractingId) return undefined;
-    const interval = window.setInterval(async () => {
-      try {
-        const { data } = await api.get(`/textbooks/${extractingId}`);
-        if (data.topic_extraction?.status === "ready" || data.topic_extraction?.status === "failed") {
-          setExtractingId(null);
-          if (data.topic_extraction.status === "ready") {
-            setDetailTopics((current) => ({ ...current, [extractingId]: data.topics || [] }));
-            toast.success("Topics extracted");
-          } else {
-            toast.error(data.topic_extraction.error || "Topic extraction failed");
-          }
-          await load();
-        }
-      } catch { /* next poll will retry */ }
-    }, 2000);
-    return () => window.clearInterval(interval);
-  }, [extractingId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const deleteTextbook = async (id) => {
     if (!window.confirm("Delete this textbook?")) return;
@@ -327,11 +303,6 @@ export default function Textbooks() {
                         >
                           {tb.status.replace("_", " ")}
                         </span>
-                        {isBookActive(tb) && (
-                          <span className="text-xs text-neutral-500">
-                            {tb.processing?.status === "queued" ? "Waiting for worker" : "Processing in background"}
-                          </span>
-                        )}
                         {tb.topic_count > 0 && (
                           <span className="qp-badge whitespace-nowrap">
                             {tb.topic_count} topics
@@ -341,13 +312,15 @@ export default function Textbooks() {
                       <div className="col-span-full flex flex-wrap gap-2 sm:col-span-1 lg:col-span-1 lg:justify-self-end">
                         <button
                           onClick={() => extractTopics(tb.id)}
-                          disabled={extractingId === tb.id || tb.is_owned === false}
+                          disabled={isTopicExtractionActive(tb) || tb.is_owned === false}
                           className="qp-btn qp-btn-secondary min-w-40 flex-1 justify-center whitespace-nowrap text-xs sm:flex-none"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`extract-topics-${tb.id}`}
                         >
                           <Sparkle size={14} weight="bold" />
-                          {extractingId === tb.id
+                          {tb.topic_extraction?.status === "queued"
+                            ? "Queued"
+                            : tb.topic_extraction?.status === "running"
                             ? "Analyzing..."
                             : tb.topic_count > 0
                             ? "Re-extract"

@@ -88,8 +88,8 @@ import competitive_routes  # noqa: F401  registers /api/competitive-exams/* endp
 # worker lane.  Provider requests are still asynchronous, so this does not
 # reduce normal interactive throughput.
 THREAD_POOL_MAX_WORKERS = int(os.environ.get("THREAD_POOL_MAX_WORKERS", "24"))
-INGESTION_CONCURRENCY = int(os.environ.get("INGESTION_CONCURRENCY", "1"))
-TOPIC_EXTRACTION_CONCURRENCY = int(os.environ.get("TOPIC_EXTRACTION_CONCURRENCY", "1"))
+INGESTION_CONCURRENCY = int(os.environ.get("INGESTION_CONCURRENCY", "2"))
+TOPIC_EXTRACTION_CONCURRENCY = int(os.environ.get("TOPIC_EXTRACTION_CONCURRENCY", "2"))
 _INGESTION_SEMAPHORE = asyncio.Semaphore(INGESTION_CONCURRENCY)
 _TOPIC_SEMAPHORE = asyncio.Semaphore(TOPIC_EXTRACTION_CONCURRENCY)
 
@@ -1314,7 +1314,11 @@ async def _extract_book_topics_inner(tb):
 async def _extract_book_topics(tb):
     """Bound topic extraction so book uploads cannot create an LLM stampede."""
     async with _TOPIC_SEMAPHORE:
-        await db.textbooks.update_one({"id": tb["id"]}, {"$set": {"status": "topics_extracting"}})
+        await db.textbooks.update_one({"id": tb["id"]}, {"$set": {
+            "status": "topics_extracting",
+            "topic_extraction.status": "running",
+            "topic_extraction.started_at": utcnow_iso(),
+        }})
         return await _extract_book_topics_inner(tb)
 
 
@@ -1328,11 +1332,16 @@ async def extract_topics(textbook_id: str, background: bool = False, user: dict 
     chunks = await load_textbook_chunks(tb)
     if not chunks:
         raise HTTPException(status_code=400, detail="No indexed text available; upload a readable textbook first.")
-    progress = {"status": "running", "completed": 0, "total": (len(chunks) + 9) // 10, "error": None, "started_at": utcnow_iso()}
+    progress = {"status": "queued", "completed": 0, "total": (len(chunks) + 9) // 10, "error": None, "queued_at": utcnow_iso()}
     # Atomic claim prevents duplicate extraction jobs from concurrent clicks.
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
     claim = await db.textbooks.update_one({"id": textbook_id, "$or": [
-        {"topic_extraction.status": {"$ne": "running"}}, {"topic_extraction.started_at": {"$lt": cutoff}}]},
+        {"$and": [
+            {"topic_extraction.status": {"$ne": "queued"}},
+            {"topic_extraction.status": {"$ne": "running"}},
+        ]},
+        {"topic_extraction.started_at": {"$lt": cutoff}},
+    ]},
         {"$set": {"topic_extraction": progress}})
     if not claim.modified_count:
         return {"status": "running", "topic_extraction": tb.get("topic_extraction")}

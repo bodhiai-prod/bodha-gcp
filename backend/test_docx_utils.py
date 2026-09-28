@@ -51,7 +51,6 @@ def test_docx_preserves_structure_as_native_word_equations():
 
     assert "Physics Test" in document_xml
     assert "Section A" in document_xml
-    assert "<m:oMathPara>" in document_xml
     assert "<m:oMath>" in document_xml
     assert "<m:sSup>" in document_xml
     assert "<m:f>" in document_xml
@@ -67,9 +66,10 @@ def test_docx_preserves_structure_as_native_word_equations():
     assert "hard" not in document_xml
     assert "Diagram unavailable" in document_xml
     assert document_xml.count("Solve ") == 1
-    # Inline $g=9.8$ stays in its text paragraph; only the explicit $$...$$
-    # expression becomes centered display math.
-    assert document_xml.count("<m:oMathPara>") == 1
+    # Display math lives in a centered Word paragraph with m:oMath.  An
+    # m:oMathPara nested inside w:p is invalid OOXML and caused inconsistent
+    # Word/LibreOffice layout.
+    assert "<m:oMathPara>" not in document_xml
 
 
 def test_docx_renders_latex_matrices_as_native_word_matrices():
@@ -84,6 +84,20 @@ def test_docx_renders_latex_matrices_as_native_word_matrices():
     assert document_xml.count("<m:mr>") == 2
     assert "<m:d>" in document_xml
     assert "<m:begChr m:val=\"(\"" in document_xml
+
+
+def test_docx_renders_integrals_and_summations_as_native_nary_math():
+    paper = _paper()
+    paper["sections"][0]["questions"][0]["question"] = (
+        r"Evaluate $\int_0^1 x\,dx$ and $$\sum_{k=1}^{n} k.$$"
+    )
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert document_xml.count("<m:nary>") == 2
+    assert '<m:chr m:val="∫"' in document_xml
+    assert '<m:chr m:val="∑"' in document_xml
+    assert "<m:oMathPara>" not in document_xml
 
 
 def test_docx_renders_template_section_instruction_before_question_number():
@@ -168,14 +182,16 @@ def test_solution_docx_contains_answers_and_monochrome_heading():
     data = render_solution_docx(paper)
     with ZipFile(BytesIO(data)) as archive:
         document_xml = archive.read("word/document.xml").decode("utf-8")
-    assert "Physics Test - Answer Key" in document_xml
+    assert "Physics Test" in document_xml
+    assert "ANSWER KEY" in document_xml
     assert "The answer is " in document_xml
     assert "002FA7" not in document_xml
     # Answer text stays in the same question table rather than beginning at
-    # the document margin in a separate paragraph.
-    table_start = document_xml.index("<w:tbl>")
-    table_end = document_xml.index("</w:tbl>", table_start)
-    assert "Answer" in document_xml[table_start:table_end]
+    # the document margin in a separate paragraph.  The document now has a
+    # separate header rule table, so locate the question block by its label.
+    question_table_start = document_xml.rfind("<w:tbl>", 0, document_xml.index("Answer"))
+    question_table_end = document_xml.index("</w:tbl>", question_table_start)
+    assert "Answer" in document_xml[question_table_start:question_table_end]
 
 
 def test_export_text_helpers():

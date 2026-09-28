@@ -1,6 +1,6 @@
 """LLM adapter for text and diagram generation, backed by Bedrock or OpenRouter.
 
-Replaces the original Emergent universal-key adapter. The public surface is
+Replaces the original universal-key adapter. The public surface is
 unchanged — `chat_complete`, `chain_for_exam`, `generate_diagram`, and
 `parse_json_response` keep the same signatures and semantics — so no call site
 in server.py / workers.py / competitive_routes.py needed to change.

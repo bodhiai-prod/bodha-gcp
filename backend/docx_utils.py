@@ -38,6 +38,17 @@ _LATEX_SYMBOLS = {
     "cdot": "·", "times": "×", "pm": "±", "leq": "≤",
     "geq": "≥", "neq": "≠", "approx": "≈", "to": "→",
     "rightarrow": "→", "degree": "°", "circ": "°",
+    "in": "∈", "notin": "∉", "subset": "⊂", "subseteq": "⊆",
+    "cup": "∪", "cap": "∩", "partial": "∂", "nabla": "∇",
+    "forall": "∀", "exists": "∃", "therefore": "∴", "because": "∵",
+}
+
+# These need Word's n-ary structure.  Emitting the command name as ordinary
+# math text (the old behaviour) made Word display and spell-check ``int`` and
+# then attach its limits to that text rather than to an integral sign.
+_NARY_OPERATORS = {
+    "int": "∫", "iint": "∬", "iiint": "∭", "oint": "∮",
+    "sum": "∑", "prod": "∏", "bigcup": "⋃", "bigcap": "⋂",
 }
 
 
@@ -53,6 +64,55 @@ def _latex_group(source: str, index: int):
             depth -= 1
         cursor += 1
     return source[index + 1:cursor - 1], cursor
+
+
+def _consume_nary_base(source: str, index: int):
+    """Read the first operand following an integral/summation.
+
+    OMML requires an n-ary operator to have an expression child.  Leaving it
+    empty displays Word's square equation placeholder, so retain the first
+    operand in that child and let the normal parser append the rest.
+    """
+    while index < len(source) and source[index].isspace():
+        index += 1
+    if index >= len(source):
+        return [], index
+    if source[index] == "{":
+        content, index = _latex_group(source, index)
+        return _latex_to_ast(content), index
+    if source[index] != "\\":
+        nodes = [("text", source[index])]
+        index += 1
+    else:
+        end = index + 1
+        while end < len(source) and source[end].isalpha():
+            end += 1
+        command = source[index + 1:end]
+        if command in {",", ";", ":", "!", " ", "quad", "qquad"}:
+            return _consume_nary_base(source, end)
+        if command in {"frac", "dfrac", "tfrac"}:
+            numerator, cursor = _latex_group(source, end)
+            denominator, index = _latex_group(source, cursor)
+            nodes = [("frac", _latex_to_ast(numerator), _latex_to_ast(denominator))]
+        elif command == "sqrt":
+            if end < len(source) and source[end] == "[":
+                close = source.find("]", end + 1)
+                end = close + 1 if close >= 0 else end
+            radicand, index = _latex_group(source, end)
+            nodes = [("sqrt", _latex_to_ast(radicand))]
+        elif command in {"text", "textrm", "mathrm", "mathbf", "mathit"}:
+            content, index = _latex_group(source, end)
+            nodes = [("text", content)]
+        else:
+            nodes = [("text", _LATEX_SYMBOLS.get(command, command))]
+            index = end
+    while index < len(source) and source[index] in "_^":
+        marker = source[index]
+        content, index = _latex_group(source, index + 1)
+        nodes[-1] = (
+            "sup" if marker == "^" else "sub", nodes[-1], _latex_to_ast(content)
+        )
+    return nodes, index
 
 
 def _latex_to_ast(source: str):
@@ -89,6 +149,21 @@ def _latex_to_ast(source: str):
                 denominator, cursor = _latex_group(source, cursor)
                 nodes.append(("frac", _latex_to_ast(numerator), _latex_to_ast(denominator)))
                 continue
+            if command in _NARY_OPERATORS:
+                cursor = end
+                lower, upper = [], []
+                # LaTeX permits either order for limits, so consume both
+                # before continuing with the expression after the operator.
+                while cursor < len(source) and source[cursor] in "_^":
+                    marker = source[cursor]
+                    content, cursor = _latex_group(source, cursor + 1)
+                    if marker == "_":
+                        lower = _latex_to_ast(content)
+                    else:
+                        upper = _latex_to_ast(content)
+                base, cursor = _consume_nary_base(source, cursor)
+                nodes.append(("nary", _NARY_OPERATORS[command], lower, upper, base))
+                continue
             if command == "begin":
                 environment, cursor = _latex_group(source, end)
                 closing = f"\\end{{{environment}}}"
@@ -117,7 +192,10 @@ def _latex_to_ast(source: str):
                 content, cursor = _latex_group(source, end)
                 nodes.append(("text", content))
                 continue
-            if command in {"left", "right", "displaystyle", "scriptstyle"}:
+            if command in {
+                "left", "right", "displaystyle", "textstyle", "scriptstyle",
+                "scriptscriptstyle", "limits", "nolimits", "quad", "qquad",
+            }:
                 cursor = end
                 continue
             if command in {",", ";", ":", "!", " "}:
@@ -187,6 +265,19 @@ def _omml_node(node):
         radical.append(OxmlElement("m:deg"))
         radical.append(_omml_arg(node[1]))
         return radical
+    if kind == "nary":
+        element = OxmlElement("m:nary")
+        properties = OxmlElement("m:naryPr")
+        character = OxmlElement("m:chr")
+        character.set(qn("m:val"), node[1])
+        limit_location = OxmlElement("m:limLoc")
+        limit_location.set(qn("m:val"), "subSup")
+        properties.extend([character, limit_location])
+        element.append(properties)
+        element.append(_omml_container("m:sub", node[2]))
+        element.append(_omml_container("m:sup", node[3]))
+        element.append(_omml_arg(node[4]))
+        return element
     if kind in {"sup", "sub"}:
         element = OxmlElement("m:sSup" if kind == "sup" else "m:sSub")
         element.append(OxmlElement("m:sSupPr" if kind == "sup" else "m:sSubPr"))
@@ -231,12 +322,10 @@ def _append_native_equation(paragraph, latex: str, *, display: bool = False) -> 
     math = OxmlElement("m:oMath")
     for node in _latex_to_ast(latex.strip()):
         math.append(_omml_node(node))
-    if display:
-        math_para = OxmlElement("m:oMathPara")
-        math_para.append(math)
-        paragraph._p.append(math_para)
-    else:
-        paragraph._p.append(math)
+    # ``m:oMathPara`` is a block-level OOXML element and is invalid inside a
+    # ``w:p``.  A centered Word paragraph containing ``m:oMath`` is both valid
+    # OOXML and renders consistently in Word and LibreOffice.
+    paragraph._p.append(math)
 
 
 def shutdown_docx_pool() -> None:
@@ -261,6 +350,14 @@ def _set_cell_or_paragraph_border(element, color: str = "D9E2F3") -> None:
         border.set(qn("w:color"), color)
         borders.append(border)
     properties.append(borders)
+
+
+def _remove_paragraph_borders(element) -> None:
+    """Remove template/theme title rules that vary between Word versions."""
+    properties = element.get_or_add_pPr()
+    borders = properties.find(qn("w:pBdr"))
+    if borders is not None:
+        properties.remove(borders)
 
 
 def _set_keep(paragraph, *, keep_next=False, keep_together=False):
@@ -469,16 +566,30 @@ def render_paper_docx(
     hydrate_question_types(paper)
     document = Document()
     section = document.sections[0]
-    section.top_margin = Inches(0.7)
-    section.bottom_margin = Inches(0.7)
-    section.left_margin = Inches(0.8)
-    section.right_margin = Inches(0.8)
+    # CBSE and most Indian school paper templates use A4.  Explicit page
+    # dimensions avoid Word inheriting US Letter from the python-docx default.
+    section.page_width = Inches(8.27)
+    section.page_height = Inches(11.69)
+    section.top_margin = Inches(0.6)
+    section.bottom_margin = Inches(0.6)
+    section.left_margin = Inches(0.6)
+    section.right_margin = Inches(0.6)
 
     normal = document.styles["Normal"]
     normal.font.name = "Arial"
     normal.font.size = Pt(10.5)
     normal.paragraph_format.space_after = Pt(3)
     normal.paragraph_format.line_spacing = 1.08
+
+    # Keep the built-in Word style names useful for teachers who continue
+    # editing a downloaded paper instead of relying on direct formatting.
+    document.styles["Title"].font.name = "Arial"
+    document.styles["Title"].font.size = Pt(18)
+    document.styles["Title"].font.color.rgb = RGBColor(0, 0, 0)
+    _remove_paragraph_borders(document.styles["Title"]._element)
+    document.styles["Heading 1"].font.name = "Arial"
+    document.styles["Heading 1"].font.size = Pt(13)
+    document.styles["Heading 1"].font.color.rgb = RGBColor(0, 0, 0)
 
     header_path = paper.get("header_image_path")
     if header_path and branding_loader:
@@ -494,16 +605,20 @@ def render_paper_docx(
             except (UnrecognizedImageError, ValueError, OSError):
                 pass
 
-    for key, size in (("school_name", 15), ("title", 20)):
+    for key, size in (("school_name", 15), ("title", 18)):
         value = (paper.get(key) or "").strip()
-        if key == "title" and include_solutions:
-            value = f"{value} - Answer Key"
         if value:
-            paragraph = document.add_paragraph()
+            paragraph = document.add_paragraph(style="Title" if key == "title" else None)
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = paragraph.add_run(value)
             run.bold = True
             run.font.size = Pt(size)
+
+    if include_solutions:
+        answer_key_label = document.add_paragraph()
+        answer_key_label.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        answer_key_label.paragraph_format.space_after = Pt(2)
+        answer_key_label.add_run("ANSWER KEY").bold = True
 
     tagline = (paper.get("branding_tagline") or "").strip()
     if tagline:
@@ -522,6 +637,19 @@ def render_paper_docx(
     metadata_paragraph.paragraph_format.space_after = Pt(10)
     metadata_paragraph.add_run(metadata)
 
+    # A simple black rule is a stable, familiar delimiter in printed school
+    # papers and avoids the theme-dependent decorative line Word may add to a
+    # heading style.
+    separator = document.add_table(rows=1, cols=1)
+    separator.alignment = WD_TABLE_ALIGNMENT.LEFT
+    separator.autofit = False
+    _set_table_width(separator, 7.05)
+    _set_table_columns(separator, (7.05,))
+    separator.rows[0].height = Pt(1)
+    separator_cell = separator.cell(0, 0)
+    _set_cell_margins(separator_cell, top=0, start=0, bottom=0, end=0)
+    _set_cell_or_paragraph_shading(separator_cell.paragraphs[0], "000000")
+
     instructions = printable_instructions(
         paper.get("instructions"),
         template_instructions=printable_template_instructions(paper),
@@ -531,8 +659,8 @@ def render_paper_docx(
         instruction_table = document.add_table(rows=1, cols=1)
         instruction_table.alignment = WD_TABLE_ALIGNMENT.LEFT
         instruction_table.autofit = False
-        _set_table_width(instruction_table, 6.65)
-        _set_table_columns(instruction_table, (6.65,))
+        _set_table_width(instruction_table, 7.05)
+        _set_table_columns(instruction_table, (7.05,))
         _set_visible_table_borders(instruction_table)
         instruction_cell = instruction_table.cell(0, 0)
         _set_cell_margins(instruction_cell, top=90, start=120, bottom=90, end=120)
@@ -555,9 +683,8 @@ def render_paper_docx(
 
     labels = ["(a)", "(b)", "(c)", "(d)"]
     question_number = 1
-    previous_had_diagram = False
     for section_data in sections:
-        heading = document.add_paragraph()
+        heading = document.add_paragraph(style="Heading 1")
         heading.paragraph_format.space_before = Pt(12)
         heading.paragraph_format.space_after = Pt(5)
         _set_keep(heading, keep_next=True, keep_together=True)
@@ -573,15 +700,11 @@ def render_paper_docx(
             lead.paragraph_format.left_indent = Inches(0.12)
             lead.add_run(section_instructions).italic = True
         for question in section_data.get("questions", []):
-            if include_solutions and question_number > 1 and (
-                previous_had_diagram or (question_number - 1) % 5 == 0
-            ):
-                document.add_page_break()
             question_table = document.add_table(rows=1, cols=2)
             question_table.alignment = WD_TABLE_ALIGNMENT.LEFT
             question_table.autofit = False
-            _set_table_width(question_table, 6.65)
-            _set_table_columns(question_table, (6.05, 0.6))
+            _set_table_width(question_table, 7.05)
+            _set_table_columns(question_table, (6.38, 0.67))
             _set_table_borders(question_table)
             question_cell = question_table.cell(0, 0)
             marks_cell = question_table.cell(0, 1)
@@ -632,9 +755,6 @@ def render_paper_docx(
                     else None
                 )
                 _add_diagram(question_cell, image_bytes, bool(image_bytes))
-                previous_had_diagram = True
-            else:
-                previous_had_diagram = False
             if include_solutions:
                 # Keep each answer in the same full-width question block.  The
                 # previous standalone paragraphs started at document margins,
@@ -647,8 +767,11 @@ def render_paper_docx(
                 _set_keep(answer_heading, keep_together=True)
                 answer_heading.add_run("Answer").bold = True
                 answer_paragraph = question_cell.add_paragraph()
-                answer_paragraph.paragraph_format.left_indent = Inches(0.15)
-                answer_paragraph.paragraph_format.space_after = Pt(7)
+                answer_paragraph.paragraph_format.left_indent = Inches(0.08)
+                answer_paragraph.paragraph_format.right_indent = Inches(0.08)
+                answer_paragraph.paragraph_format.space_after = Pt(8)
+                _set_cell_or_paragraph_shading(answer_paragraph, "F2F2F2")
+                _set_cell_or_paragraph_border(answer_paragraph, "BFBFBF")
                 _append_rich_text(
                     answer_paragraph,
                     question_cell,
