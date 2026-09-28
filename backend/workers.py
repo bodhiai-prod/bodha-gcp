@@ -271,26 +271,16 @@ def _normalise_paper_questions(
 # Question paper generation
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-# Batched generation — large papers
+# Batched generation with live progress
 # ---------------------------------------------------------------------------
-# The school path made ONE call for the whole paper. That was fine while a
-# paper was at most 25 questions, which is where derive_target_question_count
-# capped it. Once an explicit total_questions (up to 200) could be requested,
-# the same single call had to fit a paper several times that size into
-# BEDROCK_MAX_TOKENS -- so it truncated, parse_json_response salvaged whatever
-# was complete, the paper saved short, and the auto top-up refilled it from a
-# separate call that could only ever see part of what it had to avoid. Every
-# step of that chain is somewhere a duplicate gets in.
-#
-# Batching removes the truncation, and -- because each batch gets its own slice
-# of the topic list plus the stems every earlier batch wrote -- removes the
-# reason two calls would write the same question in the first place.
-SCHOOL_BATCH_THRESHOLD = int(os.environ.get("SCHOOL_BATCH_THRESHOLD", "25"))
-SCHOOL_BATCH_SIZE = int(os.environ.get("SCHOOL_BATCH_SIZE", "20"))
-# Batches inside one wave run together and cannot see each other; only their
-# disjoint topic slices keep them apart. Waves are what carry the avoid-list
-# forward, so this is a duplication/throughput trade, not just a rate limit.
-SCHOOL_BATCH_CONCURRENCY = int(os.environ.get("SCHOOL_BATCH_CONCURRENCY", "3"))
+# A full-paper request cannot expose meaningful question progress until the
+# provider finishes. Small batches both avoid large-response truncation and let
+# the app persist a truthful count after each completed model response.
+# Small, sequential batches make question-generation progress truthful: a
+# completed count is only written after the corresponding model response has
+# been parsed. Sequential calls also let each later prompt avoid questions in
+# every preceding batch.
+SCHOOL_PROGRESS_BATCH_SIZE = int(os.environ.get("SCHOOL_PROGRESS_BATCH_SIZE", "4"))
 # One response-format retry absorbs a malformed/truncated provider reply
 # without changing paper state. Validation failures are deliberately not
 # retried here; their dedicated recovery paths retain the existing candidate.
@@ -338,6 +328,15 @@ def _batch_sizes(total: int, batch_size: int) -> list:
     return [n for n in sizes if n > 0]
 
 
+def _batch_mark_totals(total_marks: int, sizes: list[int]) -> list[int]:
+    """Split marks across batches without losing marks to independent rounding."""
+    if not sizes:
+        return []
+    total = max(1, int(total_marks))
+    base, remainder = divmod(total, len(sizes))
+    return [max(1, base + (1 if index < remainder else 0)) for index in range(len(sizes))]
+
+
 def _merge_batch_sections(merged: dict, order: list, sections: list) -> None:
     """Fold one batch's sections into the accumulator, keyed by section title.
 
@@ -364,8 +363,9 @@ async def _generate_paper_in_batches(
     total_marks: int,
     system_message: str,
     prompt_kwargs: dict,
+    on_batch_complete=None,
 ) -> dict:
-    """Generate a large paper as several smaller calls.
+    """Generate a paper in sequential, progress-reporting batches.
 
     Returns the same {"instructions", "sections"} shape one call returns, so
     everything downstream -- completion, dedupe, LaTeX repair, the diagram
@@ -375,7 +375,8 @@ async def _generate_paper_in_batches(
     back short and the existing top-up path fills it, which is strictly better
     than losing the whole paper to one bad response.
     """
-    sizes = _batch_sizes(target_q, SCHOOL_BATCH_SIZE)
+    sizes = _batch_sizes(target_q, SCHOOL_PROGRESS_BATCH_SIZE)
+    batch_marks = _batch_mark_totals(total_marks, sizes)
     names = [
         str(t.get("name", "")).strip()
         for t in topics_weighted or []
@@ -392,11 +393,9 @@ async def _generate_paper_in_batches(
     instructions = ""
     failures = 0
 
-    for start in range(0, len(sizes), SCHOOL_BATCH_CONCURRENCY):
-        wave = list(range(start, min(start + SCHOOL_BATCH_CONCURRENCY, len(sizes))))
-        # Snapshot once per wave: every batch in it sees everything the waves
-        # before wrote. Batches inside a wave still cannot see each other --
-        # that is exactly what their disjoint topic slices are for.
+    for index, size in enumerate(sizes):
+        # Every later request sees the questions from every earlier batch, so
+        # it can avoid duplicates and satisfy the remaining quotas exactly.
         sections_so_far = [merged[t] for t in order]
         written = [
             q.get("question", "")
@@ -405,39 +404,39 @@ async def _generate_paper_in_batches(
             if q.get("question")
         ]
 
-        async def _run(idx: int, _seen=written, _so_far=sections_so_far) -> dict:
-            batch_topics = [
-                {"name": n, "weight": weight_of.get(n, 5)} for n in topic_sets[idx]
-            ] or list(topics_weighted or [])
-            # Reuses the top-up apportioner: it already knows how to take a
-            # compiled spec plus what exists and produce the quotas for the
-            # next `n` questions only, which is precisely what a batch is.
-            batch_spec = remaining_requirements(spec, _so_far, sizes[idx])
-            kwargs = dict(prompt_kwargs)
-            kwargs.update(
-                topics_weighted=batch_topics,
-                total_marks=max(1, round(total_marks * sizes[idx] / max(1, target_q))),
-                total_questions=sizes[idx],
-                existing_questions=_seen,
-                spec=batch_spec,
-            )
-            return await _request_paper_json(
+        batch_topics = [
+            {"name": name, "weight": weight_of.get(name, 5)} for name in topic_sets[index]
+        ] or list(topics_weighted or [])
+        batch_spec = remaining_requirements(spec, sections_so_far, size)
+        # The remaining-requirements helper preserves the full paper's mark
+        # target for a final top-up. This is an initial-generation batch, so
+        # its prompt must use only this batch's mark share.
+        batch_spec.pop("total_marks", None)
+        kwargs = dict(prompt_kwargs)
+        kwargs.update(
+            topics_weighted=batch_topics,
+            total_marks=batch_marks[index],
+            total_questions=size,
+            existing_questions=written,
+            spec=batch_spec,
+        )
+        try:
+            result = await _request_paper_json(
                 system_message=system_message,
                 user_text=qgen_prompt(**kwargs),
-                ref=f"{ref}:batch-{idx + 1}",
+                ref=f"{ref}:batch-{index + 1}",
             )
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
+            logger.warning(f"[batch] {ref or '-'} batch {index + 1} failed: {exc}")
+            continue
 
-        results = await _asyncio.gather(
-            *[_run(i) for i in wave], return_exceptions=True
-        )
-        for r in results:
-            if isinstance(r, Exception):
-                failures += 1
-                logger.warning(f"[batch] {ref or '-'} batch failed: {r}")
-                continue
-            if not instructions:
-                instructions = (r or {}).get("instructions", "") or ""
-            _merge_batch_sections(merged, order, (r or {}).get("sections"))
+        if not instructions:
+            instructions = (result or {}).get("instructions", "") or ""
+        _merge_batch_sections(merged, order, (result or {}).get("sections"))
+        if on_batch_complete:
+            completed = min(target_q, sum(len(merged[title]["questions"]) for title in order))
+            await on_batch_complete(completed, index + 1, len(sizes))
 
     produced = sum(len(merged[t]["questions"]) for t in order)
     if not produced:
@@ -527,19 +526,28 @@ async def generate_paper_background(
         "You create original, high-quality exam questions in strict JSON. "
         "Never copy textbook content."
     )
-    # Below the threshold this is exactly the call it always was -- one request,
-    # no extra latency, no behaviour change for the papers that already work.
-    #
     # A blueprint paper is never batched, section allocations or not. The
     # blueprint fixes per-section structure that batch slicing has no way to
     # honour: splitting a paper by topic would cut across the very sections the
     # allocation contract is defined in terms of.
-    batched = (
-        target_q > SCHOOL_BATCH_THRESHOLD
-        and not (section_blueprint or "").strip()
-        and not spec.get("section_allocations")
-    )
+    batched = not (section_blueprint or "").strip() and not spec.get("section_allocations")
     prompt = None if batched else qgen_prompt(**prompt_kwargs)
+
+    async def update_progress(completed: int, batch: int = 0, batch_total: int = 0, phase: str = "generating") -> None:
+        await db.papers.update_one(
+            {"id": paper_id, "generation_status": "pending"},
+            {"$set": {
+                "generation_progress.completed": min(target_q, max(0, completed)),
+                "generation_progress.total": target_q,
+                "generation_progress.status": "pending",
+                "generation_progress.phase": phase,
+                "generation_progress.batch": batch,
+                "generation_progress.batch_total": batch_total,
+                "generation_progress.updated_at": utcnow_iso(),
+            }},
+        )
+
+    await update_progress(0, phase="generating")
     try:
         if batched:
             data = await _generate_paper_in_batches(
@@ -550,6 +558,7 @@ async def generate_paper_background(
                 total_marks=total_marks,
                 system_message=system_message,
                 prompt_kwargs=prompt_kwargs,
+                on_batch_complete=update_progress,
             )
         else:
             data = await _request_paper_json(
@@ -564,6 +573,9 @@ async def generate_paper_background(
             {"$set": {
                 "generation_status": "failed",
                 "generation_error": str(e)[:500],
+                "generation_progress.status": "failed",
+                "generation_progress.phase": "failed",
+                "generation_progress.updated_at": utcnow_iso(),
             }},
         )
         await record_activity(owner_id, "paper.failed", {"paper_id": paper_id})
@@ -573,10 +585,7 @@ async def generate_paper_background(
     # Publish the only truthful question count available once the model output
     # has been parsed. A single provider response moves from 0 straight to this
     # value; the UI continues to poll it while the finishing checks run.
-    await db.papers.update_one({"id": paper_id, "generation_status": "pending"}, {"$set": {
-        "generation_progress.completed": count_questions(sections),
-        "generation_progress.total": target_q,
-    }})
+    await update_progress(count_questions(sections), phase="validating")
     coercions: dict = {}
     _normalise_paper_questions(sections, difficulty, coercions)
     (allocation_coverage(sections, spec) if spec.get("section_allocations") else measure_coverage(sections, topics_weighted, spec.get("total_questions") or derive_target_question_count(total_marks)))
@@ -629,6 +638,8 @@ async def generate_paper_background(
                 coercions = corrected_coercions
         except Exception as exc:
             logger.warning(f"Requirement correction skipped for {paper_id}: {exc}")
+
+    await update_progress(count_questions(sections), phase="finalizing")
 
     # Capture the first valid set of headings as this paper's durable section
     # plan. From here on recovered and top-up questions are routed by ID, not
@@ -752,9 +763,13 @@ async def generate_paper_background(
                     if validation_error else None
                 )
             ),
-            "generation_progress.completed": count_questions(sections),
+            "generation_progress.completed": min(target_q, count_questions(sections)),
             "generation_progress.total": target_q,
             "generation_progress.status": "ready",
+            "generation_progress.phase": "ready",
+            "generation_progress.batch": len(_batch_sizes(target_q, SCHOOL_PROGRESS_BATCH_SIZE)) if batched else 1,
+            "generation_progress.batch_total": len(_batch_sizes(target_q, SCHOOL_PROGRESS_BATCH_SIZE)) if batched else 1,
+            "generation_progress.updated_at": utcnow_iso(),
             "recovered_from_truncation": bool(data.get("_recovered_from_truncation")),
             "latex_check": latex_stats,
             "completeness_check": completeness_stats,

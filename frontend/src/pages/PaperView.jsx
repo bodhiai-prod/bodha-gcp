@@ -43,6 +43,15 @@ const typeBadge = (t) => {
 
 const TYPE_OPTIONS = ["information", "concept", "application"];
 const DIFF_OPTIONS = ["easy", "medium", "hard"];
+const GENERATION_PHASE_LABELS = {
+  preparing: "Preparing questions",
+  generating: "Generating questions",
+  validating: "Checking question quality",
+  finalizing: "Finalizing your paper",
+  ready: "Paper ready",
+  failed: "Generation failed",
+  cancelled: "Generation cancelled",
+};
 
 const instructionLines = (instructions = "") =>
   instructions
@@ -100,7 +109,7 @@ export default function PaperView() {
   useEffect(() => {
     if (!paper || editing) return;
     if (paper.generation_status !== "pending") return;
-    const t = setInterval(load, 3000);
+    const t = setInterval(load, 1500);
     return () => clearInterval(t);
   }, [paper, editing]); // eslint-disable-line
 
@@ -381,6 +390,10 @@ export default function PaperView() {
     const generatedCount = (paper.sections || []).reduce((total, section) => total + (section.questions || []).length, 0) || paper.generation_progress?.completed || 0;
     const configuredCount = paper.generation_progress?.total || paper.target_question_count || paper.generation_requirements?.total_questions || paper.total_questions || 0;
     const progressPercent = configuredCount > 0 ? Math.min(100, Math.round(generatedCount / configuredCount * 100)) : 0;
+    const generationPhase = paper.generation_progress?.phase || "preparing";
+    const phaseLabel = GENERATION_PHASE_LABELS[generationPhase] || "Generating questions";
+    const batch = paper.generation_progress?.batch || 0;
+    const batchTotal = paper.generation_progress?.batch_total || 0;
     return (
       <div className="min-h-screen bg-[#FAFAFA]">
         <Header />
@@ -408,13 +421,22 @@ export default function PaperView() {
               <b>{paper.subject}</b> · Class <b>{paper.class_name}</b>.
             </p>
             <p className="text-sm text-neutral-500 mt-4">
-              This usually takes 20-90 seconds. The page will refresh
-              automatically when it&rsquo;s ready.
+              Progress updates automatically as question batches finish.
             </p>
             <div className="generation-progress" aria-live="polite">
-              <div className="generation-progress-heading"><span>Questions generated</span><strong>{configuredCount > 0 ? `${generatedCount} / ${configuredCount}` : `${generatedCount} generated`}</strong></div>
-              <progress value={generatedCount} max={configuredCount || 1} aria-label="Paper generation progress" />
-              <span className="generation-progress-percent">{configuredCount > 0 ? `${progressPercent}% complete` : "Preparing question count…"}</span>
+              <div className="generation-progress-heading"><span>{phaseLabel}</span><strong>{configuredCount > 0 ? `${generatedCount} / ${configuredCount}` : `${generatedCount} generated`}</strong></div>
+              <div
+                className="generation-progress-track"
+                role="progressbar"
+                aria-label="Paper generation progress"
+                aria-valuemin={0}
+                aria-valuemax={configuredCount || undefined}
+                aria-valuenow={configuredCount > 0 ? generatedCount : undefined}
+                aria-valuetext={configuredCount > 0 ? `${phaseLabel}: ${generatedCount} of ${configuredCount} questions generated` : phaseLabel}
+              >
+                <div className="generation-progress-fill" style={{ width: `${progressPercent}%` }} />
+              </div>
+              <span className="generation-progress-percent">{configuredCount > 0 ? `${progressPercent}% complete` : "Preparing question count…"}{batchTotal > 1 ? ` · Batch ${batch} of ${batchTotal}` : ""}</span>
             </div>
             <button type="button" onClick={cancelGeneration} disabled={cancellingGeneration} className="qp-btn qp-btn-secondary mt-6" data-testid="cancel-paper-generation">
               <X size={16} weight="bold" /> {cancellingGeneration ? "Cancelling…" : "Cancel generation"}

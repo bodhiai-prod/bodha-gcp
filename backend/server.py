@@ -1672,7 +1672,15 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "diagrams_pending": 0,
         "generation_status": "pending",
         "generation_error": None,
-        "generation_progress": {"completed": 0, "total": (resolved or {}).get("total_questions") or requested_count or 0},
+        "generation_progress": {
+            "completed": 0,
+            "total": (resolved or {}).get("total_questions") or requested_count or 0,
+            "status": "pending",
+            "phase": "preparing",
+            "batch": 0,
+            "batch_total": 0,
+            "updated_at": utcnow_iso(),
+        },
         "created_at": utcnow_iso(),
         "is_deleted": False,
     }
@@ -2099,7 +2107,15 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
         {"$set": {
             "generation_status": "pending",
             "generation_error": None,
-            "generation_progress": {"completed": 0, "total": (p.get("generation_requirements") or {}).get("total_questions") or p.get("target_question_count") or 0},
+            "generation_progress": {
+                "completed": 0,
+                "total": (p.get("generation_requirements") or {}).get("total_questions") or p.get("target_question_count") or 0,
+                "status": "pending",
+                "phase": "preparing",
+                "batch": 0,
+                "batch_total": 0,
+                "updated_at": utcnow_iso(),
+            },
             "sections": [],
             "diagrams_pending": 0,
             "question_count": 0,
@@ -2156,6 +2172,8 @@ async def cancel_paper_generation(paper_id: str, user: dict = Depends(get_curren
         "generation_status": "cancelled",
         "generation_error": None,
         "generation_progress.status": "cancelled",
+        "generation_progress.phase": "cancelled",
+        "generation_progress.updated_at": utcnow_iso(),
     }})
     return {"id": paper_id, "generation_status": "cancelled"}
 
