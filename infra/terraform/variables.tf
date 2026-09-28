@@ -41,12 +41,12 @@ variable "admin_emails" {
 
 variable "machine_type" {
   type    = string
-  default = "e2-standard-2"
+  default = "e2-standard-4"
 }
 
 variable "data_disk_gb" {
   type    = number
-  default = 50
+  default = 100
 }
 
 variable "storage_prefix" {

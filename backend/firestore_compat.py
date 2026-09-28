@@ -5,12 +5,9 @@ surface here lets the application move to Firestore without changing routes,
 response shapes, or background jobs.  Documents remain application-owned
 JSON with the existing ``id`` fields; Firestore document IDs are internal.
 
-This adapter deliberately evaluates filters in the application.  That keeps
-the existing Mongo query semantics (notably nested fields and ``$or``) correct
-without relying on undeclared Firestore composite indexes.  Each public list
-endpoint already has a bounded result limit.  Before a collection becomes
-large, replace its corresponding query with a Firestore-indexed repository
-method rather than silently changing its results.
+Complex legacy filters continue to be evaluated in the application.  Simple
+equality and ``$in`` filters, which cover hot detail/status reads, are pushed
+to Firestore so a textbook lookup does not scan the whole collection.
 """
 
 from __future__ import annotations
@@ -170,9 +167,34 @@ class FirestoreCollection:
             docs.append(data)
         return docs
 
+    def _native_query(self, query: dict[str, Any] | None):
+        """Return a Firestore query for safe simple filters, else ``None``.
+
+        Preserve the compatibility layer's Python matcher for `$or`, range
+        operators, and other Mongo-shaped expressions until those routes are
+        converted deliberately.  This small fast path covers the most common
+        `id` and status lookups without changing their result semantics.
+        """
+        if query is None:
+            return self._collection
+        native = self._collection
+        for key, condition in query.items():
+            if key.startswith("$"):
+                return None
+            if isinstance(condition, dict):
+                if set(condition) == {"$in"} and isinstance(condition["$in"], list):
+                    native = native.where(key, "in", condition["$in"])
+                else:
+                    return None
+            else:
+                native = native.where(key, "==", condition)
+        return native
+
     async def _matching_snapshots(self, query: dict[str, Any] | None) -> list[tuple[Any, dict[str, Any]]]:
         matches: list[tuple[Any, dict[str, Any]]] = []
-        async for snapshot in self._collection.stream():
+        native = self._native_query(query)
+        source = native if native is not None else self._collection
+        async for snapshot in source.stream():
             data = snapshot.to_dict() or {}
             if _matches(data, query):
                 matches.append((snapshot, data))

@@ -32,6 +32,11 @@ FIRESTORE_DATABASE='(default)'
 APP_DOMAIN='${app_domain}'
 CORS_ORIGINS='${cors_origins}'
 ADMIN_EMAILS='${admin_emails}'
+# Bounded background lanes: the API remains responsive when several books are
+# uploaded.  Change only after observing queue wait time and VM utilisation.
+THREAD_POOL_MAX_WORKERS='24'
+INGESTION_CONCURRENCY='1'
+TOPIC_EXTRACTION_CONCURRENCY='1'
 EOF
 chmod 0644 /etc/bodha/runtime.conf
 

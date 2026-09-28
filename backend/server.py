@@ -58,6 +58,7 @@ from prompts import (
     QPAPER_EXTRACT_SYSTEM,
 )
 from storage import APP_NAME, check_storage, get_object, init_storage, put_object
+from textbook_content import load_textbook_chunks, save_textbook_chunks
 from token_usage import install as install_token_usage, tag
 from workers import (
     build_solution_for_paper,
@@ -81,7 +82,14 @@ import competitive_routes  # noqa: F401  registers /api/competitive-exams/* endp
 # I/O-bound work (Bedrock calls via asyncio.to_thread), which spends its time
 # parked on the network rather than burning CPU — so this can safely be far
 # larger than Python's CPU-oriented default of min(32, cpu_count + 4).
-THREAD_POOL_MAX_WORKERS = int(os.environ.get("THREAD_POOL_MAX_WORKERS", "64"))
+# Keep API capacity available while CPU-heavy extraction/OCR runs in a bounded
+# worker lane.  Provider requests are still asynchronous, so this does not
+# reduce normal interactive throughput.
+THREAD_POOL_MAX_WORKERS = int(os.environ.get("THREAD_POOL_MAX_WORKERS", "24"))
+INGESTION_CONCURRENCY = int(os.environ.get("INGESTION_CONCURRENCY", "1"))
+TOPIC_EXTRACTION_CONCURRENCY = int(os.environ.get("TOPIC_EXTRACTION_CONCURRENCY", "1"))
+_INGESTION_SEMAPHORE = asyncio.Semaphore(INGESTION_CONCURRENCY)
+_TOPIC_SEMAPHORE = asyncio.Semaphore(TOPIC_EXTRACTION_CONCURRENCY)
 
 # asyncio keeps only a weak reference to a running task, so a bare
 # create_task() can be collected mid-flight — which looks exactly like the
@@ -135,6 +143,51 @@ def spread_chunks(chunks: List[str], limit: int = STORED_CHUNK_LIMIT) -> List[st
     # Even spread over `rest`, taking exactly `want` items.
     body = [rest[(i * len(rest)) // want] for i in range(want)]
     return head + body
+
+
+async def _run_ingestion(textbook_id: str, owner_id: str, data: bytes | None = None) -> None:
+    """Run one persisted ingestion job under a process-wide concurrency limit.
+
+    The job state is persisted before and throughout execution.  If the
+    process is restarted while it is queued/running, startup schedules it
+    again from GCS instead of leaving the user with an orphaned upload.
+    """
+    async with _INGESTION_SEMAPHORE:
+        textbook = await db.textbooks.find_one({"id": textbook_id, "is_deleted": False}, {"_id": 0})
+        if not textbook:
+            return
+        now = utcnow_iso()
+        await db.textbooks.update_one({"id": textbook_id}, {"$set": {
+            "status": "ingesting",
+            "processing.status": "running",
+            "processing.started_at": now,
+            "processing.attempt": int((textbook.get("processing") or {}).get("attempt", 0)) + 1,
+            "processing.error": None,
+        }})
+        try:
+            if data is None:
+                data, _content_type = await asyncio.to_thread(get_object, textbook["storage_path"])
+            text = await asyncio.to_thread(extract_text, data)
+            chunks = chunk_text(text)
+            selected_chunks = spread_chunks(chunks)
+            if not chunks:
+                raise ValueError("No readable text was extracted from this PDF")
+            await save_textbook_chunks(textbook_id, selected_chunks)
+            await db.textbooks.update_one({"id": textbook_id}, {"$set": {
+                "status": "indexed",
+                "chunk_count": len(chunks),
+                "processing": {"kind": "ingestion", "status": "ready", "completed": len(chunks), "total": len(chunks), "attempt": int((textbook.get("processing") or {}).get("attempt", 0)) + 1, "error": None, "finished_at": utcnow_iso()},
+            }})
+            await record_activity(owner_id, "textbook.indexed", {"textbook_id": textbook_id, "chunks": len(chunks)})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("PDF extraction failed for %s", textbook_id)
+            await db.textbooks.update_one({"id": textbook_id}, {"$set": {
+                "status": "extraction_failed",
+                "processing.status": "failed",
+                "processing.error": str(exc)[:500],
+                "processing.finished_at": utcnow_iso(),
+            }})
+            await record_activity(owner_id, "textbook.indexing_failed", {"textbook_id": textbook_id})
 
 
 # =========================================================
@@ -587,6 +640,20 @@ async def startup():
         logger.info("Indexes ensured")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"index create: {e}")
+
+    # Resume durable ingestion records after a deploy/restart.  The PDF is
+    # already in GCS, so restarting only delays the job; it never loses it.
+    try:
+        recoverable = await db.textbooks.find(
+            {"is_deleted": False, "status": {"$in": ["queued", "ingesting"]}},
+            {"_id": 0, "id": 1, "owner_id": 1},
+        ).to_list(100)
+        for textbook in recoverable:
+            _spawn(_run_ingestion(textbook["id"], textbook["owner_id"]))
+        if recoverable:
+            logger.info("Rescheduled %s interrupted/queued textbook jobs", len(recoverable))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not recover textbook jobs: %s", e)
 
     # Recover orphaned background jobs. Background tasks live in-process, so
     # anything still marked "pending" at startup was interrupted by a previous
@@ -1101,10 +1168,9 @@ async def upload_textbook(
     path = f"{APP_NAME}/textbooks/{user['id']}/{textbook_id}.pdf"
     result = put_object(path, data, "application/pdf")
 
-    # Insert the book in `ingesting` state immediately, then run text
-    # extraction + OCR in a background task. Large scanned PDFs (e.g. ICSE
-    # textbooks of 200+ pages) can take 60-120s of OCR, which blocks the
-    # uvicorn worker and trips the proxy 502 timeout when done inline.
+    # The durable Firestore status is written before processing is scheduled.
+    # It is the source of truth after navigation, a browser refresh, or a VM
+    # restart; the UI must never infer progress from a component-local task.
     doc = {
         "id": textbook_id,
         "owner_id": user["id"],
@@ -1113,10 +1179,11 @@ async def upload_textbook(
         "content_sha256": content_sha256,
         "subject": subject,
         "class_name": class_name,
-        "status": "ingesting",
+        "status": "queued",
         "chunk_count": 0,
-        "chunks": [],
+        "chunk_storage": "textbook_chunks",
         "topics": [],
+        "processing": {"kind": "ingestion", "status": "queued", "completed": 0, "total": 0, "attempt": 0, "error": None, "queued_at": utcnow_iso()},
         "is_shared": shared_flag,
         "created_at": utcnow_iso(),
         "is_deleted": False,
@@ -1124,39 +1191,12 @@ async def upload_textbook(
     await db.textbooks.insert_one(doc)
     await record_activity(user["id"], "textbook.uploaded", {"textbook_id": textbook_id, "subject": subject, "class_name": class_name})
 
-    async def _ingest():
-        try:
-            text = await asyncio.to_thread(extract_text, data)
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"PDF extraction failed for {textbook_id}: {e}")
-            await db.textbooks.update_one(
-                {"id": textbook_id},
-                {"$set": {"status": "extraction_failed"}},
-            )
-            await record_activity(user["id"], "textbook.indexing_failed", {"textbook_id": textbook_id})
-            return
-        chunks = chunk_text(text)
-        await db.textbooks.update_one(
-            {"id": textbook_id},
-            {"$set": {
-                "status": "indexed" if chunks else "extraction_failed",
-                "chunk_count": len(chunks),
-                # Spread across the whole book rather than keeping the first N
-                # — see spread_chunks(). chunk_count stays the true total.
-                "chunks": spread_chunks(chunks),
-            }},
-        )
-        await record_activity(user["id"], "textbook.indexed" if chunks else "textbook.indexing_failed", {"textbook_id": textbook_id, "chunks": len(chunks)})
-
-    # Keep a strong process-level reference to ingestion. A bare create_task()
-    # is only weakly held by asyncio and can disappear after the upload request
-    # finishes (for example when the user navigates away from Textbooks).
-    # _spawn keeps the job alive independently of the page/request lifecycle.
-    _spawn(_ingest())
+    _spawn(_run_ingestion(textbook_id, user["id"], data))
 
     return {
         "id": textbook_id,
         "status": doc["status"],
+        "processing": doc["processing"],
         "chunk_count": doc["chunk_count"],
         "original_filename": file.filename,
         "is_shared": shared_flag,
@@ -1189,6 +1229,8 @@ async def list_textbooks(user: dict = Depends(get_current_user)):
             "class_name": t["class_name"],
             "status": t["status"],
             "topic_count": len(t.get("topics", [])),
+            "processing": t.get("processing"),
+            "topic_extraction": t.get("topic_extraction"),
             "is_shared": t.get("is_shared", False),
             "is_owned": t["owner_id"] == user["id"],
             "created_at": t["created_at"],
@@ -1218,12 +1260,14 @@ async def reindex_textbook(textbook_id: str, user: dict = Depends(get_current_us
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Re-extraction failed: {e}")
     chunks = chunk_text(text)
+    if chunks:
+        await save_textbook_chunks(textbook_id, spread_chunks(chunks))
     await db.textbooks.update_one(
         {"id": textbook_id},
         {
             "$set": {
-                "chunks": spread_chunks(chunks),
                 "chunk_count": len(chunks),
+                "chunk_storage": "textbook_chunks",
                 "status": "indexed" if chunks else "extraction_failed",
                 "topics": [],  # force re-extraction
             }
@@ -1236,8 +1280,8 @@ async def reindex_textbook(textbook_id: str, user: dict = Depends(get_current_us
     }
 
 
-async def _extract_book_topics(tb):
-    chunks = tb.get("chunks") or []
+async def _extract_book_topics_inner(tb):
+    chunks = await load_textbook_chunks(tb)
     batches = [list(range(i, min(i + 10, len(chunks)))) for i in range(0, len(chunks), 10)]
     results = []
     try:
@@ -1265,6 +1309,13 @@ async def _extract_book_topics(tb):
         return {"status": "failed", "error": str(exc)[:500]}
 
 
+async def _extract_book_topics(tb):
+    """Bound topic extraction so book uploads cannot create an LLM stampede."""
+    async with _TOPIC_SEMAPHORE:
+        await db.textbooks.update_one({"id": tb["id"]}, {"$set": {"status": "topics_extracting"}})
+        return await _extract_book_topics_inner(tb)
+
+
 @api_router.post("/textbooks/{textbook_id}/extract-topics")
 async def extract_topics(textbook_id: str, background: bool = False, user: dict = Depends(get_current_user)):
     tb = await db.textbooks.find_one({"id": textbook_id, "is_deleted": False}, {"_id": 0})
@@ -1272,7 +1323,7 @@ async def extract_topics(textbook_id: str, background: bool = False, user: dict 
         raise HTTPException(status_code=404, detail="Textbook not found")
     if tb["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Only the owner or an admin can reindex this textbook.")
-    chunks = tb.get("chunks") or []
+    chunks = await load_textbook_chunks(tb)
     if not chunks:
         raise HTTPException(status_code=400, detail="No indexed text available; upload a readable textbook first.")
     progress = {"status": "running", "completed": 0, "total": (len(chunks) + 9) // 10, "error": None, "started_at": utcnow_iso()}
@@ -1427,6 +1478,13 @@ async def _load_feedback_hints(user_id: str, subject: str, class_name: str) -> s
     return await load_paper_feedback_hints(user_id, subject, class_name)
 
 
+async def _hydrate_textbook_chunks(textbooks: list[dict]) -> list[dict]:
+    """Attach content only on generation paths, never on library listings."""
+    for textbook in textbooks:
+        textbook["chunks"] = await load_textbook_chunks(textbook)
+    return textbooks
+
+
 async def _paper_generation_inputs(paper: dict) -> tuple:
     """(context_excerpt, feedback_hints) for an existing paper.
 
@@ -1445,6 +1503,7 @@ async def _paper_generation_inputs(paper: dict) -> tuple:
         )
         if tb:
             books.append(tb)
+    await _hydrate_textbook_chunks(books)
     context_excerpt = topic_context(books, (paper.get("generation_requirements") or {}).get("section_allocations") or paper.get("topics"))
 
     feedback_hints = await load_paper_feedback_hints(
@@ -1503,6 +1562,8 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         ):
             raise HTTPException(status_code=403, detail="Forbidden")
         textbooks.append(tb)
+
+    await _hydrate_textbook_chunks(textbooks)
 
     resolved = None
     if req.blueprint_id or req.section_topic_allocations is not None:
@@ -1650,6 +1711,24 @@ async def update_paper(
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
+    # Papers produced during the brief strict-validation rollout were stored
+    # as failed even though their content is usable and the recovery pipeline
+    # can still improve it. Restore only those recognizable validation cases;
+    # real provider/generation failures remain failures.
+    legacy_error = str(p.get("generation_error") or "").lower()
+    if p.get("generation_status") == "failed" and (
+        "total marks" in legacy_error or "invalid cognitive type" in legacy_error
+    ):
+        await db.papers.update_one(
+            {"id": paper_id},
+            {"$set": {
+                "generation_status": "ready",
+                "generation_error": None,
+                "generation_recovery": {"status": "queued", "mismatches": p.get("generation_error")},
+            }},
+        )
+        p["generation_status"] = "ready"
+        p["generation_error"] = None
 
     set_fields: dict = {}
     if update.title is not None:

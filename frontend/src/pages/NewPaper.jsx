@@ -163,6 +163,28 @@ export default function NewPaper() {
     });
   }, [selectedTbIds]); // eslint-disable-line
 
+  // Details may become ready while this screen is open (or after extraction
+  // was started on the Textbooks screen). Refresh only selected active books
+  // so the topic picker cannot remain stuck with an old empty cache.
+  useEffect(() => {
+    const activeIds = selectedTbIds.filter((id) => {
+      const listStatus = textbooks.find((book) => book.id === id)?.status;
+      const detailStatus = tbDetails[id]?.topic_extraction?.status;
+      return ["queued", "ingesting", "topics_extracting"].includes(listStatus) || detailStatus === "running";
+    });
+    if (!activeIds.length) return undefined;
+    const refresh = async () => {
+      const pairs = await Promise.all(activeIds.map(async (id) => [id, (await api.get(`/textbooks/${id}`)).data]));
+      setTbDetails((current) => ({ ...current, ...Object.fromEntries(pairs) }));
+      setTextbooks((current) => current.map((book) => {
+        const detail = Object.fromEntries(pairs)[book.id];
+        return detail ? { ...book, status: detail.status, topic_extraction: detail.topic_extraction } : book;
+      }));
+    };
+    const timer = window.setInterval(() => { refresh().catch(() => {}); }, 3000);
+    return () => window.clearInterval(timer);
+  }, [selectedTbIds, textbooks, tbDetails]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const addTextbook = (id) => {
     if (!id) return;
     if (selectedTbIds.includes(id)) return;

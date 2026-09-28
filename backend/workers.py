@@ -38,6 +38,7 @@ from section_blueprints import allocation_coverage
 from question_dedupe import dedupe_sections, is_duplicate
 from question_repair import complete_sections
 from storage import APP_NAME, put_object
+from textbook_content import load_textbook_chunks
 from topic_balance import measure_coverage, partition_topics, topic_shortfall
 from token_usage import tag
 
@@ -653,9 +654,10 @@ async def generate_paper_background(
     if final_type_misses:
         final_check["misses"].append("One or more questions had an invalid cognitive type.")
         final_check["honoured"] = False
-    # A short response is recoverable by the existing top-up worker, so do not
-    # fail it here. Marks and invalid cognitive types are not recoverable by
-    # adding questions, and must block publication/export until regenerated.
+    # Validation mismatches are recoverable. Publish the usable paper, retain
+    # the details for the review/recovery pipeline, and let the existing
+    # top-up/recovery work continue in the background. A mismatch must never
+    # turn a generated paper into a terminal "failed" screen.
     mark_misses = [
         miss for miss in final_check["misses"]
         if "total marks" in miss.lower()
@@ -674,8 +676,12 @@ async def generate_paper_background(
             "section_plan": section_plan,
             "question_count": count_questions(sections),
             "diagrams_pending": pending_count,
-            "generation_status": "ready" if not validation_error else "failed",
-            "generation_error": validation_error,
+            "generation_status": "ready",
+            "generation_error": None,
+            "generation_recovery": (
+                {"status": "queued", "mismatches": validation_error}
+                if validation_error else None
+            ),
             "generation_progress.completed": count_questions(sections),
             "generation_progress.total": target_q,
             "generation_progress.status": "ready",
@@ -707,10 +713,10 @@ async def generate_paper_background(
             ),
         }},
     )
-    await record_activity(owner_id, "paper.ready" if not validation_error else "paper.failed", {"paper_id": paper_id, "questions": count_questions(sections)})
+    await record_activity(owner_id, "paper.ready", {"paper_id": paper_id, "questions": count_questions(sections)})
 
     # Kick off diagram generation asynchronously.
-    if pending_count > 0 and not validation_error:
+    if pending_count > 0:
         await generate_diagrams_background(paper_id, owner_id)
 
     # Last: if the paper is still short of what it was meant to be, top it
@@ -1708,7 +1714,7 @@ async def _solution_context(paper: dict, user_id: str) -> tuple[str, str]:
             {"id": tid, "is_deleted": False}, {"_id": 0}
         )
         if tb:
-            merged_chunks.extend((tb.get("chunks") or [])[:max_per])
+            merged_chunks.extend((await load_textbook_chunks(tb))[:max_per])
     context_excerpt = "\n\n".join(merged_chunks)[:8000]
 
     feedback_hints = await load_solution_feedback(

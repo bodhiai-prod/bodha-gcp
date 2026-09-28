@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from auth import get_current_user
 from activity import record_activity
 from deps import api_router, db, logger, utcnow_iso
+from textbook_content import load_textbook_chunks
 from workers import generate_paper_background
 
 
@@ -135,7 +136,7 @@ async def create_mock_test(req: MockTestCreate, user: dict = Depends(get_current
     merged_chunks: list = []
     max_per = max(2, 8 // max(1, len(textbooks)))
     for tb in textbooks:
-        merged_chunks.extend((tb.get("chunks") or [])[:max_per])
+        merged_chunks.extend((await load_textbook_chunks(tb))[:max_per])
     context_excerpt = "\n\n".join(merged_chunks)[:10000]
 
     topics_weighted = [{"name": t.strip(), "weight": 5} for t in req.topics if t.strip()]

@@ -12,6 +12,15 @@ import {
   CaretDown,
 } from "@phosphor-icons/react";
 
+const ACTIVE_STATUSES = new Set(["queued", "ingesting", "topics_extracting"]);
+const ACTIVE_BOOKS_KEY = "bodha.activeTextbookIds";
+const isBookActive = (book) => ACTIVE_STATUSES.has(book.status) || book.topic_extraction?.status === "running";
+
+const rememberActiveBooks = (books) => {
+  const ids = books.filter(isBookActive).map((book) => book.id);
+  window.localStorage.setItem(ACTIVE_BOOKS_KEY, JSON.stringify(ids));
+};
+
 export default function Textbooks() {
   const [textbooks, setTextbooks] = useState([]);
   const [subject, setSubject] = useState("");
@@ -26,6 +35,7 @@ export default function Textbooks() {
   const load = async () => {
     const { data } = await api.get("/textbooks");
     setTextbooks(data);
+    rememberActiveBooks(data);
   };
 
   useEffect(() => {
@@ -36,7 +46,7 @@ export default function Textbooks() {
   // this page is visible, refresh pending rows so completion appears without a
   // manual reload. The interval is removed automatically on navigation.
   useEffect(() => {
-    if (!textbooks.some((tb) => tb.status === "ingesting")) return undefined;
+    if (!textbooks.some(isBookActive)) return undefined;
     const interval = window.setInterval(() => {
       load().catch(() => {});
     }, 3000);
@@ -76,8 +86,9 @@ export default function Textbooks() {
           { headers: { "Content-Type": "multipart/form-data" } }
         );
 
+      let response;
       try {
-        await uploadFile();
+        response = await uploadFile();
       } catch (err) {
         const detail = err?.response?.data?.detail;
         if (
@@ -96,8 +107,10 @@ export default function Textbooks() {
           toast.message("Duplicate upload cancelled");
           return;
         }
-        await uploadFile(true);
+        response = await uploadFile(true);
       }
+      const active = JSON.parse(window.localStorage.getItem(ACTIVE_BOOKS_KEY) || "[]");
+      window.localStorage.setItem(ACTIVE_BOOKS_KEY, JSON.stringify([...new Set([...active, response.data.id])]));
       toast.success("Upload accepted — ingestion is continuing in the background");
       setFile(null);
       setSubject("");
@@ -113,17 +126,40 @@ export default function Textbooks() {
   const extractTopics = async (id) => {
     setExtractingId(id);
     try {
-      const { data } = await api.post(`/textbooks/${id}/extract-topics`);
-      setDetailTopics({ ...detailTopics, [id]: data.topics });
-      setExpanded({ ...expanded, [id]: true });
-      toast.success("Topics extracted");
+      const { data } = await api.post(`/textbooks/${id}/extract-topics?background=true`);
+      if (data.status === "running") {
+        toast.message("Topic extraction is continuing in the background");
+      } else {
+        setDetailTopics({ ...detailTopics, [id]: data.topics });
+        setExpanded({ ...expanded, [id]: true });
+        toast.success("Topics extracted");
+      }
       await load();
     } catch (err) {
-      toast.error(err?.response?.data?.detail || "Extraction failed");
-    } finally {
       setExtractingId(null);
+      toast.error(err?.response?.data?.detail || "Extraction failed");
     }
   };
+
+  useEffect(() => {
+    if (!extractingId) return undefined;
+    const interval = window.setInterval(async () => {
+      try {
+        const { data } = await api.get(`/textbooks/${extractingId}`);
+        if (data.topic_extraction?.status === "ready" || data.topic_extraction?.status === "failed") {
+          setExtractingId(null);
+          if (data.topic_extraction.status === "ready") {
+            setDetailTopics((current) => ({ ...current, [extractingId]: data.topics || [] }));
+            toast.success("Topics extracted");
+          } else {
+            toast.error(data.topic_extraction.error || "Topic extraction failed");
+          }
+          await load();
+        }
+      } catch { /* next poll will retry */ }
+    }, 2000);
+    return () => window.clearInterval(interval);
+  }, [extractingId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const deleteTextbook = async (id) => {
     if (!window.confirm("Delete this textbook?")) return;
@@ -291,6 +327,11 @@ export default function Textbooks() {
                         >
                           {tb.status.replace("_", " ")}
                         </span>
+                        {isBookActive(tb) && (
+                          <span className="text-xs text-neutral-500">
+                            {tb.processing?.status === "queued" ? "Waiting for worker" : "Processing in background"}
+                          </span>
+                        )}
                         {tb.topic_count > 0 && (
                           <span className="qp-badge whitespace-nowrap">
                             {tb.topic_count} topics
