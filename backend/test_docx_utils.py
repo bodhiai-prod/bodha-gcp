@@ -97,6 +97,28 @@ def test_docx_renders_integrals_and_summations_as_native_nary_math():
     assert "<m:oMathPara>" not in document_xml
 
 
+def test_docx_renders_blackboard_bold_and_common_set_commands_without_raw_latex():
+    paper = _paper()
+    paper["sections"][0]["questions"][0]["question"] = (
+        r"For $f:\mathbb{R}\to\mathbb{R}$, find $\mathbb{R}\setminus\{-2,2\}$ "
+        r"and $1\mapsto a$; evaluate $\int \left(2x+3x^{-2}\right)dx$."
+    )
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    assert "mathbb" not in document_xml
+    assert "setminus" not in document_xml
+    assert "mapsto" not in document_xml
+    assert "&gt;left&lt;" not in document_xml
+    assert "ℝ" in document_xml
+    assert "∖" in document_xml
+    assert "↦" in document_xml
+    assert "<m:nary>" in document_xml
+    assert '<m:subHide m:val="1"' in document_xml
+    assert '<m:supHide m:val="1"' in document_xml
+
+
 def test_docx_renders_template_section_instruction_before_question_number():
     paper = _paper()
     paper["generation_requirements"] = {"blueprint": {

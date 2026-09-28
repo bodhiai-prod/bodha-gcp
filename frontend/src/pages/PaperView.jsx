@@ -421,7 +421,7 @@ export default function PaperView() {
               <b>{paper.subject}</b> · Class <b>{paper.class_name}</b>.
             </p>
             <p className="text-sm text-neutral-500 mt-4">
-              Progress updates automatically as question batches finish.
+              Progress updates automatically through each generation phase.
             </p>
             <div className="generation-progress" aria-live="polite">
               <div className="generation-progress-heading"><span>{phaseLabel}</span><strong>{configuredCount > 0 ? `${generatedCount} / ${configuredCount}` : `${generatedCount} generated`}</strong></div>
@@ -689,9 +689,24 @@ export default function PaperView() {
           <div className="no-print mb-6 border border-amber-300 bg-amber-50 p-4"
             data-testid="paper-requirements-check">
             <p className="font-bold text-sm">Some requested settings need review</p>
-            <ul className="list-disc pl-5 mt-2 text-sm">
-              {(paper.instruction_check.misses || []).map((miss, index) => <li key={index}>{miss}</li>)}
-            </ul>
+            <p className="mt-2 text-sm">
+              {paper.review_status?.summary || paper.instruction_check.misses?.[0] || "The generated paper needs review."}
+            </p>
+            {(paper.review_status?.issues || []).length > 0 && (
+              <details className="mt-2 text-xs text-neutral-700">
+                <summary className="cursor-pointer font-bold">Technical details</summary>
+                <ul className="list-disc pl-5 mt-2">
+                  {(paper.review_status.issues || []).slice(0, 10).map((issue, index) => (
+                    <li key={`${issue.code || "issue"}-${index}`}>
+                      {issue.message || `${issue.code || "validation issue"}${issue.count ? ` (${issue.count})` : ""}`}
+                    </li>
+                  ))}
+                  {paper.review_status.issues.length > 10 && (
+                    <li>{paper.review_status.issues.length - 10} additional diagnostics were grouped.</li>
+                  )}
+                </ul>
+              </details>
+            )}
           </div>
         )}
         {/* Toolbar */}

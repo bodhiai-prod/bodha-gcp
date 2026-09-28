@@ -27,8 +27,8 @@ from llm_adapter import (
 )
 from prompts import (
     derive_target_question_count,
+    normal_slots_prompt,
     regen_question_prompt,
-    resolve_shares,
     qgen_prompt,
     solution_prompt,
     REGEN_SYSTEM,
@@ -49,11 +49,22 @@ from section_blueprints import (
 from generation_requirements import compile_requirements, remaining_requirements
 from section_blueprints import allocation_coverage
 from question_dedupe import dedupe_sections, is_duplicate
-from question_repair import complete_sections
+from question_repair import complete_sections, validate_question
 from storage import APP_NAME, put_object
 from textbook_content import load_textbook_chunks
-from topic_balance import measure_coverage, partition_topics, topic_shortfall
+from topic_balance import measure_coverage, topic_shortfall
 from token_usage import tag
+from normal_paper_contract import (
+    NORMAL_CONTRACT_VERSION,
+    compile_normal_plan,
+    materialize_normal_sections,
+    merge_normal_sections,
+    missing_plan_slots,
+    normal_slot_batches,
+    normalize_normal_sections,
+    review_status as normal_review_status,
+    validate_normal_plan,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -271,16 +282,14 @@ def _normalise_paper_questions(
 # Question paper generation
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-# Batched generation with live progress
+# Slot generation with live phase progress
 # ---------------------------------------------------------------------------
-# A full-paper request cannot expose meaningful question progress until the
-# provider finishes. Small batches both avoid large-response truncation and let
-# the app persist a truthful count after each completed model response.
-# Small, sequential batches make question-generation progress truthful: a
-# completed count is only written after the corresponding model response has
-# been parsed. Sequential calls also let each later prompt avoid questions in
-# every preceding batch.
-SCHOOL_PROGRESS_BATCH_SIZE = int(os.environ.get("SCHOOL_PROGRESS_BATCH_SIZE", "4"))
+# Ordinary papers up to 25 questions use one provider request. Larger papers
+# use immutable slot batches of at most 20 with bounded parallelism; batching
+# never recompiles topics, marks, formats, types, or section structure.
+NORMAL_SINGLE_CALL_LIMIT = int(os.environ.get("NORMAL_SINGLE_CALL_LIMIT", "25"))
+NORMAL_BATCH_SIZE = int(os.environ.get("NORMAL_BATCH_SIZE", "20"))
+NORMAL_BATCH_CONCURRENCY = int(os.environ.get("NORMAL_BATCH_CONCURRENCY", "3"))
 # One response-format retry absorbs a malformed/truncated provider reply
 # without changing paper state. Validation failures are deliberately not
 # retried here; their dedicated recovery paths retain the existing candidate.
@@ -319,136 +328,131 @@ async def _request_paper_json(*, system_message: str, user_text: str, ref: str, 
     raise RuntimeError("The AI provider did not return a paper response.")
 
 
-def _batch_sizes(total: int, batch_size: int) -> list:
-    """Split `total` questions into near-equal batches of at most `batch_size`."""
-    num = max(1, (total + batch_size - 1) // max(1, batch_size))
-    sizes = [total // num] * num
-    for i in range(total - sum(sizes)):
-        sizes[i] += 1
-    return [n for n in sizes if n > 0]
-
-
-def _batch_mark_totals(total_marks: int, sizes: list[int]) -> list[int]:
-    """Split marks across batches without losing marks to independent rounding."""
-    if not sizes:
-        return []
-    total = max(1, int(total_marks))
-    base, remainder = divmod(total, len(sizes))
-    return [max(1, base + (1 if index < remainder else 0)) for index in range(len(sizes))]
-
-
-def _merge_batch_sections(merged: dict, order: list, sections: list) -> None:
-    """Fold one batch's sections into the accumulator, keyed by section title.
-
-    Merging by title rather than concatenating is what lets a batched paper
-    keep the multi-section structure a single call would have produced -- two
-    batches that both wrote a "Section A" contribute to one heading, not two.
-    """
-    for sec in sections or []:
-        title = str(sec.get("title") or "").strip() or "Section A"
-        if title not in merged:
-            merged[title] = {"title": title, "questions": []}
-            order.append(title)
-        merged[title]["questions"].extend(
-            q for q in (sec.get("questions") or []) if isinstance(q, dict)
-        )
-
-
-async def _generate_paper_in_batches(
+async def _generate_normal_slot_batch(
     *,
+    slots: list[dict],
+    plan: dict,
+    subject: str,
+    klass: str,
+    context_excerpt: str,
+    custom_instructions: str,
+    feedback_hints: str,
+    existing_questions: list,
     ref: str,
-    target_q: int,
-    topics_weighted: list,
-    spec: dict,
-    total_marks: int,
-    system_message: str,
-    prompt_kwargs: dict,
-    on_batch_complete=None,
-) -> dict:
-    """Generate a paper in sequential, progress-reporting batches.
-
-    Returns the same {"instructions", "sections"} shape one call returns, so
-    everything downstream -- completion, dedupe, LaTeX repair, the diagram
-    policy -- is unchanged and does not know the difference.
-
-    A failed batch costs its own questions and nothing else; the paper comes
-    back short and the existing top-up path fills it, which is strictly better
-    than losing the whole paper to one bad response.
-    """
-    sizes = _batch_sizes(target_q, SCHOOL_PROGRESS_BATCH_SIZE)
-    batch_marks = _batch_mark_totals(total_marks, sizes)
-    names = [
-        str(t.get("name", "")).strip()
-        for t in topics_weighted or []
-        if str(t.get("name", "")).strip()
-    ]
-    weight_of = {
-        str(t.get("name", "")).strip(): t.get("weight", 5)
-        for t in topics_weighted or []
-    }
-    topic_sets = partition_topics(names, sizes)
-
-    merged: dict = {}
-    order: list = []
-    instructions = ""
-    failures = 0
-
-    for index, size in enumerate(sizes):
-        # Every later request sees the questions from every earlier batch, so
-        # it can avoid duplicates and satisfy the remaining quotas exactly.
-        sections_so_far = [merged[t] for t in order]
-        written = [
-            q.get("question", "")
-            for s in sections_so_far
-            for q in s["questions"]
-            if q.get("question")
-        ]
-
-        batch_topics = [
-            {"name": name, "weight": weight_of.get(name, 5)} for name in topic_sets[index]
-        ] or list(topics_weighted or [])
-        batch_spec = remaining_requirements(spec, sections_so_far, size)
-        # The remaining-requirements helper preserves the full paper's mark
-        # target for a final top-up. This is an initial-generation batch, so
-        # its prompt must use only this batch's mark share.
-        batch_spec.pop("total_marks", None)
-        kwargs = dict(prompt_kwargs)
-        kwargs.update(
-            topics_weighted=batch_topics,
-            total_marks=batch_marks[index],
-            total_questions=size,
-            existing_questions=written,
-            spec=batch_spec,
-        )
-        try:
-            result = await _request_paper_json(
-                system_message=system_message,
-                user_text=qgen_prompt(**kwargs),
-                ref=f"{ref}:batch-{index + 1}",
-            )
-        except Exception as exc:  # noqa: BLE001
-            failures += 1
-            logger.warning(f"[batch] {ref or '-'} batch {index + 1} failed: {exc}")
-            continue
-
-        if not instructions:
-            instructions = (result or {}).get("instructions", "") or ""
-        _merge_batch_sections(merged, order, (result or {}).get("sections"))
-        if on_batch_complete:
-            completed = min(target_q, sum(len(merged[title]["questions"]) for title in order))
-            await on_batch_complete(completed, index + 1, len(sizes))
-
-    produced = sum(len(merged[t]["questions"]) for t in order)
-    if not produced:
-        raise RuntimeError(
-            "Every generation batch failed - the upstream provider is not "
-            "responding right now. Try again in a few minutes."
-        )
-    logger.info(
-        f"[batch] {ref or '-'} batches={len(sizes)} produced={produced} "
-        f"target={target_q} failed={failures}"
+) -> list:
+    """Generate one slot batch and retry only identities that were omitted."""
+    prompt = normal_slots_prompt(
+        subject=subject,
+        klass=klass,
+        slots=slots,
+        context_excerpt=context_excerpt,
+        custom_instructions=custom_instructions,
+        feedback_hints=feedback_hints,
+        existing_questions=existing_questions,
     )
-    return {"instructions": instructions, "sections": [merged[t] for t in order]}
+    data = await _request_paper_json(
+        system_message=(
+            "Write original exam-question content for immutable server slots. "
+            "Return strict JSON only."
+        ),
+        user_text=prompt,
+        ref=ref,
+    )
+    sections, missing, _unknown = materialize_normal_sections(data, plan, only_slots=slots)
+    if not missing:
+        return sections
+
+    missing_set = set(missing)
+    missing_slots = [slot for slot in slots if slot["slot_id"] in missing_set]
+    retry = await _request_paper_json(
+        system_message=(
+            "Fill only the missing immutable exam-question slots. Return strict JSON only."
+        ),
+        user_text=normal_slots_prompt(
+            subject=subject,
+            klass=klass,
+            slots=missing_slots,
+            context_excerpt=context_excerpt,
+            custom_instructions=custom_instructions,
+            feedback_hints=feedback_hints,
+            existing_questions=[
+                *existing_questions,
+                *(q.get("question", "") for section in sections for q in section.get("questions") or []),
+            ],
+        ),
+        ref=f"{ref}:missing-slots",
+    )
+    recovered, _still_missing, _unknown = materialize_normal_sections(
+        retry, plan, only_slots=missing_slots
+    )
+    return merge_normal_sections(plan, sections, recovered)
+
+
+async def _generate_normal_candidate(
+    *,
+    plan: dict,
+    subject: str,
+    klass: str,
+    context_excerpt: str,
+    custom_instructions: str,
+    feedback_hints: str,
+    ref: str,
+    on_batch_complete=None,
+    only_slots: list[dict] | None = None,
+    existing_questions: list | None = None,
+) -> dict:
+    """Generate a normal paper in one call or bounded parallel slot batches."""
+    slots = list(only_slots if only_slots is not None else plan.get("slots") or [])
+    batches = normal_slot_batches(
+        slots,
+        single_call_limit=NORMAL_SINGLE_CALL_LIMIT,
+        batch_size=NORMAL_BATCH_SIZE,
+    )
+    semaphore = _asyncio.Semaphore(max(1, NORMAL_BATCH_CONCURRENCY))
+    completed = 0
+    completed_batches = 0
+    completed_lock = _asyncio.Lock()
+
+    async def run(index: int, batch: list[dict]) -> list:
+        nonlocal completed, completed_batches
+        async with semaphore:
+            sections = await _generate_normal_slot_batch(
+                slots=batch,
+                plan=plan,
+                subject=subject,
+                klass=klass,
+                context_excerpt=context_excerpt,
+                custom_instructions=custom_instructions,
+                feedback_hints=feedback_hints,
+                existing_questions=list(existing_questions or []),
+                ref=f"{ref}:slot-batch-{index + 1}",
+            )
+        async with completed_lock:
+            completed += sum(len(section.get("questions") or []) for section in sections)
+            completed_batches += 1
+            if on_batch_complete:
+                await on_batch_complete(
+                    min(len(slots), completed), completed_batches, len(batches)
+                )
+        return sections
+
+    results = await _asyncio.gather(
+        *(run(index, batch) for index, batch in enumerate(batches)),
+        return_exceptions=True,
+    )
+    valid = []
+    for index, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.warning("Normal slot batch %s failed for %s: %s", index + 1, ref, result)
+            continue
+        valid.append(result)
+    sections = merge_normal_sections(plan, *valid)
+    if not count_questions(sections):
+        raise RuntimeError(
+            "The AI provider could not produce any usable question content "
+            "after automatic recovery. Please retry generation."
+        )
+    return {"instructions": "", "sections": sections}
 
 
 async def generate_paper_background(
@@ -498,9 +502,33 @@ async def generate_paper_background(
         instruction_spec=instruction_spec, blueprint_spec=blueprint_spec,
         has_blueprint=bool(section_blueprint.strip()),
     )
-    if spec.get("total_questions") and not spec.get("section_allocations"):
-        spec["topic_counts"] = resolve_shares(topics_weighted, spec["total_questions"])
-    await db.papers.update_one({"id": paper_id}, {"$set": {"generation_requirements": spec}})
+    normal_plan = None
+    if (
+        spec.get("total_questions")
+        and not spec.get("section_allocations")
+        and not (section_blueprint or "").strip()
+    ):
+        # Zero allocations are an apportionment implementation detail, never a
+        # request the provider or teacher should be asked to satisfy.
+        try:
+            normal_plan = compile_normal_plan(spec, topics_weighted, total_marks)
+            spec["topic_counts"] = dict(normal_plan.get("topic_counts") or {})
+        except Exception as exc:  # configuration can also be changed by parsed instructions
+            await db.papers.update_one(
+                {"id": paper_id, "generation_status": "pending"},
+                {"$set": {
+                    "generation_status": "failed",
+                    "generation_error": str(exc),
+                    "generation_progress.status": "failed",
+                    "generation_progress.phase": "failed",
+                    "generation_progress.updated_at": utcnow_iso(),
+                }},
+            )
+            return
+    await db.papers.update_one({"id": paper_id}, {"$set": {
+        "generation_requirements": spec,
+        **({"normal_generation_plan": normal_plan} if normal_plan else {}),
+    }})
     # Hoisted above the generation call because the batching decision needs it.
     # Same number the prompt is built from, or the coverage check below would
     # measure the paper against a target the model was never given.
@@ -526,12 +554,10 @@ async def generate_paper_background(
         "You create original, high-quality exam questions in strict JSON. "
         "Never copy textbook content."
     )
-    # A blueprint paper is never batched, section allocations or not. The
-    # blueprint fixes per-section structure that batch slicing has no way to
-    # honour: splitting a paper by topic would cut across the very sections the
-    # allocation contract is defined in terms of.
-    batched = not (section_blueprint or "").strip() and not spec.get("section_allocations")
-    prompt = None if batched else qgen_prompt(**prompt_kwargs)
+    # Templates retain their compiled blueprint contract. Ordinary papers use
+    # the server-owned slot plan and never ask the provider to invent sections.
+    batched = bool(normal_plan and len(normal_plan.get("slots") or []) > NORMAL_SINGLE_CALL_LIMIT)
+    prompt = None if normal_plan else qgen_prompt(**prompt_kwargs)
 
     async def update_progress(completed: int, batch: int = 0, batch_total: int = 0, phase: str = "generating") -> None:
         await db.papers.update_one(
@@ -549,15 +575,15 @@ async def generate_paper_background(
 
     await update_progress(0, phase="generating")
     try:
-        if batched:
-            data = await _generate_paper_in_batches(
+        if normal_plan:
+            data = await _generate_normal_candidate(
                 ref=paper_id,
-                target_q=target_q,
-                topics_weighted=topics_weighted,
-                spec=spec,
-                total_marks=total_marks,
-                system_message=system_message,
-                prompt_kwargs=prompt_kwargs,
+                plan=normal_plan,
+                subject=subject,
+                klass=klass,
+                context_excerpt=context_excerpt,
+                custom_instructions=custom_instructions,
+                feedback_hints=feedback_hints,
                 on_batch_complete=update_progress,
             )
         else:
@@ -611,7 +637,8 @@ async def generate_paper_background(
     # full-paper call. A blueprint WITH allocations has a real total and is
     # still corrected, which is what its own tests expect.
     if (
-        prompt is not None
+        normal_plan is None
+        and prompt is not None
         and spec.get("total_questions")
         and not initial_check["honoured"]
         and count_questions(sections) >= spec["total_questions"]
@@ -644,7 +671,11 @@ async def generate_paper_background(
     # Capture the first valid set of headings as this paper's durable section
     # plan. From here on recovered and top-up questions are routed by ID, not
     # by whatever display title the provider happens to emit.
-    sections, section_plan, _ = reconcile_section_plan(sections, None, spec)
+    if normal_plan:
+        sections, _ = normalize_normal_sections(sections, normal_plan)
+        section_plan = list(normal_plan.get("sections") or [])
+    else:
+        sections, section_plan, _ = reconcile_section_plan(sections, None, spec)
     hydrate_section_instructions({"generation_requirements": spec, "sections": sections})
 
     # Finish the questions that arrived structurally incomplete: an MCQ with
@@ -657,6 +688,71 @@ async def generate_paper_background(
         context={"subject": subject, "klass": klass, "difficulty": difficulty},
         flags=coercions,
     )
+
+    # A transport-salvaged slot can exist while its content is still unusable
+    # (for example a truncated stem or a three-option MCQ). Retry only those
+    # immutable identities once and never disturb the accepted slots.
+    if normal_plan:
+        invalid_slot_ids = {
+            question.get("slot_id")
+            for section in sections
+            for question in section.get("questions") or []
+            if validate_question(question)
+        }
+        invalid_slots = [
+            slot for slot in normal_plan.get("slots") or []
+            if slot.get("slot_id") in invalid_slot_ids
+        ]
+        if invalid_slots:
+            try:
+                replacement_data = await _generate_normal_candidate(
+                    only_slots=invalid_slots,
+                    plan=normal_plan,
+                    subject=subject,
+                    klass=klass,
+                    context_excerpt=context_excerpt,
+                    custom_instructions=custom_instructions,
+                    feedback_hints=feedback_hints,
+                    existing_questions=flatten_question_texts(sections),
+                    ref=f"{paper_id}:invalid-slot-recovery",
+                )
+                replacements = replacement_data.get("sections") or []
+                replacement_flags: dict = {}
+                _normalise_paper_questions(replacements, difficulty, replacement_flags)
+                await complete_sections(
+                    replacements,
+                    ref=f"{paper_id}:invalid-slot-recovery",
+                    context={"subject": subject, "klass": klass, "difficulty": difficulty},
+                    flags=replacement_flags,
+                )
+                valid_replacements = [
+                    {
+                        **section,
+                        "questions": [
+                            question for question in section.get("questions") or []
+                            if not validate_question(question)
+                        ],
+                    }
+                    for section in replacements
+                ]
+                valid_ids = {
+                    question.get("slot_id")
+                    for section in valid_replacements
+                    for question in section.get("questions") or []
+                }
+                retained = [
+                    {
+                        **section,
+                        "questions": [
+                            question for question in section.get("questions") or []
+                            if question.get("slot_id") not in valid_ids
+                        ],
+                    }
+                    for section in sections
+                ]
+                sections = merge_normal_sections(normal_plan, retained, valid_replacements)
+            except Exception as exc:
+                logger.warning("Normal invalid-slot recovery failed for %s: %s", paper_id, exc)
 
     # Measure coverage first so the dedupe pass knows which topics are already
     # over-quota: when two questions are the same question, the one belonging
@@ -685,6 +781,40 @@ async def generate_paper_background(
         else measure_coverage(sections, topics_weighted, coverage_target)
     )
     dedupe_stats = await dedupe_sections(sections, ref=paper_id, coverage=coverage)
+    # Duplicate removal can vacate slots. Recover only those identities; never
+    # regenerate or replace the questions that already passed.
+    if normal_plan:
+        missing_slots = missing_plan_slots(normal_plan, sections)
+        if missing_slots:
+            try:
+                recovered_data = await _generate_normal_candidate(
+                    only_slots=missing_slots,
+                    plan=normal_plan,
+                    subject=subject,
+                    klass=klass,
+                    context_excerpt=context_excerpt,
+                    custom_instructions=custom_instructions,
+                    feedback_hints=feedback_hints,
+                    existing_questions=flatten_question_texts(sections),
+                    ref=f"{paper_id}:missing-slot-recovery",
+                )
+                recovered = recovered_data.get("sections") or []
+                recovered_flags: dict = {}
+                _normalise_paper_questions(recovered, difficulty, recovered_flags)
+                await complete_sections(
+                    recovered,
+                    ref=f"{paper_id}:missing-slot-recovery",
+                    context={"subject": subject, "klass": klass, "difficulty": difficulty},
+                    flags=recovered_flags,
+                )
+                await dedupe_sections(
+                    recovered,
+                    ref=f"{paper_id}:missing-slot-recovery",
+                    against=sections,
+                )
+                sections = merge_normal_sections(normal_plan, sections, recovered)
+            except Exception as exc:  # retain every valid initial slot
+                logger.warning("Normal missing-slot recovery failed for %s: %s", paper_id, exc)
     coverage = (
         allocation_coverage(sections, spec)
         if spec.get("section_allocations")
@@ -715,6 +845,28 @@ async def generate_paper_background(
         logger.info("Paper generation cancelled before publish: %s", paper_id)
         return
     final_check = verify_instructions(sections, spec)
+    normal_issues = validate_normal_plan(sections, normal_plan) if normal_plan else []
+    if normal_plan:
+        incomplete = [
+            question.get("slot_id")
+            for section in sections
+            for question in section.get("questions") or []
+            if validate_question(question)
+        ]
+        completeness_stats["unrepaired"] = len(incomplete)
+        if incomplete:
+            normal_issues.append({
+                "code": "incomplete_content",
+                "category": "provider_response",
+                "count": len(incomplete),
+                "slot_ids": incomplete,
+            })
+        if int(latex_stats.get("unrepaired") or 0):
+            normal_issues.append({
+                "code": "unrepaired_math",
+                "category": "formatting",
+                "count": int(latex_stats["unrepaired"]),
+            })
     allocation_issues = template_validation_misses(sections, spec) if spec.get("section_allocations") else []
     final_check["misses"].extend(allocation_issues)
     if not spec.get("section_allocations"):
@@ -722,6 +874,10 @@ async def generate_paper_background(
         if actual_marks != float(total_marks):
             final_check["misses"].append(f"asked for {total_marks} total marks, got {actual_marks:g}")
     final_check["honoured"] = not final_check["misses"]
+    if normal_plan and normal_issues:
+        status = normal_review_status(normal_issues)
+        final_check["misses"] = [status["summary"]]
+        final_check["honoured"] = False
     final_type_misses = [flags for flags in coercions.values() if "invalid_question_type" in flags]
     if final_type_misses:
         final_check["misses"].append("One or more questions had an invalid cognitive type.")
@@ -760,15 +916,24 @@ async def generate_paper_background(
                 if structural_recovery else (
                     {"status": "queued", "reason": "validation", "attempt": 0,
                      "max_attempts": 0, "validation_summary": [validation_error]}
-                    if validation_error else None
+                    if validation_error and not normal_plan else None
                 )
             ),
+            "review_status": normal_review_status(normal_issues) if normal_plan else None,
             "generation_progress.completed": min(target_q, count_questions(sections)),
             "generation_progress.total": target_q,
             "generation_progress.status": "ready",
             "generation_progress.phase": "ready",
-            "generation_progress.batch": len(_batch_sizes(target_q, SCHOOL_PROGRESS_BATCH_SIZE)) if batched else 1,
-            "generation_progress.batch_total": len(_batch_sizes(target_q, SCHOOL_PROGRESS_BATCH_SIZE)) if batched else 1,
+            "generation_progress.batch": len(normal_slot_batches(
+                normal_plan.get("slots") or [],
+                single_call_limit=NORMAL_SINGLE_CALL_LIMIT,
+                batch_size=NORMAL_BATCH_SIZE,
+            )) if normal_plan else 1,
+            "generation_progress.batch_total": len(normal_slot_batches(
+                normal_plan.get("slots") or [],
+                single_call_limit=NORMAL_SINGLE_CALL_LIMIT,
+                batch_size=NORMAL_BATCH_SIZE,
+            )) if normal_plan else 1,
             "generation_progress.updated_at": utcnow_iso(),
             "recovered_from_truncation": bool(data.get("_recovered_from_truncation")),
             "latex_check": latex_stats,
@@ -1421,6 +1586,74 @@ async def generate_missing_questions_background(
                 {"id": paper_id}, {"$set": {"sections": existing_sections, "section_plan": section_plan}}
             )
         difficulty = p.get("difficulty", "medium")
+        normal_plan = p.get("normal_generation_plan")
+        if normal_plan and normal_plan.get("contract_version") == NORMAL_CONTRACT_VERSION:
+            missing_slots = missing_plan_slots(normal_plan, existing_sections)[:count]
+            if not missing_slots:
+                raise RuntimeError(
+                    "This paper has no missing generated slots. Edit the paper directly instead of adding an unallocated question."
+                )
+            new_data = await _generate_normal_candidate(
+                only_slots=missing_slots,
+                plan=normal_plan,
+                subject=p.get("subject", ""),
+                klass=p.get("class_name", ""),
+                context_excerpt=context_excerpt,
+                custom_instructions=p.get("custom_instructions") or "",
+                feedback_hints=feedback_hints,
+                existing_questions=flatten_question_texts(existing_sections),
+                ref=f"{paper_id}:slot-topup",
+            )
+            new_sections = new_data.get("sections") or []
+            coercions: dict = {}
+            _normalise_paper_questions(new_sections, difficulty, coercions)
+            await complete_sections(
+                new_sections,
+                ref=f"{paper_id}:slot-topup",
+                context={
+                    "subject": p.get("subject", ""),
+                    "klass": p.get("class_name", ""),
+                    "difficulty": difficulty,
+                },
+                flags=coercions,
+            )
+            await dedupe_sections(new_sections, ref=f"{paper_id}:slot-topup", against=existing_sections)
+            await repair_sections(new_sections, ref=f"{paper_id}:slot-topup")
+            pending_count = apply_diagram_policy(
+                new_sections,
+                ref=paper_id,
+                max_diagrams=len(missing_slots),
+            )
+            for section in new_sections:
+                for question in section.get("questions") or []:
+                    question["diagram_status"] = "pending" if question.get("needs_diagram") else "none"
+            before = count_questions(existing_sections)
+            merged = merge_normal_sections(normal_plan, existing_sections, new_sections)
+            added = count_questions(merged) - before
+            target = len(normal_plan.get("slots") or [])
+            await _finish_topup(
+                paper_id,
+                merged,
+                added,
+                pending_count,
+                target,
+                list(normal_plan.get("sections") or []),
+            )
+            issues = validate_normal_plan(merged, normal_plan)
+            status = normal_review_status(issues)
+            await db.papers.update_one({"id": paper_id}, {"$set": {
+                "review_status": status,
+                "instruction_check": {
+                    "honoured": not issues,
+                    "misses": [] if not issues else [status["summary"]],
+                    "requested": {},
+                    "actual": {},
+                    "at": utcnow_iso(),
+                },
+            }})
+            if pending_count:
+                await generate_diagrams_background(paper_id, owner_id)
+            return
         # The teacher's instructions govern the top-up too -- a paper told
         # to stay in syllabus must not drift on the questions added to fix
         # a shortfall. Counts are deliberately NOT reapplied: this call is
@@ -1556,7 +1789,7 @@ REGEN_HISTORY_MAX = 5
 # being replaced, which is the only way to be sure section_blueprints'
 # allocation checks still pass: the old question already satisfied them.
 PRESERVED_SLOT_FIELDS = (
-    "id", "topic", "type", "format", "difficulty", "marks", "important",
+    "id", "slot_id", "section_id", "topic", "type", "format", "difficulty", "marks", "important",
     "allocation_id", "textbook_id", "topic_id", "group_id",
     "internal_choice_count",
 )
@@ -1837,6 +2070,18 @@ async def regenerate_question_background(
                 "finished_at": utcnow_iso(),
             },
         }
+        normal_plan = p.get("normal_generation_plan")
+        if normal_plan:
+            issues = validate_normal_plan(result["sections"], normal_plan)
+            status = normal_review_status(issues)
+            update["review_status"] = status
+            update["instruction_check"] = {
+                "honoured": not issues,
+                "misses": [] if not issues else [status["summary"]],
+                "requested": {},
+                "actual": {},
+                "at": utcnow_iso(),
+            }
         if result["diagram_pending"]:
             update["diagrams_pending"] = sum(
                 1

@@ -32,12 +32,19 @@ from auth import (
 )
 from activity import record_activity
 from instruction_spec import verify
+from paper_status import library_status_for_paper
 from llm_adapter import chat_complete, parse_json_response
 from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_errors,
                                 compile_allocations, paper_summary, BlueprintStructure,
                                 apply_allocation_overrides, hydrate_section_instructions,
                                 printable_template_instructions, compact_validation_misses,
                                 allocation_misses, normalize_internal_choice_counts)
+from normal_paper_contract import (
+    normalize_normal_sections,
+    review_status as normal_review_status,
+    review_status_from_misses,
+    validate_normal_plan,
+)
 from textbook_topics import merge_topic_batches, topic_context
 from pdf_utils import (
     PDF_POOL_MAX_WORKERS,
@@ -79,6 +86,21 @@ from workers import (
 )
 import student_routes  # noqa: F401  registers /api/student/* endpoints
 import competitive_routes  # noqa: F401  registers /api/competitive-exams/* endpoints
+
+
+def _normalize_saved_paper_sections(paper: dict) -> tuple[list, list, bool]:
+    """Shared safe normalization for reads and every export surface."""
+    spec = paper.get("generation_requirements") or {}
+    sections = paper.get("sections") or []
+    normal_changed = False
+    if not spec.get("section_allocations") and not (paper.get("section_blueprint") or "").strip():
+        sections, normal_changed = normalize_normal_sections(
+            sections, paper.get("normal_generation_plan")
+        )
+    sections, plan, reconciled = reconcile_section_plan(
+        sections, paper.get("section_plan"), spec
+    )
+    return sections, plan, normal_changed or reconciled
 
 
 # Size of the event loop's default thread pool, applied at startup. Serves the
@@ -1615,6 +1637,16 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
                             "topic_id": a["topic_id"], "parent_topic": a["parent_topic"]} for a in unique.values()]
     if not topics_weighted:
         raise HTTPException(status_code=400, detail="At least one topic required")
+    if not resolved and not (req.section_blueprint or "").strip():
+        normal_target = requested_count or derive_target_question_count(req.total_marks)
+        if len(topics_weighted) > normal_target:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{len(topics_weighted)} topics are selected for {normal_target} questions. "
+                    "Reduce the selected topics or increase the question count."
+                ),
+            )
 
     # Insert a placeholder paper immediately so we can return its id within
     # the proxy's 60s budget. The actual LLM call runs in a background task.
@@ -1817,8 +1849,22 @@ async def update_paper(
                     "created_at": utcnow_iso(),
                 })
         normalize_internal_choice_counts(new_sections)
+        normal_plan = p.get("normal_generation_plan")
+        if normal_plan:
+            new_sections, _ = normalize_normal_sections(new_sections, normal_plan)
         set_fields["sections"] = new_sections
         set_fields["instruction_check"] = verify(new_sections, p.get("generation_requirements") or {})
+        if normal_plan:
+            issues = validate_normal_plan(new_sections, normal_plan)
+            status = normal_review_status(issues)
+            set_fields["review_status"] = status
+            set_fields["instruction_check"] = {
+                "honoured": not issues,
+                "misses": [] if not issues else [status["summary"]],
+                "requested": {},
+                "actual": {},
+                "at": utcnow_iso(),
+            }
 
         # If a solution already exists, mark it stale so the UI prompts the
         # teacher to regenerate.
@@ -1886,6 +1932,8 @@ async def list_papers(user: dict = Depends(get_current_user)):
         .sort("created_at", -1)
         .to_list(200)
     )
+    for paper in items:
+        paper["library_status"] = library_status_for_paper(paper)
     return items
 
 
@@ -1898,9 +1946,7 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    repaired_sections, section_plan, repaired_recovery = reconcile_section_plan(
-        p.get("sections") or [], p.get("section_plan"), p.get("generation_requirements") or {}
-    )
+    repaired_sections, section_plan, repaired_recovery = _normalize_saved_paper_sections(p)
     choice_counts_changed = normalize_internal_choice_counts(repaired_sections)
     if repaired_recovery or choice_counts_changed or section_plan != (p.get("section_plan") or []):
         repaired_fields = {"sections": repaired_sections, "section_plan": section_plan}
@@ -1952,6 +1998,15 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
     p["source_textbooks"] = [textbook_names[textbook_id] for textbook_id in textbook_ids if textbook_id in textbook_names]
     p["summary"] = paper_summary(p)
     checks = verify(p.get("sections") or [], p.get("generation_requirements") or {})
+    if not (p.get("generation_requirements") or {}).get("section_allocations"):
+        plan = p.get("normal_generation_plan")
+        status = (
+            normal_review_status(validate_normal_plan(p.get("sections") or [], plan))
+            if plan else review_status_from_misses(checks.get("misses") or [])
+        )
+        p["review_status"] = status
+        checks["misses"] = [] if status["status"] == "ready" else [status["summary"]]
+        checks["honoured"] = status["status"] == "ready"
     # Always respond with validation computed from the current normalized
     # content, so a stale historical check cannot reintroduce a false banner.
     p["instruction_check"] = checks
@@ -1961,7 +2016,7 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
     if p["summary"]["mismatches"]:
         p["summary"]["status"] = "Needs review"
     p["summary"]["review_status"] = (p.get("generation_recovery") or {}).get("status") or (
-        "needs_review" if p["summary"]["mismatches"] else "ready"
+        p.get("review_status", {}).get("status") or ("needs_review" if p["summary"]["mismatches"] else "ready")
     )
     return p
 
@@ -2123,6 +2178,8 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
             # previous top-up job describe a draft that no longer exists.
             "recovered_from_truncation": False,
             "topup": None,
+            "generation_recovery": None,
+            "review_status": None,
         }},
     )
 
@@ -2205,9 +2262,7 @@ async def paper_pdf(
         raise HTTPException(status_code=409, detail="Paper is still being generated")
     if p.get("generation_status") == "failed":
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
-    p["sections"], section_plan, repaired = reconcile_section_plan(
-        p.get("sections") or [], p.get("section_plan"), p.get("generation_requirements") or {}
-    )
+    p["sections"], section_plan, repaired = _normalize_saved_paper_sections(p)
     if repaired or section_plan != (p.get("section_plan") or []):
         p["section_plan"] = section_plan
         await db.papers.update_one(
@@ -2259,9 +2314,7 @@ async def paper_docx(
         raise HTTPException(status_code=409, detail="Paper is still being generated")
     if paper.get("generation_status") == "failed":
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
-    paper["sections"], section_plan, repaired = reconcile_section_plan(
-        paper.get("sections") or [], paper.get("section_plan"), paper.get("generation_requirements") or {}
-    )
+    paper["sections"], section_plan, repaired = _normalize_saved_paper_sections(paper)
     if repaired or section_plan != (paper.get("section_plan") or []):
         paper["section_plan"] = section_plan
         await db.papers.update_one(
@@ -2305,6 +2358,7 @@ async def solution_docx(
         raise HTTPException(status_code=403, detail="Forbidden")
     if not paper.get("solution"):
         raise HTTPException(status_code=409, detail="No solution is available to download")
+    paper["sections"], _section_plan, _repaired = _normalize_saved_paper_sections(paper)
 
     def asset_loader(path: str):
         try:
@@ -2778,6 +2832,7 @@ async def solution_pdf(
         raise HTTPException(status_code=403, detail="Forbidden")
     if not p.get("solution"):
         raise HTTPException(status_code=400, detail="No solution generated yet")
+    p["sections"], _section_plan, _repaired = _normalize_saved_paper_sections(p)
 
     def _diagram_loader(_qid: str, path: str):
         try:

@@ -128,6 +128,8 @@ def check_ui_requirements(sections, spec):
     actual_types = Counter(q.get("type", "") for q in questions)
     actual_topics = Counter(q.get("topic", "") for q in questions)
     for topic, count in spec.get("topic_counts", {}).items():
+        if int(count or 0) <= 0:
+            continue
         if actual_topics[topic] != count:
             misses.append(f"asked for {count} questions on {topic}, got {actual_topics[topic]}")
     for kind, count in spec.get("type_counts", {}).items():

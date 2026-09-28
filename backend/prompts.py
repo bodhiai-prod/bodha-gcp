@@ -947,6 +947,68 @@ def qgen_prompt(
 
 
 # ---------------------------------------------------------------------------
+# Normal-paper slot generation
+# ---------------------------------------------------------------------------
+def normal_slots_prompt(
+    *,
+    subject: str,
+    klass: str,
+    slots: list[dict],
+    context_excerpt: str,
+    custom_instructions: str = "",
+    feedback_hints: str = "",
+    existing_questions: list | None = None,
+) -> str:
+    """Ask only for content for server-owned normal-paper slots."""
+    slot_rows = [
+        {
+            "slot_id": slot["slot_id"],
+            "topic": slot["topic"],
+            "type": slot["type"],
+            "format": slot.get("format") or "plain",
+            "difficulty": slot["difficulty"],
+            "marks": slot["marks"],
+            "diagram_mode": slot.get("diagram_mode", "allowed"),
+        }
+        for slot in slots
+    ]
+    custom = (
+        "TEACHER GENERATION INSTRUCTIONS:\n" + custom_instructions.strip() + "\n\n"
+        if custom_instructions.strip() else ""
+    )
+    feedback = (
+        "TEACHER PREFERENCES FROM EARLIER EDITS:\n" + feedback_hints.strip() + "\n\n"
+        if feedback_hints.strip() else ""
+    )
+    return (
+        f"Write original Class {klass} {subject} question content for every immutable slot below.\n"
+        "The server owns topic, type, format, difficulty, marks, ordering, and sections. "
+        "Do not rename, omit, duplicate, or add slots.\n\n"
+        f"SLOTS:\n{json.dumps(slot_rows, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        + custom
+        + feedback
+        + avoid_list_block(existing_questions)
+        + FORMAT_CONVENTIONS
+        + MATH_FORMATTING
+        + DIAGRAM_POLICY
+        + "Return ONLY strict JSON in this shape:\n"
+        '{"questions":[{"slot_id":"normal-001","question":"...",'
+        '"options":["A","B","C","D"],"correct_option":0,'
+        '"needs_diagram":false,"diagram_spec":{"figure":"...","labels":[],'
+        '"given_values":[],"unknowns":[],"why_required":"..."}}]}\n\n'
+        "RULES:\n"
+        "- Return exactly one object for each supplied slot_id and no other slot_id.\n"
+        "- Do not repeat structural fields such as topic, marks, type, format, difficulty, or section.\n"
+        "- For MCQ slots return exactly four options and correct_option 0, 1, 2, or 3. "
+        "Omit options and correct_option for non-MCQ slots.\n"
+        "- diagram_mode='required' must contain a necessary, answer-safe diagram_spec. "
+        "diagram_mode='forbidden' must set needs_diagram false.\n"
+        "- No question numbering, markdown headings, prose outside JSON, or copied textbook sentences.\n\n"
+        f"=== TEXTBOOK CONTEXT (scope only; never copy) ===\n{context_excerpt}\n=== END ==="
+    )
+
+
+# ---------------------------------------------------------------------------
 # Single-question regeneration — replace ONE question in an existing paper
 # ---------------------------------------------------------------------------
 # Deliberately NOT qgen_prompt(topup_count=1). That builder's whole job is

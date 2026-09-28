@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
+import PaperStatusBadge from "@/components/PaperStatusBadge";
 import {
   FileText,
   ArrowRight,
@@ -24,6 +25,14 @@ export default function GeneratedPapers() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!papers.some((paper) => paper.library_status?.active)) return undefined;
+    const interval = window.setInterval(() => {
+      api.get("/papers").then((r) => setPapers(r.data)).catch(() => {});
+    }, 3000);
+    return () => window.clearInterval(interval);
+  }, [papers]);
 
   const subjects = useMemo(() => {
     const s = new Set(papers.map((p) => p.subject).filter(Boolean));
@@ -143,7 +152,10 @@ export default function GeneratedPapers() {
                     <FileText size={18} weight="bold" />
                   </div>
                   <div className="min-w-0">
-                    <div className="font-bold truncate">{p.title}</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="font-bold truncate">{p.title}</div>
+                      <PaperStatusBadge status={p.library_status} testid={`generated-paper-status-${p.id}`} />
+                    </div>
                     <div className="text-xs text-neutral-500 font-mono mt-0.5 break-words">
                       {p.subject} · Class {p.class_name} · {p.total_marks}{" "}
                       marks · {p.duration_minutes} min

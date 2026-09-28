@@ -39,12 +39,43 @@ _LATEX_SYMBOLS = {
     "Gamma": "Γ", "Theta": "Θ", "Lambda": "Λ", "Pi": "Π",
     "Sigma": "Σ", "Phi": "Φ", "Omega": "Ω", "infty": "∞",
     "cdot": "·", "times": "×", "pm": "±", "leq": "≤",
-    "geq": "≥", "neq": "≠", "approx": "≈", "to": "→",
+    "geq": "≥", "ge": "≥", "le": "≤", "neq": "≠", "ne": "≠",
+    "approx": "≈", "to": "→", "mapsto": "↦", "setminus": "∖",
     "rightarrow": "→", "degree": "°", "circ": "°",
     "in": "∈", "notin": "∉", "subset": "⊂", "subseteq": "⊆",
     "cup": "∪", "cap": "∩", "partial": "∂", "nabla": "∇",
     "forall": "∀", "exists": "∃", "therefore": "∴", "because": "∵",
 }
+
+# Unicode has dedicated double-struck glyphs for the alphabet and digits.  It
+# is more portable than attempting to set OMML's optional font/style settings:
+# Word and LibreOffice both render these in their math fonts.  In particular it
+# prevents the command name in ``\\mathbb{R}`` becoming visible document text.
+_MATHBB_CHARS = {
+    **dict(zip("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "𝔸𝔹ℂ𝔻𝔼𝔽𝔾ℍ𝕀𝕁𝕂𝕃𝕄ℕ𝕆ℙℚℝ𝕊𝕋𝕌𝕍𝕎𝕏𝕐ℤ")),
+    **dict(zip("abcdefghijklmnopqrstuvwxyz", "𝕒𝕓𝕔𝕕𝕖𝕗𝕘𝕙𝕚𝕛𝕜𝕝𝕞𝕟𝕠𝕡𝕢𝕣𝕤𝕥𝕦𝕧𝕨𝕩𝕪𝕫")),
+    **dict(zip("0123456789", "𝟘𝟙𝟚𝟛𝟜𝟝𝟞𝟟𝟠𝟡")),
+}
+
+
+def _mathbb_nodes(nodes):
+    """Apply LaTeX's blackboard-bold styling to a parsed node sequence."""
+    styled = []
+    for node in nodes:
+        kind = node[0]
+        if kind == "text":
+            styled.append(("text", "".join(_MATHBB_CHARS.get(char, char) for char in node[1])))
+        elif kind == "frac":
+            styled.append((kind, _mathbb_nodes(node[1]), _mathbb_nodes(node[2])))
+        elif kind == "sqrt":
+            styled.append((kind, _mathbb_nodes(node[1])))
+        elif kind in {"sup", "sub"}:
+            styled.append((kind, _mathbb_nodes([node[1]])[0], _mathbb_nodes(node[2])))
+        else:
+            # Blackboard-bold is normally used for simple set names.  Preserve
+            # less usual structures instead of degrading a valid equation.
+            styled.append(node)
+    return styled
 
 # These need Word's n-ary structure.  Emitting the command name as ordinary
 # math text (the old behaviour) made Word display and spell-check ``int`` and
@@ -106,6 +137,16 @@ def _consume_nary_base(source: str, index: int):
         elif command in {"text", "textrm", "mathrm", "mathbf", "mathit"}:
             content, index = _latex_group(source, end)
             nodes = [("text", content)]
+        elif command == "mathbb":
+            content, index = _latex_group(source, end)
+            nodes = _mathbb_nodes(_latex_to_ast(content))
+        elif command in {
+            "left", "right", "displaystyle", "textstyle", "scriptstyle",
+            "scriptscriptstyle", "limits", "nolimits", "quad", "qquad",
+        }:
+            # These commands decorate the expression that follows; they are
+            # never an operand of an integral/summation themselves.
+            return _consume_nary_base(source, end)
         else:
             nodes = [("text", _LATEX_SYMBOLS.get(command, command))]
             index = end
@@ -202,6 +243,14 @@ def _latex_to_ast(source: str):
                 content, cursor = _latex_group(source, end)
                 nodes.append(("text", content))
                 continue
+            if command == "mathbb":
+                content, cursor = _latex_group(source, end)
+                nodes.extend(_mathbb_nodes(_latex_to_ast(content)))
+                continue
+            if command == "operatorname":
+                content, cursor = _latex_group(source, end)
+                nodes.append(("text", content))
+                continue
             if command in {
                 "left", "right", "displaystyle", "textstyle", "scriptstyle",
                 "scriptscriptstyle", "limits", "nolimits", "quad", "qquad",
@@ -283,6 +332,17 @@ def _omml_node(node):
         limit_location = OxmlElement("m:limLoc")
         limit_location.set(qn("m:val"), "subSup")
         properties.extend([character, limit_location])
+        # OMML requires sub/sup child elements even for an unbounded integral.
+        # Without these flags Word and LibreOffice draw small empty equation
+        # placeholders above and below the operator.
+        if not node[2]:
+            sub_hide = OxmlElement("m:subHide")
+            sub_hide.set(qn("m:val"), "1")
+            properties.append(sub_hide)
+        if not node[3]:
+            sup_hide = OxmlElement("m:supHide")
+            sup_hide.set(qn("m:val"), "1")
+            properties.append(sup_hide)
         element.append(properties)
         element.append(_omml_container("m:sub", node[2]))
         element.append(_omml_container("m:sup", node[3]))

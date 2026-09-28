@@ -205,47 +205,5 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["sections"][0]["questions"][0]["allocation_id"], spec["section_allocations"][0]["allocation_id"])
 
 
-class ProgressBatchTests(unittest.IsolatedAsyncioTestCase):
-    async def test_generation_reports_each_completed_batch_without_exceeding_target(self):
-        import workers
-
-        def response(count):
-            return {
-                "instructions": "Answer all questions.",
-                "sections": [{"title": "Section A", "questions": [
-                    {"question": f"Question {index}"} for index in range(count)
-                ]}],
-            }
-
-        progress = []
-
-        async def record_progress(completed, batch, batch_total):
-            progress.append((completed, batch, batch_total))
-
-        with patch.object(workers, "_request_paper_json", AsyncMock(side_effect=[
-            response(4), response(4), response(3),
-        ])), patch.object(workers, "qgen_prompt", return_value="prompt"), patch.object(
-            workers, "SCHOOL_PROGRESS_BATCH_SIZE", 4
-        ):
-            result = await workers._generate_paper_in_batches(
-                ref="test-progress",
-                target_q=10,
-                topics_weighted=[{"name": "Algebra", "weight": 1}],
-                spec={},
-                total_marks=20,
-                system_message="test",
-                prompt_kwargs={
-                    "subject": "Maths", "klass": "10", "difficulty": "medium",
-                    "distribution": {}, "total_marks": 20, "duration": 60,
-                    "context_excerpt": "", "feedback_hints": "",
-                },
-                on_batch_complete=record_progress,
-            )
-
-        self.assertEqual(progress, [(4, 1, 3), (8, 2, 3), (10, 3, 3)])
-        self.assertEqual(sum(len(section["questions"]) for section in result["sections"]), 11)
-        self.assertEqual(workers._batch_mark_totals(20, [4, 4, 2]), [7, 7, 6])
-
-
 if __name__ == "__main__":
     unittest.main()
