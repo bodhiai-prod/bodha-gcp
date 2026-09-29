@@ -72,6 +72,106 @@ from normal_paper_contract import (
 ACTIVE_GENERATION_STATUSES = ["queued", "pending", "generating", "reviewing"]
 
 
+def _screen_viewable_sections(
+    sections: list,
+    *,
+    spec: dict,
+    normal_plan: dict | None = None,
+) -> tuple[list, list[str]]:
+    """Return only question blocks that are safe and coherent enough to preview.
+
+    The draft view is deliberately more permissive than the final contract
+    gate, but it never renders truncated stems, invalid MCQs, broken math, or a
+    question stamped into the wrong immutable slot. Those questions remain in
+    the recovery candidate and can be repaired after the teacher opens the
+    usable parts of the paper.
+    """
+    screened = copy.deepcopy(sections or [])
+    issues: list[str] = []
+    expected_slots = {
+        slot.get("slot_id"): slot
+        for slot in (normal_plan or {}).get("slots") or []
+    }
+    allocation_rows = {
+        row.get("allocation_id"): row
+        for row in spec.get("section_allocations") or []
+    }
+    required_choice_groups = {
+        (section.get("id"), group.get("id")): int(group.get("internal_choices") or 0)
+        for section in ((spec.get("blueprint") or {}).get("sections") or [])
+        for group in (section.get("groups") or [])
+        if group.get("internal_choices") is not None
+    }
+    pending_choice_allocations = set()
+    if required_choice_groups:
+        choice_counts = {key: 0 for key in required_choice_groups}
+        choice_ids = {key: set() for key in required_choice_groups}
+        for section in screened:
+            for question in section.get("questions") or []:
+                row = allocation_rows.get((question or {}).get("allocation_id"))
+                if not row:
+                    continue
+                key = (row.get("section_id"), row.get("group_id"))
+                if key not in required_choice_groups:
+                    continue
+                choice_counts[key] += derived_internal_choice_count(question)
+                choice_ids[key].add(row.get("allocation_id"))
+        for key, expected in required_choice_groups.items():
+            if choice_counts[key] != expected:
+                pending_choice_allocations.update(choice_ids[key])
+    for section in screened:
+        safe_questions = []
+        for question in section.get("questions") or []:
+            if not isinstance(question, dict):
+                issues.append("A generated question was not a valid question object.")
+                continue
+            qid = question.get("id") or question.get("slot_id") or "unknown"
+            question["question"], stem_issues = repair_text(str(question.get("question") or ""))
+            options = question.get("options")
+            if isinstance(options, list):
+                fixed_options = []
+                option_issues = []
+                for option in options:
+                    fixed, found = repair_text(str(option or ""))
+                    fixed_options.append(fixed)
+                    option_issues.extend(found)
+                question["options"] = fixed_options
+            else:
+                option_issues = []
+            structural_issues = validate_question(question)
+            if stem_issues or option_issues or structural_issues:
+                codes = sorted(set([*stem_issues, *option_issues, *structural_issues]))
+                issues.append(f"Question {qid} is withheld until repaired ({', '.join(codes)}).")
+                continue
+
+            slot = expected_slots.get(question.get("slot_id"))
+            if normal_plan and (not slot or any(
+                question.get(field) != slot.get(field)
+                for field in ("section_id", "topic", "type", "format", "difficulty", "marks")
+            )):
+                issues.append(f"Question {qid} is withheld until its paper slot is repaired.")
+                continue
+
+            row = allocation_rows.get(question.get("allocation_id"))
+            if question.get("allocation_id") in pending_choice_allocations:
+                issues.append(f"Question {qid} is withheld until its required internal choices are repaired.")
+                continue
+            if spec.get("section_allocations") and (
+                not row
+                or any(question.get(field) != row.get(field) for field in (
+                    "textbook_id", "topic_id", "group_id", "slot_id", "marks", "format", "difficulty"
+                ))
+                or question.get("topic") != row.get("name")
+                or question.get("section_id") != row.get("section_id")
+                or section.get("section_id") != row.get("section_id")
+            ):
+                issues.append(f"Question {qid} is withheld until its template allocation is repaired.")
+                continue
+            safe_questions.append(question)
+        section["questions"] = safe_questions
+    return [section for section in screened if section.get("questions")], issues
+
+
 async def _complete_and_repair_sections_parallel(
     sections: list,
     *,
@@ -473,6 +573,7 @@ async def _generate_normal_candidate(
     semaphore = _asyncio.Semaphore(max(1, NORMAL_BATCH_CONCURRENCY))
     completed = 0
     completed_batches = 0
+    completed_sections: list = []
     completed_lock = _asyncio.Lock()
 
     async def run(index: int, batch: list[dict]) -> list:
@@ -492,9 +593,13 @@ async def _generate_normal_candidate(
         async with completed_lock:
             completed += sum(len(section.get("questions") or []) for section in sections)
             completed_batches += 1
+            completed_sections[:] = merge_normal_sections(
+                plan, completed_sections, sections
+            )
             if on_batch_complete:
                 await on_batch_complete(
-                    min(len(slots), completed), completed_batches, len(batches)
+                    min(len(slots), completed), completed_batches, len(batches),
+                    draft_sections=copy.deepcopy(completed_sections),
                 )
         return sections
 
@@ -620,27 +725,99 @@ async def generate_paper_background(
     # the server-owned slot plan and never ask the provider to invent sections.
     batched = bool(normal_plan and len(normal_plan.get("slots") or []) > NORMAL_SINGLE_CALL_LIMIT)
     prompt = None if normal_plan else qgen_prompt(**prompt_kwargs)
+    draft_published = False
 
-    async def update_progress(completed: int, batch: int = 0, batch_total: int = 0, phase: str = "generating") -> None:
+    async def update_progress(
+        completed: int, batch: int = 0, batch_total: int = 0,
+        phase: str = "generating", draft_sections: list | None = None,
+    ) -> None:
+        nonlocal draft_published
+        updates = {
+            "generation_progress.completed": min(target_q, max(0, completed)),
+            "generation_progress.total": target_q,
+            "generation_progress.status": "pending",
+            "generation_progress.phase": phase,
+            "generation_progress.batch": batch,
+            "generation_progress.batch_total": batch_total,
+            "generation_progress.updated_at": utcnow_iso(),
+            "quality_review.status": "running",
+            "quality_review.stage": phase,
+        }
+        if draft_sections is not None:
+            visible, withheld = _screen_viewable_sections(
+                draft_sections, spec=spec, normal_plan=normal_plan
+            )
+            if visible:
+                draft_published = True
+                updates.update({
+                    "sections": visible,
+                    "question_count": count_questions(visible),
+                    "generation_status": "ready",
+                    "generation_progress.status": "ready",
+                    "generation_progress.phase": "repairing",
+                    "quality_review.visible_question_count": count_questions(visible),
+                    "quality_review.withheld_count": max(0, count_questions(draft_sections) - count_questions(visible)),
+                    "quality_review.withheld_reasons": withheld[:20],
+                    "quality_review.draft_available": True,
+                })
+        elif not draft_published:
+            updates["generation_status"] = "reviewing" if phase in {"validating", "finalizing"} else "generating"
         await db.papers.update_one(
-            {"id": paper_id, "generation_status": {"$in": ACTIVE_GENERATION_STATUSES}},
-            {"$set": {
-                "generation_progress.completed": min(target_q, max(0, completed)),
-                "generation_progress.total": target_q,
-                "generation_progress.status": "pending",
-                "generation_progress.phase": phase,
-                "generation_progress.batch": batch,
-                "generation_progress.batch_total": batch_total,
-                "generation_progress.updated_at": utcnow_iso(),
-                "generation_status": "reviewing" if phase in {"validating", "finalizing"} else "generating",
-                "quality_review.status": "running",
-                "quality_review.stage": phase,
-            }},
+            {"id": paper_id, "generation_status": {"$in": [*ACTIVE_GENERATION_STATUSES, "ready"]}},
+            {"$set": updates},
         )
 
     await update_progress(0, phase="generating")
+    saved_draft = await db.papers.find_one(
+        {"id": paper_id, "generation_status": "ready", "quality_review.status": "running"},
+        {"_id": 0, "sections": 1, "instructions": 1},
+    )
+    resume_sections = copy.deepcopy((saved_draft or {}).get("sections") or [])
+    resuming_visible_draft = bool(resume_sections)
     try:
-        if normal_plan:
+        if resuming_visible_draft and normal_plan:
+            missing_slots = missing_plan_slots(normal_plan, resume_sections)
+            if missing_slots:
+                async def publish_resumed_batch(completed, batch, batch_total, *, draft_sections):
+                    cumulative = merge_normal_sections(
+                        normal_plan, resume_sections, draft_sections
+                    )
+                    await update_progress(
+                        completed, batch, batch_total, draft_sections=cumulative
+                    )
+
+                recovered_data = await _generate_normal_candidate(
+                    ref=f"{paper_id}:resume",
+                    plan=normal_plan,
+                    subject=subject,
+                    klass=klass,
+                    context_excerpt=context_excerpt,
+                    custom_instructions=custom_instructions,
+                    feedback_hints=feedback_hints,
+                    existing_questions=flatten_question_texts(resume_sections),
+                    only_slots=missing_slots,
+                    on_batch_complete=publish_resumed_batch,
+                )
+                data = {
+                    **recovered_data,
+                    "sections": merge_normal_sections(
+                        normal_plan, resume_sections, recovered_data.get("sections") or []
+                    ),
+                    "instructions": (saved_draft or {}).get("instructions") or "",
+                }
+            else:
+                data = {
+                    "sections": merge_normal_sections(normal_plan, resume_sections),
+                    "instructions": (saved_draft or {}).get("instructions") or "",
+                }
+        elif resuming_visible_draft:
+            # Non-slot papers resume from the durable screened copy; any count
+            # gap is handled by the targeted top-up after final checks.
+            data = {
+                "sections": resume_sections,
+                "instructions": (saved_draft or {}).get("instructions") or "",
+            }
+        elif normal_plan:
             data = await _generate_normal_candidate(
                 ref=paper_id,
                 plan=normal_plan,
@@ -673,18 +850,45 @@ async def generate_paper_background(
         return
 
     sections = data.get("sections") or []
-    # The draft provider call is now complete. All downstream repair helpers
-    # share this one hard budget, including retries and fallback models.
+    # The draft provider call is now complete. Publish structurally safe
+    # content before any whole-paper correction, LaTeX pass, or targeted repair
+    # can add latency. Unsafe questions remain withheld from the visible copy.
     review_budget = begin_review_budget(
-        seconds=float(os.environ.get("PAPER_REVIEW_BUDGET_SECONDS", "60")),
-        call_limit=int(os.environ.get("PAPER_REVIEW_PROVIDER_CALL_LIMIT", "3")),
+        seconds=float(os.environ.get("PAPER_REVIEW_BUDGET_SECONDS", "180")),
+        call_limit=int(os.environ.get("PAPER_REVIEW_PROVIDER_CALL_LIMIT", "12")),
     )
     # Publish the only truthful question count available once the model output
     # has been parsed. A single provider response moves from 0 straight to this
     # value; the UI continues to poll it while the finishing checks run.
-    await update_progress(count_questions(sections), phase="validating")
     coercions: dict = {}
     _normalise_paper_questions(sections, difficulty, coercions)
+    first_view, withheld = _screen_viewable_sections(
+        sections, spec=spec, normal_plan=normal_plan
+    )
+    if first_view:
+        draft_published = True
+        await db.papers.update_one(
+            {"id": paper_id, "generation_status": {"$in": [*ACTIVE_GENERATION_STATUSES, "ready"]}},
+            {"$set": {
+                "sections": first_view,
+                "question_count": count_questions(first_view),
+                "generation_status": "ready",
+                "generation_error": None,
+                "generation_progress.completed": min(target_q, count_questions(sections)),
+                "generation_progress.total": target_q,
+                "generation_progress.status": "ready",
+                "generation_progress.phase": "repairing",
+                "generation_progress.updated_at": utcnow_iso(),
+                "quality_review.status": "running",
+                "quality_review.stage": "repairing",
+                "quality_review.visible_question_count": count_questions(first_view),
+                "quality_review.withheld_count": max(0, count_questions(sections) - count_questions(first_view)),
+                "quality_review.withheld_reasons": withheld[:20],
+                "quality_review.draft_available": True,
+            }},
+        )
+    else:
+        await update_progress(count_questions(sections), phase="validating")
     (allocation_coverage(sections, spec) if spec.get("section_allocations") else measure_coverage(sections, topics_weighted, spec.get("total_questions") or derive_target_question_count(total_marks)))
     # One bounded correction attempt for a complete but noncompliant paper.
     # Truncated papers use the existing top-up path instead.
@@ -950,11 +1154,12 @@ async def generate_paper_background(
 
     # Cancellation is cooperative: do not publish a response that finished
     # after its owner cancelled the job.
-    still_pending = await db.papers.find_one({"id": paper_id, "generation_status": {"$in": ACTIVE_GENERATION_STATUSES}}, {"_id": 0, "id": 1})
+    still_pending = await db.papers.find_one({"id": paper_id, "generation_status": {"$in": [*ACTIVE_GENERATION_STATUSES, "ready"]}}, {"_id": 0, "id": 1})
     if not still_pending:
         logger.info("Paper generation cancelled before publish: %s", paper_id)
         return
     final_check = verify_instructions(sections, spec)
+    final_choice_diagnostics = internal_choice_misses(sections, spec)
     normal_issues = validate_normal_plan(sections, normal_plan) if normal_plan else []
     if normal_plan:
         incomplete = [
@@ -1009,42 +1214,36 @@ async def generate_paper_background(
         + (["One or more questions remain structurally incomplete."] if int(completeness_stats.get("unrepaired") or 0) else [])
         + (["Some mathematical notation could not be repaired safely."] if int(latex_stats.get("unrepaired") or 0) else [])
         + (["Required internal choices could not be repaired."] if internal_choice_recovery else [])
+        + (["Required internal choices remain incomplete."] if final_choice_diagnostics else [])
         + (["Template allocation needs review."] if structural_recovery else [])
         + ([review_budget.exhausted_reason] if review_budget.exhausted_reason else [])
     ))
     validation_error = "; ".join(quality_misses)[:500] or None
-    if quality_misses or normal_issues:
-        # Retain the candidate as a draft for an explicit retry, but do not
-        # publish it as ready or launch any automatic recovery provider calls.
-        await db.papers.update_one(
-            {"id": paper_id, "generation_status": {"$in": ACTIVE_GENERATION_STATUSES}},
-            {"$set": {
-                "sections": sections, "section_plan": section_plan,
-                "question_count": count_questions(sections), "diagrams_pending": pending_count,
-                "generation_status": "needs_review", "generation_error": validation_error,
-                "generation_progress.status": "needs_review", "generation_progress.phase": "needs_review",
-                "generation_progress.updated_at": utcnow_iso(),
-                "quality_review.status": "needs_review", "quality_review.stage": "needs_review",
-                "quality_review.message": validation_error,
-                "quality_review.budget": review_budget.snapshot(),
-                "quality_review.failed_gates": quality_misses or [normal_review_status(normal_issues)["summary"]],
-                "review_draft_available": True, "instruction_check": final_check,
-                "latex_check": latex_stats, "completeness_check": completeness_stats,
-                "dedupe_check": dedupe_stats, "topic_coverage": coverage,
-            }},
-        )
-        return
+    final_sections, final_withheld = _screen_viewable_sections(
+        sections, spec=spec, normal_plan=normal_plan
+    )
+    final_quality_misses = list(dict.fromkeys([
+        *quality_misses,
+        *(final_withheld[:20]),
+        *( [normal_review_status(normal_issues)["summary"]] if normal_issues else []),
+    ]))
+    final_validation_error = "; ".join(final_quality_misses)[:500] or None
+    auto_topup_pending = bool(
+        spec.get("total_questions_stated")
+        and target_q > count_questions(final_sections)
+        and AUTO_TOPUP_ENABLED
+    )
     await db.papers.update_one(
-        {"id": paper_id, "generation_status": {"$in": ACTIVE_GENERATION_STATUSES}},
+        {"id": paper_id, "generation_status": {"$in": [*ACTIVE_GENERATION_STATUSES, "ready"]}},
         {"$set": {
             "instructions": printable_instructions(
                 data.get("instructions", ""),
                 template_instructions=printable_template_instructions({"generation_requirements": spec}),
                 custom_instructions=custom_instructions,
             ),
-            "sections": sections,
+            "sections": final_sections,
             "section_plan": section_plan,
-            "question_count": count_questions(sections),
+            "question_count": count_questions(final_sections),
             "diagrams_pending": pending_count,
             "generation_status": "ready",
             "generation_error": None,
@@ -1061,7 +1260,7 @@ async def generate_paper_background(
                 )
             ),
             "review_status": normal_review_status(normal_issues) if normal_plan else None,
-            "generation_progress.completed": min(target_q, count_questions(sections)),
+            "generation_progress.completed": min(target_q, count_questions(final_sections)),
             "generation_progress.total": target_q,
             "generation_progress.status": "ready",
             "generation_progress.phase": "ready",
@@ -1083,7 +1282,16 @@ async def generate_paper_background(
             "topic_coverage": coverage,
             "instruction_check": final_check,
             "quality_review.budget": review_budget.snapshot(),
-            "quality_review.failed_gates": [],
+            "quality_review.status": "running" if auto_topup_pending else ("needs_review" if final_quality_misses else "passed"),
+            "quality_review.stage": "topup" if auto_topup_pending else ("needs_review" if final_quality_misses else "ready"),
+            "quality_review.message": final_validation_error,
+            "quality_review.finished_at": utcnow_iso(),
+            "quality_review.visible_question_count": count_questions(final_sections),
+            "quality_review.withheld_count": max(0, count_questions(sections) - count_questions(final_sections)),
+            "quality_review.withheld_reasons": final_withheld[:20],
+            "quality_review.draft_available": True,
+            "quality_review.internal_choice_diagnostics": final_choice_diagnostics,
+            "quality_review.failed_gates": final_quality_misses,
             # A stated count makes the target knowable, which is what
             # re-enables auto-top-up and the missing-questions banner for
             # instruction-driven papers -- both were dead while this was 0.
@@ -1106,7 +1314,50 @@ async def generate_paper_background(
             ),
         }},
     )
-    await record_activity(owner_id, "paper.ready", {"paper_id": paper_id, "questions": count_questions(sections)})
+    await record_activity(owner_id, "paper.ready", {"paper_id": paper_id, "questions": count_questions(final_sections)})
+
+    # Count shortfalls are repaired only after the safe draft is durable and
+    # visible. The existing top-up path targets the gap and preserves the
+    # accepted questions; do not make the first view wait for this call.
+    if auto_topup_pending:
+        topup_budget = begin_review_budget(
+            seconds=float(os.environ.get("PAPER_REVIEW_BUDGET_SECONDS", "180")),
+            call_limit=int(os.environ.get("PAPER_REVIEW_PROVIDER_CALL_LIMIT", "12")),
+        )
+        await _auto_topup_if_short(paper_id, owner_id, context_excerpt, feedback_hints)
+        latest = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
+        if latest:
+            repaired_sections, withheld_after_topup = _screen_viewable_sections(
+                latest.get("sections") or [], spec=spec, normal_plan=normal_plan
+            )
+            refreshed_check = verify_instructions(repaired_sections, spec)
+            refreshed_normal_issues = validate_normal_plan(repaired_sections, normal_plan) if normal_plan else []
+            refreshed_choice_diagnostics = internal_choice_misses(repaired_sections, spec)
+            short_after_topup = count_questions(repaired_sections) < target_q
+            remaining_gates = list(dict.fromkeys([
+                *(refreshed_check.get("misses") or []),
+                *( [normal_review_status(refreshed_normal_issues)["summary"]] if refreshed_normal_issues else []),
+                *( ["Required internal choices remain incomplete."] if refreshed_choice_diagnostics else []),
+                *withheld_after_topup[:20],
+                *( ["The paper is still short of its requested question count."] if short_after_topup else []),
+                *([topup_budget.exhausted_reason] if topup_budget.exhausted_reason else []),
+                *(quality_misses if review_budget.exhausted_reason else []),
+            ]))
+            final_status = "needs_review" if remaining_gates else "passed"
+            await db.papers.update_one({"id": paper_id, "generation_status": "ready"}, {"$set": {
+                "sections": repaired_sections,
+                "question_count": count_questions(repaired_sections),
+                "quality_review.status": final_status,
+                "quality_review.stage": final_status,
+                "quality_review.message": "; ".join(remaining_gates)[:500] or None,
+                "quality_review.failed_gates": remaining_gates,
+                "quality_review.withheld_count": max(0, count_questions(latest.get("sections") or []) - count_questions(repaired_sections)),
+                "quality_review.withheld_reasons": withheld_after_topup[:20],
+                "quality_review.internal_choice_diagnostics": refreshed_choice_diagnostics,
+                "quality_review.topup_budget": topup_budget.snapshot(),
+                "quality_review.finished_at": utcnow_iso(),
+                "instruction_check": refreshed_check,
+            }})
 
     # The durable worker records quality completion and queues diagrams after
     # this function returns. Do not block the paper on diagrams or auto-topup.
@@ -2386,9 +2637,21 @@ async def repair_internal_choices_background(
             *allocation_misses(result["sections"], paper.get("generation_requirements") or {}),
         ]))
         repaired_check["honoured"] = not repaired_check["misses"]
+        remaining_choice_misses = internal_choice_misses(
+            result["sections"], paper.get("generation_requirements") or {}
+        )
+        quality_misses = list(repaired_check["misses"])
+        if remaining_choice_misses:
+            quality_misses.append("Required internal choices remain incomplete.")
         update = {
             "sections": result["sections"],
             "instruction_check": repaired_check,
+            "quality_review.status": "needs_review" if quality_misses else "passed",
+            "quality_review.stage": "needs_review" if quality_misses else "ready",
+            "quality_review.message": "; ".join(quality_misses)[:500] or None,
+            "quality_review.failed_gates": quality_misses,
+            "quality_review.internal_choice_diagnostics": remaining_choice_misses,
+            "quality_review.finished_at": utcnow_iso(),
             "generation_recovery": {
                 "status": "ready", "reason": "internal_choices", "attempt": 1,
                 "max_attempts": 1, "finished_at": utcnow_iso(), "validation_summary": [],

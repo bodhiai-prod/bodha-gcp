@@ -20,7 +20,9 @@ class ReviewBudget:
 
     def reserve(self) -> None:
         if time.monotonic() >= self.deadline:
-            self.exhausted_reason = "The 60-second final-quality budget expired."
+            self.exhausted_reason = (
+                f"The {round(self.deadline - self.started)}-second final-quality budget expired."
+            )
             raise ReviewBudgetExceeded(self.exhausted_reason)
         if self.calls_used >= self.call_limit:
             self.exhausted_reason = f"The {self.call_limit}-call final-quality budget was used."
@@ -43,7 +45,7 @@ class ReviewBudget:
 _budget: contextvars.ContextVar[ReviewBudget | None] = contextvars.ContextVar("paper_review_budget", default=None)
 
 
-def begin(*, seconds: float = 60.0, call_limit: int = 3) -> ReviewBudget:
+def begin(*, seconds: float = 180.0, call_limit: int = 12) -> ReviewBudget:
     now = time.monotonic()
     budget = ReviewBudget(now, now + seconds, call_limit)
     _budget.set(budget)

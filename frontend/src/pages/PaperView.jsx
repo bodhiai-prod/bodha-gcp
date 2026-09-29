@@ -71,6 +71,8 @@ export default function PaperView() {
   const confirm = useConfirmation();
   const { id } = useParams();
   const [paper, setPaper] = useState(null);
+  const qualityReviewRunning = paper?.quality_review?.status === "running";
+  const qualityReviewBlocked = qualityReviewRunning || paper?.quality_review?.status === "needs_review";
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -118,6 +120,14 @@ export default function PaperView() {
     if (!paper || editing) return;
     if (!["queued", "pending", "generating", "reviewing"].includes(paper.generation_status)) return;
     const t = setInterval(load, 1500);
+    return () => clearInterval(t);
+  }, [paper, editing]); // eslint-disable-line
+
+  // A usable owner draft is published before repairs finish. Keep refreshing
+  // the visible questions and quality banner while those checks run.
+  useEffect(() => {
+    if (!paper || editing || paper.quality_review?.status !== "running") return;
+    const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, [paper, editing]); // eslint-disable-line
 
@@ -210,6 +220,10 @@ export default function PaperView() {
   };
 
   const enterEdit = () => {
+    if (qualityReviewRunning) {
+      toast.error("Editing is paused until the final paper checks finish.");
+      return;
+    }
     setDraft(JSON.parse(JSON.stringify(paper)));
     setEditing(true);
   };
@@ -574,6 +588,21 @@ export default function PaperView() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="paper-view-page">
+        {paper.quality_review?.status === "running" && (
+          <div className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4" data-testid="paper-quality-running-banner">
+            <div className="font-bold uppercase tracking-wider text-sm">Your paper is ready to view; final checks are continuing</div>
+            <p className="text-sm text-neutral-700 mt-1">
+              We are repairing or filling any remaining question blocks in the background. This view contains only questions that passed the initial render-safety checks.
+              {paper.quality_review?.withheld_count > 0 ? ` ${paper.quality_review.withheld_count} question${paper.quality_review.withheld_count === 1 ? " is" : "s are"} temporarily withheld.` : ""}
+            </p>
+          </div>
+        )}
+        {paper.quality_review?.status === "needs_review" && (
+          <div className="no-print mb-6 border-2 border-amber-300 bg-amber-50 p-4" data-testid="paper-quality-review-banner">
+            <div className="font-bold uppercase tracking-wider text-sm text-amber-900">Draft available; some quality checks need attention</div>
+            <p className="text-sm text-amber-800 mt-1">{paper.quality_review?.message || "The safe questions remain available while the affected content is reviewed."}</p>
+          </div>
+        )}
         {templateRecovery && (
           <div className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4" data-testid="template-recovery-banner">
             <div className="font-bold uppercase tracking-wider text-sm">
@@ -799,10 +828,11 @@ export default function PaperView() {
               <>
                 <button
                   onClick={enterEdit}
+                  disabled={qualityReviewRunning}
                   className="qp-btn qp-btn-secondary"
                   data-testid="enter-edit-button"
                 >
-                  <PencilSimple size={16} weight="bold" /> Edit
+                  <PencilSimple size={16} weight="bold" /> {qualityReviewRunning ? "Checks running" : "Edit"}
                 </button>
                 <Link
                   to={`/papers/${id}/solution`}
@@ -824,7 +854,7 @@ export default function PaperView() {
                 {hasAppliedBranding && <button onClick={removeBranding} disabled={brandingApplying} className="qp-btn qp-btn-secondary" data-testid="remove-paper-branding">Remove</button>}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="qp-btn qp-btn-primary" data-testid="download-menu-button">
+                    <button className="qp-btn qp-btn-primary" disabled={qualityReviewBlocked} title={qualityReviewBlocked ? "Downloads unlock after final checks pass" : undefined} data-testid="download-menu-button">
                       <Download size={16} weight="bold" /> Download <CaretDown size={14} weight="bold" aria-hidden="true" />
                     </button>
                   </DropdownMenuTrigger>

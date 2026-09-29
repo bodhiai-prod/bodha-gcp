@@ -68,14 +68,21 @@ async def process_job(job: dict, worker_id: str) -> None:
         budget = review_meta.get("budget") or {}
         await db.paper_review_jobs.update_one({"id": job["id"], "status": "leased"}, {"$set": {
             "provider_calls_used": int(budget.get("provider_calls_used") or 0),
-            "provider_calls_limit": int(budget.get("provider_calls_limit") or 3),
+            "provider_calls_limit": int(budget.get("provider_calls_limit") or 12),
             "failed_gates": list(review_meta.get("failed_gates") or []),
         }})
         if current and current.get("generation_status") == "ready":
-            await db.papers.update_one({"id": paper_id, "generation_status": "ready"}, {"$set": {
-                "quality_review.status": "passed", "quality_review.stage": "ready",
-                "quality_review.finished_at": utcnow_iso(),
-            }})
+            # The generator owns the actual quality verdict. A ready draft can
+            # be viewable while targeted repairs continue; never turn that
+            # in-progress or failed review into a pass just because its worker
+            # returned normally.
+            if review_meta.get("status") == "running":
+                await db.papers.update_one({"id": paper_id, "generation_status": "ready"}, {"$set": {
+                    "quality_review.status": "needs_review",
+                    "quality_review.stage": "needs_review",
+                    "quality_review.message": "The draft is available, but its final quality checks did not finish.",
+                    "quality_review.finished_at": utcnow_iso(),
+                }})
             await complete(job, status="completed", stage="ready")
             if int(current.get("diagrams_pending") or 0) > 0:
                 await enqueue_diagrams(
@@ -97,8 +104,14 @@ async def process_job(job: dict, worker_id: str) -> None:
         # A post-publish side effect (for example activity logging) can fail
         # after the paper was atomically made ready.  Do not rerun and replace
         # a valid published paper in that case.
-        current = await db.papers.find_one({"id": paper_id}, {"_id": 0, "generation_status": 1})
+        current = await db.papers.find_one({"id": paper_id}, {"_id": 0, "generation_status": 1, "quality_review": 1})
         if current and current.get("generation_status") == "ready":
+            await db.papers.update_one({"id": paper_id, "generation_status": "ready"}, {"$set": {
+                "quality_review.status": "needs_review",
+                "quality_review.stage": "needs_review",
+                "quality_review.message": str(exc)[:500],
+                "quality_review.finished_at": utcnow_iso(),
+            }})
             await complete(job, status="completed", stage="ready")
             return
         result = await retry_or_needs_review(job, str(exc)[:500])

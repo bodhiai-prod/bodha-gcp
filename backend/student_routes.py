@@ -266,11 +266,15 @@ async def start_mock_test(test_id: str, user: dict = Depends(get_current_user)):
     t = await db.mock_tests.find_one({"id": test_id}, {"_id": 0})
     if not t or t["student_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Mock test not found")
-    paper = await db.papers.find_one({"id": t["paper_id"]}, {"_id": 0, "generation_status": 1})
-    if not paper or paper.get("generation_status") != "ready":
+    paper = await db.papers.find_one(
+        {"id": t["paper_id"]},
+        {"_id": 0, "generation_status": 1, "quality_review.status": 1},
+    )
+    quality_status = ((paper or {}).get("quality_review") or {}).get("status")
+    if not paper or paper.get("generation_status") != "ready" or quality_status not in (None, "passed"):
         raise HTTPException(
             status_code=409,
-            detail="Paper is still being generated. Please wait a few seconds.",
+            detail="Paper is still being checked for quality. Please wait before starting this mock test.",
         )
     if t["status"] == "submitted":
         raise HTTPException(status_code=409, detail="Mock test already submitted")

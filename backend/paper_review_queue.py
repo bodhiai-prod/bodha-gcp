@@ -28,7 +28,8 @@ def generation_job(*, paper_id: str, payload: dict[str, Any], revision: int = 1)
         "attempt": 0, "max_attempts": MAX_ATTEMPTS, "lease_until": None,
         "heartbeat_at": None, "queued_at": now, "started_at": None, "finished_at": None,
         "next_run_at": now, "diagnostics": [], "provider_calls_used": 0,
-        "provider_calls_limit": 3, "deadline_at": None, "failed_gates": [],
+        "provider_calls_limit": int(os.environ.get("PAPER_REVIEW_PROVIDER_CALL_LIMIT", "12")),
+        "deadline_at": None, "failed_gates": [],
     }
 
 

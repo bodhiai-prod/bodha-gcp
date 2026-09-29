@@ -32,6 +32,8 @@ from auth import (
 )
 from activity import record_activity
 from instruction_spec import verify
+from latex_repair import repair_text
+from question_repair import validate_question
 from paper_status import library_status_for_paper
 from llm_adapter import chat_complete, parse_json_response
 from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_errors,
@@ -1769,6 +1771,8 @@ async def update_paper(
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
+    if (p.get("quality_review") or {}).get("status") == "running":
+        raise HTTPException(status_code=409, detail="Editing is paused while final paper checks are running")
     # Papers produced during the brief strict-validation rollout were stored
     # as failed even though their content is usable and the recovery pipeline
     # can still improve it. Restore only those recognizable validation cases;
@@ -1871,6 +1875,24 @@ async def update_paper(
                 "actual": {},
                 "at": utcnow_iso(),
             }
+        manual_quality_misses = list(set_fields["instruction_check"].get("misses") or [])
+        for question in (q for section in new_sections for q in section.get("questions") or []):
+            _fixed_text, text_issues = repair_text(str(question.get("question") or ""))
+            _fixed_options_issues = [
+                issue
+                for option in question.get("options") or []
+                for issue in repair_text(str(option or ""))[1]
+            ]
+            manual_quality_misses.extend(validate_question(question))
+            manual_quality_misses.extend(text_issues)
+            manual_quality_misses.extend(_fixed_options_issues)
+        manual_quality_misses.extend(internal_choice_misses(new_sections, p.get("generation_requirements") or {}))
+        manual_quality_misses = list(dict.fromkeys(manual_quality_misses))
+        set_fields["quality_review.status"] = "needs_review" if manual_quality_misses else "passed"
+        set_fields["quality_review.stage"] = "needs_review" if manual_quality_misses else "ready"
+        set_fields["quality_review.message"] = "; ".join(str(issue) for issue in manual_quality_misses)[:500] or None
+        set_fields["quality_review.failed_gates"] = manual_quality_misses
+        set_fields["quality_review.finished_at"] = utcnow_iso()
 
         # If a solution already exists, mark it stale so the UI prompts the
         # teacher to regenerate.
@@ -2057,6 +2079,8 @@ async def toggle_important(
     )
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    if (p.get("quality_review") or {}).get("status") == "running":
+        raise HTTPException(status_code=409, detail="Editing is paused while final paper checks are running")
     changed = False
     for s in p.get("sections", []):
         for q in s.get("questions", []):
@@ -2096,6 +2120,8 @@ async def regenerate_question_endpoint(
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
+    if (p.get("quality_review") or {}).get("status") == "running":
+        raise HTTPException(status_code=409, detail="Question repair is already running")
     if p.get("is_competitive"):
         # competitive_routes anchors every question to a retrieved past-paper
         # passage. A school-path question dropped into one of those papers would
@@ -2279,6 +2305,8 @@ async def paper_pdf(
         raise HTTPException(status_code=409, detail="Paper is still being generated")
     if p.get("generation_status") == "failed":
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
+    if (p.get("quality_review") or {}).get("status") not in (None, "passed"):
+        raise HTTPException(status_code=409, detail="The paper draft is available, but final quality checks are still in progress")
     p["sections"], section_plan, repaired = _normalize_saved_paper_sections(p)
     if repaired or section_plan != (p.get("section_plan") or []):
         p["section_plan"] = section_plan
@@ -2331,6 +2359,8 @@ async def paper_docx(
         raise HTTPException(status_code=409, detail="Paper is still being generated")
     if paper.get("generation_status") == "failed":
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
+    if (paper.get("quality_review") or {}).get("status") not in (None, "passed"):
+        raise HTTPException(status_code=409, detail="The paper draft is available, but final quality checks are still in progress")
     paper["sections"], section_plan, repaired = _normalize_saved_paper_sections(paper)
     if repaired or section_plan != (paper.get("section_plan") or []):
         paper["section_plan"] = section_plan
@@ -2607,6 +2637,8 @@ async def generate_missing_questions(
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
+    if (p.get("quality_review") or {}).get("status") == "running":
+        raise HTTPException(status_code=409, detail="Question repair is already running")
 
     if p.get("generation_status") != "ready":
         raise HTTPException(
@@ -2705,6 +2737,8 @@ async def repair_paper_internal_choices(paper_id: str, user: dict = Depends(get_
         raise HTTPException(status_code=404, detail="Paper not found")
     if paper["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
+    if (paper.get("quality_review") or {}).get("status") == "running":
+        raise HTTPException(status_code=409, detail="Question repair is already running")
     if paper.get("generation_status") != "ready":
         raise HTTPException(status_code=400, detail="Paper is not ready. Use 'Retry generation' instead.")
     diagnostics = internal_choice_misses(
