@@ -65,6 +65,13 @@ FRONTEND_IMAGE=${repo}/frontend:${tag}
 APP_DOMAIN=${APP_DOMAIN:?}
 EOF
 
+# The VM keeps immutable images from every release.  Free layers that are not
+# used by a running container *before* pulling the next (large) backend image;
+# pruning only at the end is too late once overlayfs exhausts the data disk.
+docker image prune -af
+docker container prune -f
+docker builder prune -af
+
 gcloud auth configure-docker "${GCP_REGION:-asia-south1}-docker.pkg.dev" --quiet
 docker compose --env-file "$state_dir/release.env" \
   -f "$state_dir/docker-compose.gcp.yml" pull
