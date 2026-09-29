@@ -13,7 +13,7 @@ from typing import Any
 from deps import db, utcnow_iso
 
 LEASE_SECONDS = int(os.environ.get("PAPER_REVIEW_LEASE_SECONDS", "90"))
-MAX_ATTEMPTS = int(os.environ.get("PAPER_REVIEW_MAX_ATTEMPTS", "3"))
+MAX_ATTEMPTS = int(os.environ.get("PAPER_REVIEW_MAX_ATTEMPTS", "1"))
 
 
 def _after(seconds: int) -> str:
@@ -23,11 +23,12 @@ def _after(seconds: int) -> str:
 def generation_job(*, paper_id: str, payload: dict[str, Any], revision: int = 1) -> dict[str, Any]:
     now = utcnow_iso()
     return {
-        "id": str(uuid.uuid4()), "kind": "paper_generation", "paper_id": paper_id,
+        "id": str(uuid.uuid4()), "kind": "paper_review", "paper_id": paper_id,
         "revision": revision, "payload": payload, "status": "queued", "stage": "queued",
         "attempt": 0, "max_attempts": MAX_ATTEMPTS, "lease_until": None,
         "heartbeat_at": None, "queued_at": now, "started_at": None, "finished_at": None,
-        "next_run_at": now, "diagnostics": [],
+        "next_run_at": now, "diagnostics": [], "provider_calls_used": 0,
+        "provider_calls_limit": 3, "deadline_at": None, "failed_gates": [],
     }
 
 
@@ -37,16 +38,32 @@ async def enqueue_generation(*, paper_id: str, payload: dict[str, Any], revision
     return job
 
 
-async def claim_next(worker_id: str) -> dict[str, Any] | None:
+async def enqueue_diagrams(*, paper_id: str, owner_id: str, revision: int) -> dict[str, Any]:
+    """Queue non-blocking visual enrichment after core quality has passed."""
+    now = utcnow_iso()
+    job = {
+        "id": str(uuid.uuid4()), "kind": "paper_diagram", "paper_id": paper_id,
+        "owner_id": owner_id, "revision": revision, "payload": {}, "status": "queued",
+        "stage": "queued", "attempt": 0, "max_attempts": 2, "lease_until": None,
+        "heartbeat_at": None, "queued_at": now, "started_at": None, "finished_at": None,
+        "next_run_at": now, "diagnostics": [],
+    }
+    await db.paper_review_jobs.insert_one(job)
+    return job
+
+
+async def claim_next(worker_id: str, kinds: list[str] | None = None) -> dict[str, Any] | None:
     """Lease one due job.
 
     ``claim_one`` is implemented by the Firestore adapter as a transaction;
     keeping the queue protocol there makes every worker use the same atomic
     status transition.
     """
+    kinds = kinds or ["paper_review", "paper_generation", "paper_diagram"]
+    kind_filter: Any = kinds[0] if len(kinds) == 1 else {"$in": kinds}
     return await db.paper_review_jobs.claim_one(
         {
-            "kind": "paper_generation",
+            "kind": kind_filter,
             "$or": [
                 {"status": "queued", "next_run_at": {"$lte": utcnow_iso()}},
                 {"status": "leased", "lease_until": {"$lt": utcnow_iso()}},

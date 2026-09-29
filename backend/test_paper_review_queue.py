@@ -51,6 +51,12 @@ class PaperReviewQueueTests(unittest.TestCase):
         _query, update = self.db.paper_review_jobs.updates[-1]
         self.assertEqual(update["$set"]["status"], "needs_review")
 
+    def test_diagrams_are_a_separate_durable_job_kind(self):
+        job = asyncio.run(queue.enqueue_diagrams(paper_id="p1", owner_id="u1", revision=2))
+        self.assertEqual(job["kind"], "paper_diagram")
+        self.assertEqual(job["revision"], 2)
+        self.assertEqual(job["max_attempts"], 2)
+
     def test_retry_is_requeued_with_backoff(self):
         job = {"id": "j1", "attempt": 0, "max_attempts": 3}
         status = asyncio.run(queue.retry_or_needs_review(job, "temporary"))

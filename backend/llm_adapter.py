@@ -35,6 +35,8 @@ import threading
 import time
 from typing import Any
 
+from review_budget import current as current_review_budget, reserve_provider_attempt
+
 import boto3
 from botocore.config import Config
 
@@ -167,7 +169,7 @@ OPENROUTER_TITLE = os.environ.get("OPENROUTER_TITLE", "")
 # ~50-request burst rather than a steady stream — exactly the shape that trips a
 # provider rate limit. generate_diagram() swallows failures, so without this the
 # symptom is papers quietly shipping without figures.
-DIAGRAM_MAX_CONCURRENCY = int(os.environ.get("DIAGRAM_MAX_CONCURRENCY", "12"))
+DIAGRAM_MAX_CONCURRENCY = int(os.environ.get("DIAGRAM_MAX_CONCURRENCY", "2"))
 
 # Shared by the two diffusion providers. Text is suppressed outright rather than
 # merely de-duplicated: diffusion models cannot render legible words, and asking
@@ -676,11 +678,20 @@ async def chat_complete(
     for model_id in chain:
         for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
             try:
+                # Retries and fallback models are independently billable.
+                reserve_provider_attempt()
+                budget = current_review_budget()
+                timeout = min(PER_CALL_TIMEOUT, budget.remaining_seconds()) if budget else PER_CALL_TIMEOUT
+                if timeout <= 0:
+                    # reserve_provider_attempt normally catches this first;
+                    # retain the guard for the tiny race between reservation
+                    # and constructing the awaited request.
+                    raise TimeoutError("The final-quality budget expired before the provider request started")
                 response = await asyncio.wait_for(
                     asyncio.to_thread(
                         _text_complete_sync, model_id, system_message, user_text
                     ),
-                    timeout=PER_CALL_TIMEOUT,
+                    timeout=timeout,
                 )
                 if response:
                     if attempt > 1:

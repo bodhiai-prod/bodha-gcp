@@ -56,6 +56,7 @@ from storage import APP_NAME, put_object
 from textbook_content import load_textbook_chunks
 from topic_balance import measure_coverage, topic_shortfall
 from token_usage import tag
+from review_budget import begin as begin_review_budget
 from normal_paper_contract import (
     NORMAL_CONTRACT_VERSION,
     compile_normal_plan,
@@ -672,6 +673,12 @@ async def generate_paper_background(
         return
 
     sections = data.get("sections") or []
+    # The draft provider call is now complete. All downstream repair helpers
+    # share this one hard budget, including retries and fallback models.
+    review_budget = begin_review_budget(
+        seconds=float(os.environ.get("PAPER_REVIEW_BUDGET_SECONDS", "60")),
+        call_limit=int(os.environ.get("PAPER_REVIEW_PROVIDER_CALL_LIMIT", "3")),
+    )
     # Publish the only truthful question count available once the model output
     # has been parsed. A single provider response moves from 0 straight to this
     # value; the UI continues to poll it while the finishing checks run.
@@ -997,7 +1004,36 @@ async def generate_paper_background(
     structural_recovery = bool(spec.get("section_allocations") and any(
         "allocation identity" in miss.lower() for miss in allocation_issues
     ))
-    validation_error = "; ".join([*mark_misses, *( ["One or more questions had an invalid cognitive type."] if final_type_misses else [])])[:500] or None
+    quality_misses = list(dict.fromkeys(
+        list(final_check["misses"])
+        + (["One or more questions remain structurally incomplete."] if int(completeness_stats.get("unrepaired") or 0) else [])
+        + (["Some mathematical notation could not be repaired safely."] if int(latex_stats.get("unrepaired") or 0) else [])
+        + (["Required internal choices could not be repaired."] if internal_choice_recovery else [])
+        + (["Template allocation needs review."] if structural_recovery else [])
+        + ([review_budget.exhausted_reason] if review_budget.exhausted_reason else [])
+    ))
+    validation_error = "; ".join(quality_misses)[:500] or None
+    if quality_misses or normal_issues:
+        # Retain the candidate as a draft for an explicit retry, but do not
+        # publish it as ready or launch any automatic recovery provider calls.
+        await db.papers.update_one(
+            {"id": paper_id, "generation_status": {"$in": ACTIVE_GENERATION_STATUSES}},
+            {"$set": {
+                "sections": sections, "section_plan": section_plan,
+                "question_count": count_questions(sections), "diagrams_pending": pending_count,
+                "generation_status": "needs_review", "generation_error": validation_error,
+                "generation_progress.status": "needs_review", "generation_progress.phase": "needs_review",
+                "generation_progress.updated_at": utcnow_iso(),
+                "quality_review.status": "needs_review", "quality_review.stage": "needs_review",
+                "quality_review.message": validation_error,
+                "quality_review.budget": review_budget.snapshot(),
+                "quality_review.failed_gates": quality_misses or [normal_review_status(normal_issues)["summary"]],
+                "review_draft_available": True, "instruction_check": final_check,
+                "latex_check": latex_stats, "completeness_check": completeness_stats,
+                "dedupe_check": dedupe_stats, "topic_coverage": coverage,
+            }},
+        )
+        return
     await db.papers.update_one(
         {"id": paper_id, "generation_status": {"$in": ACTIVE_GENERATION_STATUSES}},
         {"$set": {
@@ -1046,6 +1082,8 @@ async def generate_paper_background(
             "dedupe_check": dedupe_stats,
             "topic_coverage": coverage,
             "instruction_check": final_check,
+            "quality_review.budget": review_budget.snapshot(),
+            "quality_review.failed_gates": [],
             # A stated count makes the target knowable, which is what
             # re-enables auto-top-up and the missing-questions banner for
             # instruction-driven papers -- both were dead while this was 0.
@@ -1070,22 +1108,8 @@ async def generate_paper_background(
     )
     await record_activity(owner_id, "paper.ready", {"paper_id": paper_id, "questions": count_questions(sections)})
 
-    if structural_recovery:
-        _spawn_recovery(recover_template_generation_background(
-            paper_id, owner_id, context_excerpt=context_excerpt, feedback_hints=feedback_hints
-        ))
-        return
-
-    # Kick off diagram generation asynchronously.
-    if pending_count > 0:
-        await generate_diagrams_background(paper_id, owner_id)
-
-    # Last: if the paper is still short of what it was meant to be, top it
-    # up. Deliberately after the $set above, so the teacher already has the
-    # partial paper on screen while this runs.
-    await _auto_topup_if_short(
-        paper_id, owner_id, context_excerpt, feedback_hints
-    )
+    # The durable worker records quality completion and queues diagrams after
+    # this function returns. Do not block the paper on diagrams or auto-topup.
 
 
 # ---------------------------------------------------------------------------
