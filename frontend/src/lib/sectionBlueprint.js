@@ -39,14 +39,18 @@ export function normalizeBucketAllocations(rows, blueprint) {
   const slotBuckets = new Map();
   const parentBuckets = new Map();
   const groupBuckets = new Map();
+  const bucketById = new Map();
   (blueprint?.sections || []).forEach(section => section.groups.forEach(group => {
     const buckets = allocationBuckets(group);
     groupBuckets.set(`${section.id}:${group.id}`, buckets);
-    buckets.forEach(bucket => bucket.slots.forEach(slot => {
-      slotBuckets.set(`${section.id}:${group.id}:${slot.id}`, bucket.id);
-      const key = `${section.id}:${group.id}:${slot.parent_id}`;
-      parentBuckets.set(key, [...new Set([...(parentBuckets.get(key) || []), bucket.id])]);
-    }));
+    buckets.forEach(bucket => {
+      bucketById.set(`${section.id}:${group.id}:${bucket.id}`, bucket);
+      bucket.slots.forEach(slot => {
+        slotBuckets.set(`${section.id}:${group.id}:${slot.id}`, bucket.id);
+        const key = `${section.id}:${group.id}:${slot.parent_id}`;
+        parentBuckets.set(key, [...new Set([...(parentBuckets.get(key) || []), bucket.id])]);
+      });
+    });
   }));
   const merged = new Map();
   const assigned = new Map();
@@ -59,23 +63,23 @@ export function normalizeBucketAllocations(rows, blueprint) {
   };
   rows.forEach(row => {
     const groupKey = `${row.section_id}:${row.group_id}`;
-    const bucketId = row.bucket_id || slotBuckets.get(`${groupKey}:${row.slot_id}`);
-    if (bucketId) {
-      add(row, bucketId, row.count);
-      return;
-    }
+    const directBucket = row.bucket_id && bucketById.get(`${groupKey}:${row.bucket_id}`);
+    const slotBucketId = !directBucket && slotBuckets.get(`${groupKey}:${row.slot_id}`);
+    const slotBucket = slotBucketId && bucketById.get(`${groupKey}:${slotBucketId}`);
     // Older saved configurations sometimes targeted a printable parent
     // question (such as `q1`) rather than its scored subparts.  Spread that
     // count through the matching compatible buckets, then through the whole
     // group when no parent identity is available.
     const group = groupBuckets.get(groupKey) || [];
     const parentIds = parentBuckets.get(`${groupKey}:${row.slot_id}`);
-    const candidates = parentIds ? parentIds.map(id => group.find(bucket => bucket.id === id)).filter(Boolean) : group;
+    const candidates = row.bucket_id && !directBucket ? []
+      : directBucket ? [directBucket] : slotBucket ? [slotBucket]
+        : parentIds ? parentIds.map(id => group.find(bucket => bucket.id === id)).filter(Boolean) : group;
     if (!candidates?.length) {
       merged.set(`stale:${JSON.stringify(row)}`, row);
       return;
     }
-    let remaining = row.count;
+    let remaining = Number(row.count) || 0;
     candidates.forEach(bucket => {
       if (remaining <= 0) return;
       const capacity = bucket.slots.length - (assigned.get(`${groupKey}:${bucket.id}`) || 0);
@@ -83,9 +87,9 @@ export function normalizeBucketAllocations(rows, blueprint) {
       if (count) add(row, bucket.id, count);
       remaining -= count;
     });
-    // Preserve an overflow as a bucket row so the backend reports a concise
-    // grouped-limit error instead of silently dropping a teacher selection.
-    if (remaining) add(row, candidates.at(-1).id, remaining);
+    // Do not make a full bucket look valid by counting an overflow. The API
+    // reports the saved conflict in one compact message, while this editor
+    // only renders the slots it can genuinely allocate.
   });
   return [...merged.values()];
 }

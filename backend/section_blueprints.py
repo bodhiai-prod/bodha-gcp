@@ -886,8 +886,9 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
                 errors.append("An assignment has a stale section/topic or is duplicated. Review the section editor.")
                 continue
             seen.add(key)
-            if a["count"] > len(bucket["slots"]):
-                errors.append(f"Section {pair[0]} / {pair[1]}: assigned {a['count']} of {len(bucket['slots'])} compatible parts.")
+            available_slots = [slot for slot in bucket["slots"] if counts[(*pair, slot["id"])] == 0]
+            if a["count"] > len(available_slots):
+                errors.append(f"Section {pair[0]} / {pair[1]}: requested {a['count']} compatible parts but only {len(available_slots)} remain. Re-select this assignment.")
                 continue
             # Legacy blueprints expose one count-based group rather than exact
             # printed slots.  Keep their existing aggregate contract intact.
@@ -898,7 +899,7 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
             # Replace the bucket-level identity with exact slot identities.
             # This keeps the generation contract, exports, and recovery logic
             # unchanged while the editor stays compact.
-            for slot in bucket["slots"][:a["count"]]:
+            for slot in available_slots[:a["count"]]:
                 seen.discard((*pair, slot["id"], a["textbook_id"], a["topic_id"]))
                 resolve(a, pair, {**slot, "marks": slot.get("marks", groups[pair]["marks"]),
                                   "format": slot.get("format", groups[pair]["format"])}, bucket_id=bucket_id)

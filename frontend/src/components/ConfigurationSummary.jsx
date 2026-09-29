@@ -12,7 +12,10 @@ export default function ConfigurationSummary({ preview, loading, error }) {
       <div><dt>Questions</dt><dd>{summary.question_count || "Unspecified"}</dd></div>
       <div><dt>Diagram-enabled allocations</dt><dd>{summary.diagram_allocations}</dd></div>
       <div><dt>Blueprint</dt><dd>{summary.blueprint_label || "Not selected"}</dd></div>
-      <div><dt>Structural match</dt><dd className={summary.blueprint_match ? "text-green-700" : "text-amber-700"}>{summary.blueprint_match ? "Validated" : "Not validated"}</dd></div>
+      {summary.blueprint_label && <>
+        <div><dt>Template</dt><dd className={summary.template_valid ? "text-green-700" : "text-red-700"}>{summary.template_valid ? "Valid" : "Invalid"}</dd></div>
+        <div><dt>Topic assignments</dt><dd className={summary.assignments_valid ? "text-green-700" : "text-amber-700"}>{summary.assignments_valid ? "Ready" : "Needs attention"}</dd></div>
+      </>}
       {Object.entries(summary.difficulty).map(([key, count]) => <div key={key}><dt>{{easy: "Simple", medium: "Moderate", hard: "Challenging"}[key]}</dt><dd>{count} questions</dd></div>)}
     </dl>}
     {preview?.errors?.length > 0 && <ul className="summary-issues" role="alert">{preview.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}

@@ -51,3 +51,16 @@ test("legacy parent-question allocations spread across compatible buckets", () =
     ["q1:q1-i", 2], ["q1:q1-iii", 1],
   ]);
 });
+test("legacy multi-count slot rows share bucket capacity instead of looking overfilled", () => {
+  const slots = Array.from({ length: 15 }, (_, index) => ({
+    id: `q1-${index + 1}`, parent_id: "q1", parent_label: "Question 1", marks: 1, format: "mcq",
+  }));
+  const blueprint = { sections: [{ id: "A", groups: [{ id: "q1", count: 1, marks: 15, format: "mcq", slots }] }] };
+  const rows = [
+    { section_id: "A", group_id: "q1", slot_id: "q1-1", ...topic, count: 7, difficulty: null, diagrams: false },
+    { section_id: "A", group_id: "q1", slot_id: "q1-2", textbook_id: "book", topic_id: "electrostatics", count: 8, difficulty: null, diagrams: false },
+  ];
+  expect(normalizeBucketAllocations(rows, blueprint).map(row => [row.bucket_id, row.count])).toEqual([
+    ["q1:q1-1", 7], ["q1:q1-1", 8],
+  ]);
+});

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 from section_blueprints import (Allocation, catalog, blueprint_errors, compile_allocations,
     topic_catalog, allocation_misses, paper_summary, apply_allocation_overrides,
     derived_internal_choice_count, internal_choice_misses, normalize_internal_choice_counts, section_marks,
-    allocation_buckets)
+    allocation_buckets, normalize_template_allocations)
 from generation_requirements import remaining_requirements
 from textbook_topics import merge_topic_batches, topic_context
 from prompts import qgen_prompt
@@ -127,7 +127,7 @@ class BlueprintTests(unittest.TestCase):
         self.assertEqual(spec["total_questions"], 2)
         self.assertEqual(spec["printed_question_count"], 1)
         _, errors = compile_allocations(bp, rows[:1], [book], "medium", 2)
-        self.assertTrue(any("assigned 0 of 1 parts" in error for error in errors))
+        self.assertEqual(errors, ["Section A / Question 1: 1 of 2 parts still need topic assignments."])
 
     def test_bucket_allocations_expand_into_exact_compatible_slots(self):
         book, *_ = fixture()
@@ -155,6 +155,43 @@ class BlueprintTests(unittest.TestCase):
         self.assertEqual([(row["format"], row["marks"], row["count"]) for row in spec["section_allocations"]], [
             ("short_answer", 2, 1), ("short_answer", 2, 1), ("long_answer", 5, 1), ("long_answer", 5, 1),
         ])
+
+    def test_legacy_slot_counts_are_canonicalized_before_preview_and_generation(self):
+        book, *_ = fixture()
+        book["topics"].append({"name": "Electrostatics", "subtopics": [], "source_chunks": [0]})
+        first, second = topic_catalog(book)[0], topic_catalog(book)[2]
+        slots = [
+            {"id": f"q1-{index}", "parent_id": "q1", "parent_label": "Question 1", "part_label": f"({index})", "marks": 1, "format": "mcq"}
+            for index in range(1, 16)
+        ]
+        bp = {"id": "legacy-slot-count", "version": 1, "label": "Slots", "total_marks": 15,
+              "duration_minutes": 30, "sections": [{"id": "A", "title": "Section A", "groups": [{
+                  "id": "q1", "count": 1, "marks": 15, "format": "mcq", "slots": slots
+              }]}]}
+        legacy = [
+            Allocation(section_id="A", group_id="q1", slot_id="q1-1", textbook_id=book["id"], topic_id=first["topic_id"], count=7),
+            Allocation(section_id="A", group_id="q1", slot_id="q1-2", textbook_id=book["id"], topic_id=second["topic_id"], count=8),
+        ]
+        canonical, migration_errors = normalize_template_allocations(bp, legacy)
+        self.assertEqual(migration_errors, [])
+        self.assertEqual([(row["bucket_id"], row["count"]) for row in canonical], [("q1:q1-1", 7), ("q1:q1-1", 8)])
+        spec, errors = compile_allocations(bp, legacy, [book], "medium", 15)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(spec["section_allocations"]), 15)
+
+    def test_missing_slot_errors_are_compact_by_printed_question(self):
+        book, *_ = fixture()
+        topic = topic_catalog(book)[0]
+        slots = [
+            {"id": f"q1-{index}", "parent_id": "q1", "parent_label": "Question 1", "part_label": f"({index})", "marks": 1, "format": "mcq"}
+            for index in range(1, 4)
+        ]
+        bp = {"id": "compact-misses", "version": 1, "label": "Slots", "total_marks": 3,
+              "duration_minutes": 30, "sections": [{"id": "A", "title": "Section A", "groups": [{
+                  "id": "q1", "count": 1, "marks": 3, "format": "mcq", "slots": slots
+              }]}]}
+        _, errors = compile_allocations(bp, [Allocation(section_id="A", group_id="q1", slot_id="q1-1", textbook_id=book["id"], topic_id=topic["topic_id"], count=1)], [book], "medium", 3)
+        self.assertEqual(errors, ["Section A / Question 1: 2 of 3 parts still need topic assignments."])
 
     def test_bucket_allocations_keep_legacy_count_based_blueprints_compatible(self):
         book, bp, _, _, _ = fixture()

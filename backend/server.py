@@ -39,7 +39,8 @@ from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_er
                                 apply_allocation_overrides, hydrate_section_instructions,
                                 printable_template_instructions, compact_validation_misses,
                                 allocation_misses, internal_choice_misses,
-                                normalize_internal_choice_counts)
+                                normalize_internal_choice_counts,
+                                normalize_template_allocations)
 from normal_paper_contract import (
     normalize_normal_sections,
     review_status as normal_review_status,
@@ -1471,7 +1472,11 @@ async def _resolve_configuration(req, user, books):
             bp = await db.paper_blueprints.find_one({"id": req.blueprint_id, "owner_id": user["id"]}, {"_id": 0, "owner_id": 0})
         if not bp or bp["version"] != req.blueprint_version:
             raise HTTPException(status_code=422, detail="Blueprint is unavailable or its version changed. Select or analyze it again.")
-        spec, errors = compile_allocations(bp, req.section_topic_allocations or [], books, req.difficulty, req.total_marks,
+        # Canonicalize here as well as in the editor.  A saved configuration
+        # can outlive a frontend release, so preview and generation must never
+        # depend on a browser-side migration to agree on validity.
+        canonical_allocations, _ = normalize_template_allocations(bp, req.section_topic_allocations or [])
+        spec, errors = compile_allocations(bp, canonical_allocations, books, req.difficulty, req.total_marks,
                                           None if overrides.get("diagram_count") is not None else req.diagram_count)
         if spec:
             spec, conflicts = apply_allocation_overrides(spec, overrides)
@@ -1496,13 +1501,20 @@ async def _resolve_configuration(req, user, books):
                 weights[level] = weights.get(level, 0) + max(1, float(topic.get("weight") or 5))
         levels = apportion(weights, spec.get("total_questions") or 0) if any(weights.values()) else {**levels, req.difficulty: spec.get("total_questions") or 0}
     return {"valid": not errors, "errors": errors, "requirements": spec,
+            "canonical_allocations": canonical_allocations if bp else [],
             "overrides": {k: v for k, v in overrides.items() if v and k != "at"},
             "warnings": overrides.get("unparsed", []),
             "summary": {"textbooks": [b.get("original_filename", b["id"]) for b in books],
                 "mapped_topics": len({(a["textbook_id"], a["topic_id"]) for a in rows}) if bp else len(req.topics),
                 "question_count": spec.get("total_questions"), "diagram_allocations": sum(a["diagrams"] for a in rows),
                 "difficulty": levels, "cognitive": spec.get("type_counts") or None,
-                "blueprint_label": bp.get("label") if bp else None, "blueprint_match": bool(bp) and not errors}}
+                "blueprint_label": bp.get("label") if bp else None,
+                # A board template can be structurally sound while its topic
+                # assignments are incomplete. Keep these states distinct so
+                # teachers do not see a false "template invalid" warning.
+                "template_valid": bool(bp),
+                "assignments_valid": bool(bp) and not errors,
+                "blueprint_match": bool(bp) and not errors}}
 
 
 @api_router.post("/papers/configuration-preview")
@@ -1607,6 +1619,10 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         if not preview["valid"]:
             raise HTTPException(status_code=422, detail="; ".join(preview["errors"]))
         resolved = preview["requirements"]
+        # Persist the canonical bucket form used for validation. This prevents
+        # an old slot-based selection from resurfacing during regeneration or
+        # when the paper is opened on a newer frontend.
+        req.section_topic_allocations = [Allocation.model_validate(row) for row in preview["canonical_allocations"]]
         bp = resolved["blueprint"]
         req.section_blueprint = bp["template"].replace("{SUBJECT}", req.subject.upper()).replace("{YEAR}", str(datetime.now().year))
     context_excerpt = topic_context(textbooks, (resolved or {}).get("section_allocations") or [t for t in req.topics if isinstance(t, dict)])
