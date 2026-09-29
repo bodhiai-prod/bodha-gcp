@@ -15,6 +15,17 @@ services:
     logging:
       driver: journald
 
+  paper-review-worker:
+    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}
+    restart: unless-stopped
+    command: ["python", "-m", "paper_review_worker"]
+    env_file:
+      - ${BACKEND_ENV_FILE:-/run/bodha/backend.env}
+    volumes:
+      - /srv/bodha/logs:/app/logs
+    logging:
+      driver: journald
+
   web:
     image: ${FRONTEND_IMAGE:?set FRONTEND_IMAGE}
     restart: unless-stopped

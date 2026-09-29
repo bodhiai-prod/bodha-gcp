@@ -138,6 +138,25 @@ def test_docx_renders_physics_symbols_and_upright_si_units():
     assert '<m:sty m:val="p"' in document_xml
 
 
+def test_docx_renders_limits_and_vector_accents_as_native_omml():
+    paper = _paper()
+    paper["sections"][0]["questions"][0]["question"] = (
+        r"Evaluate $\lim_{n\to\infty}\sum_{i=1}^{n}\left(\frac{i}{n}\right)^2$; "
+        r"if $\vec{p}=\hat{i}+2\hat{j}$, then $\overrightarrow{PQ}=Q-P$."
+    )
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    assert "&gt;lim&lt;" not in document_xml
+    assert "overrightarrow" not in document_xml
+    assert "&gt;vec&lt;" not in document_xml
+    assert "&gt;hat&lt;" not in document_xml
+    assert "<m:limLow>" in document_xml
+    assert "<m:groupChr>" in document_xml
+    assert document_xml.count("<m:acc>") >= 3
+
+
 def test_docx_renders_template_section_instruction_before_question_number():
     paper = _paper()
     paper["generation_requirements"] = {"blueprint": {
@@ -238,12 +257,13 @@ def test_solution_docx_contains_answers_and_monochrome_heading():
 def test_export_text_helpers():
     assert format_mark(2.0) == "2"
     assert format_mark(2.5) == "2.5"
-    assert printable_instructions("Ensure proper LaTeX formatting.") == DEFAULT_INSTRUCTIONS
+    assert printable_instructions("Ensure proper LaTeX formatting.") == "Ensure proper LaTeX formatting."
     assert printable_instructions(
         "Show working. Ensure proper LaTeX formatting.",
         custom_instructions="Show working.",
-    ) == DEFAULT_INSTRUCTIONS
+    ) == "Show working. Ensure proper LaTeX formatting."
     assert printable_instructions("", template_instructions="Board instruction.") == "Board instruction."
+    assert printable_instructions("Teacher-edited instruction.", template_instructions="Board instruction.") == "Teacher-edited instruction."
     assert canonical_question_type("problem") == "concept"
     assert canonical_question_type("numerical") == "application"
     legacy = {"sections": [{"questions": [{"type": "problem"}]}]}

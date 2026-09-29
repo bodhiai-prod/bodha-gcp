@@ -28,7 +28,7 @@ def library_status_for_paper(paper, needs_review=False):
     teacher can see work is still underway rather than a stale review signal.
     """
     generation_status = paper.get("generation_status") or "ready"
-    if generation_status == "pending":
+    if generation_status in {"queued", "pending", "generating", "reviewing"}:
         progress_data = paper.get("generation_progress") or {}
         completed = _positive_int(progress_data.get("completed"))
         total = _positive_int(
@@ -37,7 +37,10 @@ def library_status_for_paper(paper, needs_review=False):
             or paper.get("total_questions")
         )
         progress = {"completed": completed, "total": total} if total else None
-        return _status("generating", "Generating", active=True, progress=progress)
+        label = "Checking final quality" if generation_status == "reviewing" else "Generating"
+        return _status("generating", label, active=True, progress=progress)
+    if generation_status == "needs_review":
+        return _status("needs_review", "Needs review")
     if generation_status == "failed":
         return _status("generation_failed", "Generation failed")
     if generation_status == "cancelled":

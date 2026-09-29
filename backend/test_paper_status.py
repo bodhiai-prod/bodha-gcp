@@ -16,6 +16,17 @@ class PaperLibraryStatusTests(unittest.TestCase):
             },
         )
 
+    def test_queued_and_reviewing_are_active(self):
+        self.assertEqual(library_status_for_paper({"generation_status": "queued"})["key"], "generating")
+        status = library_status_for_paper({"generation_status": "reviewing"})
+        self.assertEqual(status["label"], "Checking final quality")
+
+    def test_needs_review_is_terminal_safe_state(self):
+        self.assertEqual(
+            library_status_for_paper({"generation_status": "needs_review"})["key"],
+            "needs_review",
+        )
+
     def test_initial_generation_overrides_every_other_state(self):
         status = library_status_for_paper({
             "generation_status": "pending",

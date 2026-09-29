@@ -473,8 +473,10 @@ const AllPapersTab = ({ papers, loading }) => {
             className={`qp-badge ${
               p.generation_status === "ready"
                 ? "qp-badge-success"
-                : p.generation_status === "pending"
+                : ["queued", "pending", "generating", "reviewing"].includes(p.generation_status)
                 ? "qp-badge-blue"
+                : p.generation_status === "needs_review"
+                ? "qp-badge-yellow"
                 : "qp-badge-red"
             }`}
           >

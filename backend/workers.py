@@ -68,6 +68,65 @@ from normal_paper_contract import (
     validate_normal_plan,
 )
 
+ACTIVE_GENERATION_STATUSES = ["queued", "pending", "generating", "reviewing"]
+
+
+async def _complete_and_repair_sections_parallel(
+    sections: list,
+    *,
+    ref: str,
+    context: dict,
+    flags: dict,
+) -> tuple[dict, dict]:
+    """Run independent completion and LaTeX passes concurrently.
+
+    Both passes start from an immutable snapshot.  A question completed by the
+    first pass wins over the preliminary LaTeX patch, then receives a small
+    second LaTeX pass.  That retains the required dependency without making a
+    whole clean-paper LaTeX pass wait behind a slow completion model call.
+    """
+    original = copy.deepcopy(sections)
+    completion_copy = copy.deepcopy(sections)
+    latex_copy = copy.deepcopy(sections)
+    completeness, preliminary_latex = await _asyncio.gather(
+        complete_sections(completion_copy, ref=ref, context=context, flags=flags),
+        repair_sections(latex_copy, ref=ref),
+    )
+    original_by_id = {
+        q.get("id"): q for section in original for q in section.get("questions") or []
+        if isinstance(q, dict) and q.get("id")
+    }
+    completed_by_id = {
+        q.get("id"): q for section in completion_copy for q in section.get("questions") or []
+        if isinstance(q, dict) and q.get("id")
+    }
+    latex_by_id = {
+        q.get("id"): q for section in latex_copy for q in section.get("questions") or []
+        if isinstance(q, dict) and q.get("id")
+    }
+    changed = {
+        qid for qid, question in completed_by_id.items()
+        if question != original_by_id.get(qid)
+    }
+    for qid, question in completed_by_id.items():
+        repaired = latex_by_id.get(qid)
+        if qid not in changed and repaired:
+            question["question"] = repaired.get("question", question.get("question"))
+            if isinstance(question.get("options"), list) and isinstance(repaired.get("options"), list):
+                question["options"] = repaired["options"]
+    sections[:] = completion_copy
+    if changed:
+        changed_sections = [{
+            "questions": [q for q in section.get("questions") or [] if q.get("id") in changed]
+        } for section in sections]
+        follow_up = await repair_sections(changed_sections, ref=f"{ref}:completed")
+        preliminary_latex["checked"] = int(preliminary_latex.get("checked") or 0) + int(follow_up.get("checked") or 0)
+        preliminary_latex["auto_fixed"] = int(preliminary_latex.get("auto_fixed") or 0) + int(follow_up.get("auto_fixed") or 0)
+        preliminary_latex["llm_fixed"] = int(preliminary_latex.get("llm_fixed") or 0) + int(follow_up.get("llm_fixed") or 0)
+        preliminary_latex["unrepaired"] = int(follow_up.get("unrepaired") or 0)
+        preliminary_latex["issues"] = sorted(set(preliminary_latex.get("issues") or []) | set(follow_up.get("issues") or []))
+    return completeness, preliminary_latex
+
 
 # ---------------------------------------------------------------------------
 # Feedback hints — short summaries of past teacher edits, fed back into prompts
@@ -517,12 +576,12 @@ async def generate_paper_background(
             spec["topic_counts"] = dict(normal_plan.get("topic_counts") or {})
         except Exception as exc:  # configuration can also be changed by parsed instructions
             await db.papers.update_one(
-                {"id": paper_id, "generation_status": "pending"},
+                {"id": paper_id, "generation_status": {"$in": ACTIVE_GENERATION_STATUSES}},
                 {"$set": {
-                    "generation_status": "failed",
+                    "generation_status": "needs_review",
                     "generation_error": str(exc),
-                    "generation_progress.status": "failed",
-                    "generation_progress.phase": "failed",
+                    "generation_progress.status": "needs_review",
+                    "generation_progress.phase": "needs_review",
                     "generation_progress.updated_at": utcnow_iso(),
                 }},
             )
@@ -563,7 +622,7 @@ async def generate_paper_background(
 
     async def update_progress(completed: int, batch: int = 0, batch_total: int = 0, phase: str = "generating") -> None:
         await db.papers.update_one(
-            {"id": paper_id, "generation_status": "pending"},
+            {"id": paper_id, "generation_status": {"$in": ACTIVE_GENERATION_STATUSES}},
             {"$set": {
                 "generation_progress.completed": min(target_q, max(0, completed)),
                 "generation_progress.total": target_q,
@@ -572,6 +631,9 @@ async def generate_paper_background(
                 "generation_progress.batch": batch,
                 "generation_progress.batch_total": batch_total,
                 "generation_progress.updated_at": utcnow_iso(),
+                "generation_status": "reviewing" if phase in {"validating", "finalizing"} else "generating",
+                "quality_review.status": "running",
+                "quality_review.stage": phase,
             }},
         )
 
@@ -597,12 +659,12 @@ async def generate_paper_background(
     except Exception as e:  # noqa: BLE001
         logger.exception("Question generation failed")
         await db.papers.update_one(
-            {"id": paper_id, "generation_status": "pending"},
+            {"id": paper_id, "generation_status": {"$in": ACTIVE_GENERATION_STATUSES}},
             {"$set": {
-                "generation_status": "failed",
+                "generation_status": "needs_review",
                 "generation_error": str(e)[:500],
-                "generation_progress.status": "failed",
-                "generation_progress.phase": "failed",
+                "generation_progress.status": "needs_review",
+                "generation_progress.phase": "needs_review",
                 "generation_progress.updated_at": utcnow_iso(),
             }},
         )
@@ -684,12 +746,16 @@ async def generate_paper_background(
     # two options, a stem cut mid-sentence, an answer key pointing at
     # nothing. Runs ahead of repair_sections so options written here get the
     # same LaTeX gate as the ones the first call produced.
-    completeness_stats = await complete_sections(
-        sections,
-        ref=paper_id,
+    completeness_stats, latex_stats = await _complete_and_repair_sections_parallel(
+        sections, ref=paper_id,
         context={"subject": subject, "klass": klass, "difficulty": difficulty},
         flags=coercions,
     )
+    latex_baseline = {
+        q.get("id"): (q.get("question"), copy.deepcopy(q.get("options")))
+        for section in sections for q in section.get("questions") or []
+        if isinstance(q, dict) and q.get("id")
+    }
 
     # A transport-salvaged slot can exist while its content is still unusable
     # (for example a truncated stem or a three-option MCQ). Retry only those
@@ -827,7 +893,20 @@ async def generate_paper_background(
     # ahead of apply_diagram_policy so diagram_policy.plain_text() flattens
     # already-clean markup, and ahead of the $set below so generation_status
     # only reaches "ready" once the questions actually render.
-    latex_stats = await repair_sections(sections, ref=paper_id)
+    # The parallel pass above has already checked every stable question.
+    # Re-check only slots introduced or rewritten by later recovery/dedupe.
+    late_sections = [{
+        "questions": [
+            q for q in section.get("questions") or []
+            if latex_baseline.get(q.get("id")) != (q.get("question"), q.get("options"))
+        ]
+    } for section in sections]
+    late_stats = await repair_sections(late_sections, ref=f"{paper_id}:recovery")
+    latex_stats["checked"] = int(latex_stats.get("checked") or 0) + int(late_stats.get("checked") or 0)
+    latex_stats["auto_fixed"] = int(latex_stats.get("auto_fixed") or 0) + int(late_stats.get("auto_fixed") or 0)
+    latex_stats["llm_fixed"] = int(latex_stats.get("llm_fixed") or 0) + int(late_stats.get("llm_fixed") or 0)
+    latex_stats["unrepaired"] = int(latex_stats.get("unrepaired") or 0) + int(late_stats.get("unrepaired") or 0)
+    latex_stats["issues"] = sorted(set(latex_stats.get("issues") or []) | set(late_stats.get("issues") or []))
     normalize_internal_choice_counts(sections)
     internal_choice_recovery = None
     choice_diagnostics = internal_choice_misses(sections, spec)
@@ -864,7 +943,7 @@ async def generate_paper_background(
 
     # Cancellation is cooperative: do not publish a response that finished
     # after its owner cancelled the job.
-    still_pending = await db.papers.find_one({"id": paper_id, "generation_status": "pending"}, {"_id": 0, "id": 1})
+    still_pending = await db.papers.find_one({"id": paper_id, "generation_status": {"$in": ACTIVE_GENERATION_STATUSES}}, {"_id": 0, "id": 1})
     if not still_pending:
         logger.info("Paper generation cancelled before publish: %s", paper_id)
         return
@@ -920,7 +999,7 @@ async def generate_paper_background(
     ))
     validation_error = "; ".join([*mark_misses, *( ["One or more questions had an invalid cognitive type."] if final_type_misses else [])])[:500] or None
     await db.papers.update_one(
-        {"id": paper_id, "generation_status": "pending"},
+        {"id": paper_id, "generation_status": {"$in": ACTIVE_GENERATION_STATUSES}},
         {"$set": {
             "instructions": printable_instructions(
                 data.get("instructions", ""),

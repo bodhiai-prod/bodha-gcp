@@ -2,22 +2,22 @@
 export const BLUEPRINT_PRESETS = [
   {
     family: "icse10",
-    label: "Use ICSE Class 10",
+    label: "ICSE Class 10",
     testId: "blueprint-preset-icse",
   },
   {
     family: "cbse10",
-    label: "Use CBSE Class 10",
+    label: "CBSE Class 10",
     testId: "blueprint-preset-cbse",
   },
   {
     family: "isc12",
-    label: "Use ISC Class 12",
+    label: "ISC Class 12",
     testId: "blueprint-preset-isc-12",
   },
   {
     family: "cbse12",
-    label: "Use CBSE Class 12",
+    label: "CBSE Class 12",
     testId: "blueprint-preset-cbse-12",
   },
 ];

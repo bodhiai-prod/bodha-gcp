@@ -26,6 +26,68 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 _MISSING = object()
 
 
+def _encode_generation_requirements(document: dict[str, Any]) -> dict[str, Any]:
+    """Make the template snapshot safe for Firestore persistence.
+
+    Firestore rejects nested arrays.  A slot-aware blueprint has
+    ``sections -> groups -> slots`` and some templates additionally express
+    disjoint section pairs as a list of two-item lists.  The application uses
+    those lists in memory, so encode only the persisted copy and restore it at
+    the collection read boundary below.
+    """
+    encoded = copy.deepcopy(document)
+    requirements = encoded.get("generation_requirements")
+    blueprint = requirements.get("blueprint") if isinstance(requirements, dict) else None
+    if not isinstance(blueprint, dict):
+        return encoded
+
+    for section in blueprint.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        for group in section.get("groups") or []:
+            if not isinstance(group, dict) or not isinstance(group.get("slots"), list):
+                continue
+            group["slots"] = {
+                str(slot.get("id", index)): slot
+                for index, slot in enumerate(group["slots"])
+                if isinstance(slot, dict)
+            }
+
+    pairs = blueprint.get("disjoint_section_pairs")
+    if isinstance(pairs, list):
+        blueprint["disjoint_section_pairs"] = [
+            {"first": pair[0], "second": pair[1]}
+            for pair in pairs
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        ]
+    return encoded
+
+
+def _decode_generation_requirements(document: dict[str, Any]) -> dict[str, Any]:
+    """Restore Firestore-safe blueprint fields to the application's list form."""
+    decoded = copy.deepcopy(document)
+    requirements = decoded.get("generation_requirements")
+    blueprint = requirements.get("blueprint") if isinstance(requirements, dict) else None
+    if not isinstance(blueprint, dict):
+        return decoded
+
+    for section in blueprint.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        for group in section.get("groups") or []:
+            if isinstance(group, dict) and isinstance(group.get("slots"), dict):
+                group["slots"] = list(group["slots"].values())
+
+    pairs = blueprint.get("disjoint_section_pairs")
+    if isinstance(pairs, list) and all(isinstance(pair, dict) for pair in pairs):
+        blueprint["disjoint_section_pairs"] = [
+            [pair["first"], pair["second"]]
+            for pair in pairs
+            if "first" in pair and "second" in pair
+        ]
+    return decoded
+
+
 def _get(document: dict[str, Any], path: str, default: Any = _MISSING) -> Any:
     value: Any = document
     for part in path.split("."):
@@ -163,7 +225,7 @@ class FirestoreCollection:
     async def _all_documents(self) -> list[dict[str, Any]]:
         docs: list[dict[str, Any]] = []
         async for snapshot in self._collection.stream():
-            data = snapshot.to_dict() or {}
+            data = _decode_generation_requirements(snapshot.to_dict() or {})
             docs.append(data)
         return docs
 
@@ -195,7 +257,7 @@ class FirestoreCollection:
         native = self._native_query(query)
         source = native if native is not None else self._collection
         async for snapshot in source.stream():
-            data = snapshot.to_dict() or {}
+            data = _decode_generation_requirements(snapshot.to_dict() or {})
             if _matches(data, query):
                 matches.append((snapshot, data))
         return matches
@@ -208,14 +270,19 @@ class FirestoreCollection:
         return FirestoreCursor(self, query, projection)
 
     async def insert_one(self, document: dict[str, Any]) -> _WriteResult:
-        await self._collection.document(str(uuid.uuid4())).set(copy.deepcopy(document))
+        await self._collection.document(str(uuid.uuid4())).set(
+            _encode_generation_requirements(document)
+        )
         return _WriteResult(modified_count=1)
 
     async def insert_many(self, documents: Iterable[dict[str, Any]]) -> _WriteResult:
         batch = self._client.batch()
         count = 0
         for document in documents:
-            batch.set(self._collection.document(str(uuid.uuid4())), copy.deepcopy(document))
+            batch.set(
+                self._collection.document(str(uuid.uuid4())),
+                _encode_generation_requirements(document),
+            )
             count += 1
         if count:
             await batch.commit()
@@ -230,7 +297,7 @@ class FirestoreCollection:
         unsupported = set(update) - {"$set", "$inc"}
         if unsupported:
             raise ValueError(f"Unsupported Firestore compatibility update: {sorted(unsupported)}")
-        await snapshot.reference.set(updated)
+        await snapshot.reference.set(_encode_generation_requirements(updated))
 
     async def update_one(self, query: dict[str, Any], update: dict[str, Any], upsert: bool = False) -> _WriteResult:
         matches = await self._matching_snapshots(query)
@@ -244,6 +311,44 @@ class FirestoreCollection:
             await self.insert_one(document)
             return _WriteResult(modified_count=1)
         return _WriteResult()
+
+    async def claim_one(self, query: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any] | None:
+        """Atomically transition one matching document to a leased state.
+
+        Queue consumers must not use a read followed by ``update_one``: two
+        workers can observe the same queued document.  Firestore transactions
+        give the lease an optimistic compare-and-set boundary.
+        """
+        matches = await self._matching_snapshots(query)
+        for snapshot, _document in matches:
+            transaction = self._client.transaction()
+            try:
+                fresh = await transaction.get(snapshot.reference)
+                # firestore's async client returns a single snapshot for a
+                # document reference in current releases; accept the legacy
+                # one-item list shape too so queue leasing is version-safe.
+                if isinstance(fresh, (list, tuple)):
+                    fresh = fresh[0] if fresh else None
+                if fresh is None:
+                    continue
+                current = _decode_generation_requirements(fresh.to_dict() or {}) if fresh.exists else None
+                if not current or not _matches(current, query):
+                    continue
+                updated = copy.deepcopy(current)
+                for path, value in fields.items():
+                    _set(updated, path, value)
+                transaction.set(snapshot.reference, _encode_generation_requirements(updated))
+                await transaction.commit()
+                return updated
+            except Exception:
+                # A concurrent winner invalidates this candidate.  The next
+                # polling pass (or candidate) safely retries it.
+                try:
+                    await transaction.rollback()
+                except Exception:
+                    pass
+                continue
+        return None
 
     async def update_many(self, query: dict[str, Any], update: dict[str, Any]) -> _WriteResult:
         matches = await self._matching_snapshots(query)

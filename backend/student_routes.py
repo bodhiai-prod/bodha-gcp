@@ -14,7 +14,6 @@ the same robust LLM retry + provider fallback for free.
 """
 from __future__ import annotations
 
-import asyncio as _asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -26,7 +25,7 @@ from auth import get_current_user
 from activity import record_activity
 from deps import api_router, db, logger, utcnow_iso
 from textbook_content import load_textbook_chunks
-from workers import generate_paper_background
+from paper_review_queue import enqueue_generation
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +169,10 @@ async def create_mock_test(req: MockTestCreate, user: dict = Depends(get_current
         "instructions": "",
         "sections": [],
         "diagrams_pending": 0,
-        "generation_status": "pending",
+        "generation_status": "queued",
+        "generation_revision": 1,
         "generation_error": None,
+        "quality_review": {"status": "queued", "stage": "queued", "message": None},
         "is_mock_test": True,
         "created_at": utcnow_iso(),
         "is_deleted": False,
@@ -196,24 +197,14 @@ async def create_mock_test(req: MockTestCreate, user: dict = Depends(get_current
     await db.mock_tests.insert_one(test_doc)
     await record_activity(user["id"], "mock_test.created", {"test_id": test_id, "paper_id": paper_id})
 
-    _asyncio.create_task(
-        generate_paper_background(
-            paper_id=paper_id,
-            owner_id=user["id"],
-            subject=subject,
-            klass=klass,
-            topics_weighted=topics_weighted,
-            difficulty=req.difficulty,
-            distribution={"information": 40, "concept": 40, "application": 20},
-            total_marks=total_marks,
-            duration_minutes=req.duration_minutes,
-            context_excerpt=context_excerpt,
-            feedback_hints="",
-            format_distribution={"mcq": 100},
-            custom_instructions="",
-            section_blueprint="",
-        )
-    )
+    await enqueue_generation(paper_id=paper_id, payload={
+        "paper_id": paper_id, "owner_id": user["id"], "subject": subject, "klass": klass,
+        "topics_weighted": topics_weighted, "difficulty": req.difficulty,
+        "distribution": {"information": 40, "concept": 40, "application": 20},
+        "total_marks": total_marks, "duration_minutes": req.duration_minutes,
+        "context_excerpt": context_excerpt, "feedback_hints": "", "format_distribution": {"mcq": 100},
+        "custom_instructions": "", "section_blueprint": "",
+    })
 
     return {"id": test_id, "paper_id": paper_id, "status": "not_started"}
 

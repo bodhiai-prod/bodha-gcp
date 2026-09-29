@@ -141,7 +141,7 @@ GCS/Firestore writes:
 ```bash
 PYTHONPATH=backend python scripts/check_gcp.py
 # This makes one billable 1:1 image request and verifies Vertex model access.
-PYTHONPATH=backend python scripts/check_vertex_image.py
+PYTHONPATH=backend python backend/scripts/check_vertex_image.py
 curl -fsS "https://$APP_DOMAIN/health/live"
 curl -fsS "https://$APP_DOMAIN/health/ready"
 ```

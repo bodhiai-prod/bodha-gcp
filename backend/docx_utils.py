@@ -106,6 +106,19 @@ def _roman_nodes(nodes):
             roman.append(node)
     return roman
 
+
+def _consume_scripts(source: str, index: int):
+    """Consume optional LaTeX lower/upper scripts following an operator."""
+    lower, upper = [], []
+    while index < len(source) and source[index] in "_^":
+        marker = source[index]
+        content, index = _latex_group(source, index + 1)
+        if marker == "_":
+            lower = _latex_to_ast(content)
+        else:
+            upper = _latex_to_ast(content)
+    return lower, upper, index
+
 # These need Word's n-ary structure.  Emitting the command name as ordinary
 # math text (the old behaviour) made Word display and spell-check ``int`` and
 # then attach its limits to that text rather than to an integral sign.
@@ -163,6 +176,35 @@ def _consume_nary_base(source: str, index: int):
             end += 1
         command = source[index + 1:end]
         if command in {",", ";", ":", "!", " ", "quad", "qquad"}:
+            return _consume_nary_base(source, end)
+        if command == "left":
+            # Treat a resized delimiter pair as one operand.  Previously a
+            # summation followed by ``\left( ... \right)`` owned only the
+            # opening parenthesis, leaving the actual summand outside the
+            # n-ary OMML element.
+            if end >= len(source):
+                return [], end
+            opening = source[end]
+            body_start = end + 1
+            closing_at = source.find("\\right", body_start)
+            if closing_at >= 0:
+                after_right = closing_at + len("\\right")
+                if after_right < len(source):
+                    closing = source[after_right]
+                    body = opening + source[body_start:closing_at] + closing
+                    cursor = after_right + 1
+                    # Scripts following the closing delimiter belong to the
+                    # summed/integrated expression, not to the operator.
+                    if cursor < len(source) and source[cursor] in "_^":
+                        marker = source[cursor]
+                        script, cursor = _latex_group(source, cursor + 1)
+                        parsed = _latex_to_ast(body)
+                        parsed[-1] = (
+                            "sup" if marker == "^" else "sub",
+                            parsed[-1], _latex_to_ast(script),
+                        )
+                        return parsed, cursor
+                    return _latex_to_ast(body), cursor
             return _consume_nary_base(source, end)
         if command in {"frac", "dfrac", "tfrac"}:
             numerator, cursor = _latex_group(source, end)
@@ -248,18 +290,16 @@ def _latex_to_ast(source: str):
                 continue
             if command in _NARY_OPERATORS:
                 cursor = end
-                lower, upper = [], []
                 # LaTeX permits either order for limits, so consume both
                 # before continuing with the expression after the operator.
-                while cursor < len(source) and source[cursor] in "_^":
-                    marker = source[cursor]
-                    content, cursor = _latex_group(source, cursor + 1)
-                    if marker == "_":
-                        lower = _latex_to_ast(content)
-                    else:
-                        upper = _latex_to_ast(content)
+                lower, upper, cursor = _consume_scripts(source, cursor)
                 base, cursor = _consume_nary_base(source, cursor)
                 nodes.append(("nary", _NARY_OPERATORS[command], lower, upper, base))
+                continue
+            if command == "lim":
+                lower, upper, cursor = _consume_scripts(source, end)
+                limit = ("lim", lower)
+                nodes.append(("sup", limit, upper) if upper else limit)
                 continue
             if command == "begin":
                 environment, cursor = _latex_group(source, end)
@@ -284,6 +324,14 @@ def _latex_to_ast(source: str):
                     end = close + 1 if close >= 0 else end
                 radicand, cursor = _latex_group(source, end)
                 nodes.append(("sqrt", _latex_to_ast(radicand)))
+                continue
+            if command in {"vec", "hat", "widehat", "overrightarrow", "overleftarrow"}:
+                content, cursor = _latex_group(source, end)
+                accent = {
+                    "vec": "⃗", "hat": "̂", "widehat": "̂",
+                    "overrightarrow": "→", "overleftarrow": "←",
+                }[command]
+                nodes.append(("accent", accent, _latex_to_ast(content), command.startswith("over")))
                 continue
             if command in {"text", "textrm", "mathrm", "mathnormal", "operatorname"}:
                 content, cursor = _latex_group(source, end)
@@ -378,6 +426,36 @@ def _omml_node(node):
         radical.append(OxmlElement("m:deg"))
         radical.append(_omml_arg(node[1]))
         return radical
+    if kind == "lim":
+        # m:limLow is the native OOXML limit construct.  m:lim is only its
+        # lower-limit child, so emitting it as the outer element made
+        # LibreOffice silently discard ``\\lim_{...}``.
+        element = OxmlElement("m:limLow")
+        element.append(OxmlElement("m:limLowPr"))
+        element.append(_omml_arg([("roman", "lim")]))
+        element.append(_omml_container("m:lim", node[1]))
+        return element
+    if kind == "accent":
+        accent, contents, stretch = node[1], node[2], node[3]
+        if stretch:
+            element = OxmlElement("m:groupChr")
+            properties = OxmlElement("m:groupChrPr")
+            character = OxmlElement("m:chr")
+            character.set(qn("m:val"), accent)
+            position = OxmlElement("m:pos")
+            position.set(qn("m:val"), "top")
+            properties.extend([character, position])
+            element.append(properties)
+            element.append(_omml_arg(contents))
+            return element
+        element = OxmlElement("m:acc")
+        properties = OxmlElement("m:accPr")
+        character = OxmlElement("m:chr")
+        character.set(qn("m:val"), accent)
+        properties.append(character)
+        element.append(properties)
+        element.append(_omml_arg(contents))
+        return element
     if kind == "nary":
         element = OxmlElement("m:nary")
         properties = OxmlElement("m:naryPr")

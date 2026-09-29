@@ -86,6 +86,7 @@ from workers import (
     reconcile_section_plan,
     TOPUP_MAX,
 )
+from paper_review_queue import enqueue_generation
 import student_routes  # noqa: F401  registers /api/student/* endpoints
 import competitive_routes  # noqa: F401  registers /api/competitive-exams/* endpoints
 
@@ -682,21 +683,20 @@ async def startup():
     except Exception as e:  # noqa: BLE001
         logger.warning("could not recover textbook jobs: %s", e)
 
-    # Recover orphaned background jobs. Background tasks live in-process, so
-    # anything still marked "pending" at startup was interrupted by a previous
-    # restart/crash and will never finish on its own. Flip them to "failed"
-    # so the UI surfaces the "Retry Generation" affordance instead of a
-    # forever-spinning skeleton.
+    # Durable paper jobs are leased by paper_review_worker and reclaimed after
+    # their lease expires.  Only legacy in-process ``pending`` records have no
+    # queue record to resume, so surface those as Needs review.
     try:
         orphan_msg = (
-            "Generation was interrupted by a server restart. "
+            "Generation was interrupted before durable review was enabled. "
             "Click 'Retry Generation' to try again."
         )
         paper_res = await db.papers.update_many(
             {"generation_status": "pending"},
             {"$set": {
-                "generation_status": "failed",
-                "generation_error": orphan_msg,
+                "generation_status": "needs_review",
+                "generation_error": None,
+                "quality_review": {"status": "needs_review", "stage": "needs_review", "message": orphan_msg},
             }},
         )
         if paper_res.modified_count:
@@ -1704,13 +1704,15 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "instructions": "",
         "sections": [],
         "diagrams_pending": 0,
-        "generation_status": "pending",
+        "generation_status": "queued",
+        "generation_revision": 1,
         "generation_error": None,
+        "quality_review": {"status": "queued", "stage": "queued", "message": None},
         "generation_progress": {
             "completed": 0,
             "total": (resolved or {}).get("total_questions") or requested_count or 0,
-            "status": "pending",
-            "phase": "preparing",
+            "status": "queued",
+            "phase": "queued",
             "batch": 0,
             "batch_total": 0,
             "updated_at": utcnow_iso(),
@@ -1722,30 +1724,16 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     await record_activity(user["id"], "paper.requested", {"paper_id": paper_id, "subject": req.subject, "class_name": req.class_name})
     paper_doc.pop("_id", None)
 
-    import asyncio as _asyncio
-
-    _asyncio.create_task(
-        generate_paper_background(
-            paper_id=paper_id,
-            owner_id=user["id"],
-            subject=req.subject,
-            klass=req.class_name,
-            topics_weighted=topics_weighted,
-            difficulty=req.difficulty,
-            distribution=dist,
-            total_marks=req.total_marks,
-            duration_minutes=req.duration_minutes,
-            context_excerpt=context_excerpt,
-            feedback_hints=feedback_hints,
-            format_distribution=fmt_dist,
-            custom_instructions=custom_instructions,
-            section_blueprint=section_blueprint,
-            total_questions=req.total_questions,
-            format_counts=req.format_counts,
-            diagram_count=req.diagram_count,
-            saved_requirements=resolved,
-        )
-    )
+    await enqueue_generation(paper_id=paper_id, payload={
+        "paper_id": paper_id, "owner_id": user["id"], "subject": req.subject,
+        "klass": req.class_name, "topics_weighted": topics_weighted,
+        "difficulty": req.difficulty, "distribution": dist, "total_marks": req.total_marks,
+        "duration_minutes": req.duration_minutes, "context_excerpt": context_excerpt,
+        "feedback_hints": feedback_hints, "format_distribution": fmt_dist,
+        "custom_instructions": custom_instructions, "section_blueprint": section_blueprint,
+        "total_questions": req.total_questions, "format_counts": req.format_counts,
+        "diagram_count": req.diagram_count,
+    })
 
     return paper_doc
 
@@ -2174,7 +2162,7 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    if p.get("generation_status") == "pending":
+    if p.get("generation_status") in {"queued", "pending", "generating", "reviewing"}:
         raise HTTPException(status_code=409, detail="Generation already in progress")
 
     context_excerpt, feedback_hints = await _paper_generation_inputs(p)
@@ -2183,13 +2171,15 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
     await db.papers.update_one(
         {"id": paper_id},
         {"$set": {
-            "generation_status": "pending",
+            "generation_status": "queued",
+            "generation_revision": int(p.get("generation_revision") or 0) + 1,
             "generation_error": None,
+            "quality_review": {"status": "queued", "stage": "queued", "message": None},
             "generation_progress": {
                 "completed": 0,
                 "total": (p.get("generation_requirements") or {}).get("total_questions") or p.get("target_question_count") or 0,
-                "status": "pending",
-                "phase": "preparing",
+                "status": "queued",
+                "phase": "queued",
                 "batch": 0,
                 "batch_total": 0,
                 "updated_at": utcnow_iso(),
@@ -2206,31 +2196,19 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
         }},
     )
 
-    import asyncio as _asyncio
-
-    _asyncio.create_task(
-        generate_paper_background(
-            paper_id=paper_id,
-            owner_id=p["owner_id"],
-            subject=p.get("subject", ""),
-            klass=p.get("class_name", ""),
-            topics_weighted=p.get("topics", []),
-            saved_requirements=p.get("generation_requirements"),
-            total_questions=p.get("total_questions"),
-            format_counts=p.get("format_counts"),
-            diagram_count=p.get("diagram_count"),
-            difficulty=p.get("difficulty", "medium"),
-            distribution=p.get("distribution", {}),
-            total_marks=p.get("total_marks", 50),
-            duration_minutes=p.get("duration_minutes", 60),
-            context_excerpt=context_excerpt,
-            feedback_hints=feedback_hints,
-            format_distribution=p.get("format_distribution") or {},
-            custom_instructions=p.get("custom_instructions", "") or "",
-            section_blueprint=p.get("section_blueprint", "") or "",
-        )
-    )
-    return {"id": paper_id, "generation_status": "pending"}
+    await enqueue_generation(paper_id=paper_id, revision=int(p.get("generation_revision") or 0) + 1, payload={
+        "paper_id": paper_id, "owner_id": p["owner_id"], "subject": p.get("subject", ""),
+        "klass": p.get("class_name", ""), "topics_weighted": p.get("topics", []),
+        "total_questions": p.get("total_questions"),
+        "format_counts": p.get("format_counts"), "diagram_count": p.get("diagram_count"),
+        "difficulty": p.get("difficulty", "medium"), "distribution": p.get("distribution", {}),
+        "total_marks": p.get("total_marks", 50), "duration_minutes": p.get("duration_minutes", 60),
+        "context_excerpt": context_excerpt, "feedback_hints": feedback_hints,
+        "format_distribution": p.get("format_distribution") or {},
+        "custom_instructions": p.get("custom_instructions", "") or "",
+        "section_blueprint": p.get("section_blueprint", "") or "",
+    })
+    return {"id": paper_id, "generation_status": "queued"}
 
 
 @api_router.post("/papers/{paper_id}/cancel-generation")
@@ -2246,9 +2224,9 @@ async def cancel_paper_generation(paper_id: str, user: dict = Depends(get_curren
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    if p.get("generation_status") != "pending":
+    if p.get("generation_status") not in {"queued", "pending", "generating", "reviewing"}:
         raise HTTPException(status_code=409, detail="Generation is no longer in progress")
-    await db.papers.update_one({"id": paper_id, "generation_status": "pending"}, {"$set": {
+    await db.papers.update_one({"id": paper_id, "generation_status": {"$in": ["queued", "pending", "generating", "reviewing"]}}, {"$set": {
         "generation_status": "cancelled",
         "generation_error": None,
         "generation_progress.status": "cancelled",
@@ -2281,7 +2259,7 @@ async def paper_pdf(
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user_id and role != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    if p.get("generation_status") == "pending":
+    if p.get("generation_status") in {"queued", "pending", "generating", "reviewing"}:
         raise HTTPException(status_code=409, detail="Paper is still being generated")
     if p.get("generation_status") == "failed":
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
@@ -2333,7 +2311,7 @@ async def paper_docx(
         raise HTTPException(status_code=404, detail="Paper not found")
     if paper["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    if paper.get("generation_status") == "pending":
+    if paper.get("generation_status") in {"queued", "pending", "generating", "reviewing"}:
         raise HTTPException(status_code=409, detail="Paper is still being generated")
     if paper.get("generation_status") == "failed":
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")

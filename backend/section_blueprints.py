@@ -40,10 +40,87 @@ _PRINTABLE_TEMPLATE_CONTENT = {
 }
 
 
+def _isc_printable_content(subject: str) -> dict:
+    """Candidate directions from the current ISC specimen patterns.
+
+    Printed-page counts are deliberately omitted: unlike a specimen PDF, a
+    generated paper's page count is only known after DOCX/PDF layout.
+    """
+    common = (
+        "1. You are allowed an additional fifteen minutes for only reading the question paper.\n"
+        "2. You must NOT start writing during reading time.\n"
+    )
+    if subject == "mathematics":
+        instructions = common + (
+            "3. The Question Paper is divided into three sections and has 22 questions in all.\n"
+            "4. Section A is compulsory and has fourteen questions.\n"
+            "5. You are required to attempt all questions either from Section B or Section C.\n"
+            "6. Section B and Section C have four questions each.\n"
+            "7. Internal choices have been provided in two questions of 2 marks, two questions of 4 marks and two questions of 6 marks in Section A.\n"
+            "8. Internal choices have been provided in one question of 2 marks and one question of 4 marks each in Section B and Section C.\n"
+            "9. While attempting Multiple Choice Questions in Section A, B and C, you are required to write only ONE option as the answer.\n"
+            "10. The intended marks for questions or parts of questions are given in brackets [ ].\n"
+            "11. All workings, including rough work, should be done on the same page as, and adjacent to, the rest of the answer.\n"
+            "12. Mathematical tables and graph papers are provided."
+        )
+    elif subject == "physics":
+        instructions = common + (
+            "3. There are twenty questions in this paper. Answer all questions.\n"
+            "4. There are four sections in the paper: A, B, C and D. Internal choices have been provided in two questions each in Sections B, C and D.\n"
+            "5. Section A consists of one question having fourteen sub-parts of one mark each.\n"
+            "6. While attempting Multiple Choice Questions in Section A, you are required to write only ONE option as the answer.\n"
+            "7. Section B consists of seven questions of two marks each.\n"
+            "8. Section C consists of nine questions of three marks each.\n"
+            "9. Section D consists of three questions of five marks each.\n"
+            "10. The intended marks for questions are given in brackets [ ].\n"
+            "11. A list of useful constants and relations is given at the end of this paper.\n"
+            "12. A simple scientific calculator without a programmable memory may be used for calculations."
+        )
+    elif subject == "chemistry":
+        instructions = common + (
+            "3. It is divided into four sections and has twenty one questions in all.\n"
+            "4. Answer all questions.\n"
+            "5. Section A has fourteen subparts. Each question carries 1 mark.\n"
+            "6. While attempting Multiple Choice Questions in Section A, you are required to write only ONE option as the answer.\n"
+            "7. Section B has ten questions. Each question carries 2 marks.\n"
+            "8. Section C has seven questions. Each question carries 3 marks.\n"
+            "9. Section D has three questions. Each question carries 5 marks.\n"
+            "10. Internal choices have been provided in one question each in Sections B, C and D.\n"
+            "11. The intended marks for questions are given in brackets [ ].\n"
+            "12. All working, including rough work, should be done on the same sheet as, and adjacent to the rest of the answer.\n"
+            "13. Balanced equations must be given wherever possible and diagrams where they are helpful.\n"
+            "14. When solving numerical problems, all essential workings must be shown."
+        )
+    else:  # biology
+        instructions = common + (
+            "3. There are eighteen questions in this paper. Answer all questions.\n"
+            "4. There are four sections in the paper: A, B, C and D.\n"
+            "5. Section A consists of one question with fourteen one-mark sub-parts and three two-mark sub-parts.\n"
+            "6. Section B consists of seven questions of two marks each.\n"
+            "7. Section C consists of seven questions of three marks each.\n"
+            "8. Section D consists of three questions of five marks each.\n"
+            "9. Internal choices have been provided in one question each in Sections B, C and D.\n"
+            "10. The intended marks for questions are given in brackets [ ].\n"
+            "11. Draw neat and properly labelled diagrams wherever necessary."
+        )
+    if subject == "mathematics":
+        sections = {
+            "A": "Attempt all questions from this Section.",
+            "B": "Attempt all questions from this Section or Section C, but not both.",
+            "C": "Attempt all questions from this Section or Section B, but not both.",
+        }
+    else:
+        sections = {"A": "Answer all questions from this Section.", "B": "Answer all questions from this Section.",
+                    "C": "Answer all questions from this Section.", "D": "Answer all questions from this Section."}
+    return {"instructions": instructions, "sections": sections}
+
+
 def _official_printable_content(row: dict) -> dict:
     """Safe candidate-facing lead-ins for catalog templates added after v1."""
     if row.get("legacy") or row.get("id") == "cbse12":
         return {}
+    if row.get("family") == "isc12":
+        return _isc_printable_content(str(row.get("subject_variant") or "").casefold())
     family = str(row.get("family") or "").upper()
     instructions = (
         f"Read the following instructions carefully. This is the {family} "
@@ -92,6 +169,10 @@ class Allocation(BaseModel):
     section_id: str
     group_id: str
     slot_id: str | None = None
+    # A contiguous run of slots with the same format and marks.  Teachers
+    # allocate topics to this visible bucket; compilation expands it back to
+    # the exact server-owned slots before generation.
+    bucket_id: str | None = None
     textbook_id: str
     topic_id: str
     count: int = Field(strict=True, ge=1, le=200)
@@ -570,6 +651,24 @@ def group_slots(group):
     } for index in range(1, int(group.get("count") or 0) + 1)]
 
 
+def allocation_buckets(group):
+    """Return contiguous same-format/same-mark allocation buckets for a group."""
+    buckets = []
+    for slot in group_slots(group):
+        marks = slot.get("marks", group.get("marks"))
+        fmt = slot.get("format", group.get("format"))
+        if buckets and buckets[-1]["marks"] == marks and buckets[-1]["format"] == fmt:
+            buckets[-1]["slots"].append(slot)
+            continue
+        buckets.append({
+            "id": f"{group.get('id')}:{slot.get('id')}",
+            "marks": marks,
+            "format": fmt,
+            "slots": [slot],
+        })
+    return buckets
+
+
 def group_offered_marks(group):
     return sum(slot.get("marks", 0) for slot in group_slots(group))
 
@@ -655,7 +754,33 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
     slots = {(sid, gid, slot["id"]): {**slot, "marks": slot.get("marks", group["marks"]),
                                        "format": slot.get("format", group["format"])}
              for (sid, gid), group in groups.items() for slot in group_slots(group)}
+    buckets = {
+        (sid, gid, bucket["id"]): bucket
+        for (sid, gid), group in groups.items()
+        for bucket in allocation_buckets(group)
+    }
     counts, seen, resolved = Counter(), set(), []
+
+    def resolve(a, pair, slot, *, bucket_id=None):
+        key = (*pair, slot.get("id") if slot else None, a["textbook_id"], a["topic_id"])
+        topic = topics.get((a["textbook_id"], a["topic_id"]))
+        if not topic or key in seen:
+            errors.append("An assignment has a stale section/topic or is duplicated. Review the section editor.")
+            return
+        seen.add(key)
+        slot_id = slot.get("id") if slot else None
+        counts[(*pair, slot_id)] += 1 if slot else a["count"]
+        resolved.append({**a, **topic, "difficulty": a.get("difficulty") or difficulty,
+                         "slot_id": slot_id, "bucket_id": bucket_id or a.get("bucket_id"),
+                         "count": 1 if slot else a["count"],
+                         "marks": (slot or groups[pair])["marks"],
+                         "format": (slot or groups[pair])["format"],
+                         "parent_id": (slot or {}).get("parent_id"),
+                         "parent_label": (slot or {}).get("parent_label", ""),
+                         "part_label": (slot or {}).get("part_label", ""),
+                         "parent_lead_in": (slot or {}).get("lead_in", ""),
+                         "allocation_id": hashlib.sha256(json.dumps(key).encode()).hexdigest()[:24]})
+
     for raw in allocations:
         a = raw.model_dump() if isinstance(raw, Allocation) else dict(raw)
         pair = (a["section_id"], a["group_id"])
@@ -663,30 +788,45 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
         # part.  Legacy rows deliberately retain their count-based behaviour.
         explicit_slots = bool(groups.get(pair, {}).get("slots"))
         slot_id = a.get("slot_id")
-        if explicit_slots and not slot_id:
+        bucket_id = a.get("bucket_id")
+        if explicit_slots and not slot_id and not bucket_id:
             errors.append("An official template assignment is missing its question-part slot. Review the section editor.")
+            continue
+        if bucket_id:
+            bucket = buckets.get((*pair, bucket_id))
+            topic = topics.get((a["textbook_id"], a["topic_id"]))
+            key = (*pair, bucket_id, a["textbook_id"], a["topic_id"])
+            if not bucket or not topic or key in seen:
+                errors.append("An assignment has a stale section/topic or is duplicated. Review the section editor.")
+                continue
+            seen.add(key)
+            if a["count"] > len(bucket["slots"]):
+                errors.append(f"Section {pair[0]} / {pair[1]}: assigned {a['count']} of {len(bucket['slots'])} compatible parts.")
+                continue
+            # Legacy blueprints expose one count-based group rather than exact
+            # printed slots.  Keep their existing aggregate contract intact.
+            if not explicit_slots:
+                seen.discard((*pair, None, a["textbook_id"], a["topic_id"]))
+                resolve(a, pair, None, bucket_id=bucket_id)
+                continue
+            # Replace the bucket-level identity with exact slot identities.
+            # This keeps the generation contract, exports, and recovery logic
+            # unchanged while the editor stays compact.
+            for slot in bucket["slots"][:a["count"]]:
+                seen.discard((*pair, slot["id"], a["textbook_id"], a["topic_id"]))
+                resolve(a, pair, {**slot, "marks": slot.get("marks", groups[pair]["marks"]),
+                                  "format": slot.get("format", groups[pair]["format"])}, bucket_id=bucket_id)
             continue
         if not explicit_slots:
             slot_id = slot_id or None
         slot = slots.get((*pair, slot_id)) if slot_id else None
-        key = (*pair, slot_id, a["textbook_id"], a["topic_id"])
-        topic = topics.get((a["textbook_id"], a["topic_id"]))
-        if pair not in groups or not topic or key in seen or (explicit_slots and not slot):
+        if pair not in groups or not topics.get((a["textbook_id"], a["topic_id"])) or (explicit_slots and not slot):
             errors.append("An assignment has a stale section/topic or is duplicated. Review the section editor.")
             continue
         if explicit_slots and a["count"] != 1:
             errors.append("Each official question part must be assigned exactly once.")
             continue
-        seen.add(key)
-        counts[(*pair, slot_id)] += a["count"]
-        resolved.append({**a, **topic, "difficulty": a.get("difficulty") or difficulty,
-                         "slot_id": slot_id, "marks": (slot or groups[pair])["marks"],
-                         "format": (slot or groups[pair])["format"],
-                         "parent_id": (slot or {}).get("parent_id"),
-                         "parent_label": (slot or {}).get("parent_label", ""),
-                         "part_label": (slot or {}).get("part_label", ""),
-                         "parent_lead_in": (slot or {}).get("lead_in", ""),
-                         "allocation_id": hashlib.sha256(json.dumps(key).encode()).hexdigest()[:24]})
+        resolve(a, pair, slot)
     for pair, group in groups.items():
         if group.get("slots"):
             for slot in group_slots(group):

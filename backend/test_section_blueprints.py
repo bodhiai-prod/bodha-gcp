@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, patch
 
 from section_blueprints import (Allocation, catalog, blueprint_errors, compile_allocations,
     topic_catalog, allocation_misses, paper_summary, apply_allocation_overrides,
-    derived_internal_choice_count, internal_choice_misses, normalize_internal_choice_counts, section_marks)
+    derived_internal_choice_count, internal_choice_misses, normalize_internal_choice_counts, section_marks,
+    allocation_buckets)
 from generation_requirements import remaining_requirements
 from textbook_topics import merge_topic_batches, topic_context
 from prompts import qgen_prompt
@@ -91,6 +92,20 @@ class BlueprintTests(unittest.TestCase):
         self.assertEqual(len(icse_math["sections"][1]["groups"]), 7)
         self.assertTrue(all(sum(slot["marks"] for slot in group["slots"]) == 10 for group in icse_math["sections"][1]["groups"]))
 
+    def test_current_isc_templates_have_official_candidate_instructions(self):
+        presets = {b["id"]: b for b in catalog()}
+        math = presets["isc12-mathematics"]["student_instructions"]
+        self.assertIn("The Question Paper is divided into three sections and has 22 questions in all.", math)
+        self.assertIn("attempt all questions either from Section B or Section C", math)
+        physics = presets["isc12-physics"]["student_instructions"]
+        self.assertIn("There are twenty questions in this paper. Answer all questions.", physics)
+        self.assertIn("simple scientific calculator", physics)
+        chemistry = presets["isc12-chemistry"]["student_instructions"]
+        self.assertIn("Balanced equations must be given wherever possible", chemistry)
+        biology = presets["isc12-biology"]["student_instructions"]
+        self.assertIn("fourteen one-mark sub-parts and three two-mark sub-parts", biology)
+        self.assertNotIn("This is the ISC12", math)
+
     def test_slot_allocations_require_exact_part_identity(self):
         book, *_ = fixture()
         topic = topic_catalog(book)[1]
@@ -113,6 +128,44 @@ class BlueprintTests(unittest.TestCase):
         self.assertEqual(spec["printed_question_count"], 1)
         _, errors = compile_allocations(bp, rows[:1], [book], "medium", 2)
         self.assertTrue(any("assigned 0 of 1 parts" in error for error in errors))
+
+    def test_bucket_allocations_expand_into_exact_compatible_slots(self):
+        book, *_ = fixture()
+        topic = topic_catalog(book)[1]
+        bp = {
+            "id": "bucket-test", "version": 1, "label": "Buckets", "total_marks": 14,
+            "duration_minutes": 30, "sections": [{"id": "A", "title": "Section A", "groups": [{
+                "id": "questions", "count": 4, "marks": 2, "format": "short_answer", "slots": [
+                    {"id": "q20", "parent_id": "q20", "parent_label": "Question 20", "part_label": "", "marks": 2, "format": "short_answer"},
+                    {"id": "q21", "parent_id": "q21", "parent_label": "Question 21", "part_label": "", "marks": 2, "format": "short_answer"},
+                    {"id": "q22", "parent_id": "q22", "parent_label": "Question 22", "part_label": "", "marks": 5, "format": "long_answer"},
+                    {"id": "q23", "parent_id": "q23", "parent_label": "Question 23", "part_label": "", "marks": 5, "format": "long_answer"},
+                ],
+            }]}],
+        }
+        buckets = allocation_buckets(bp["sections"][0]["groups"][0])
+        self.assertEqual([(bucket["id"], len(bucket["slots"])) for bucket in buckets], [("questions:q20", 2), ("questions:q22", 2)])
+        rows = [
+            Allocation(section_id="A", group_id="questions", bucket_id=bucket["id"], textbook_id=book["id"], topic_id=topic["topic_id"], count=2)
+            for bucket in buckets
+        ]
+        spec, errors = compile_allocations(bp, rows, [book], "medium", 14)
+        self.assertFalse(errors)
+        self.assertEqual([row["slot_id"] for row in spec["section_allocations"]], ["q20", "q21", "q22", "q23"])
+        self.assertEqual([(row["format"], row["marks"], row["count"]) for row in spec["section_allocations"]], [
+            ("short_answer", 2, 1), ("short_answer", 2, 1), ("long_answer", 5, 1), ("long_answer", 5, 1),
+        ])
+
+    def test_bucket_allocations_keep_legacy_count_based_blueprints_compatible(self):
+        book, bp, _, _, _ = fixture()
+        topic = topic_catalog(book)[1]
+        rows = [
+            Allocation(section_id=section["id"], group_id="main", bucket_id="main:main-1", textbook_id=book["id"], topic_id=topic["topic_id"], count=2)
+            for section in bp["sections"]
+        ]
+        spec, errors = compile_allocations(bp, rows, [book], "medium", 6)
+        self.assertFalse(errors)
+        self.assertEqual([row["count"] for row in spec["section_allocations"]], [2, 2])
 
     def test_declarative_disjoint_sections_replace_template_id_special_case(self):
         book, *_ = fixture()

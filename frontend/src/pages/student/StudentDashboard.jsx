@@ -134,7 +134,7 @@ export default function StudentDashboard() {
                   <div>
                     <div className="flex items-center gap-3 mb-1">
                       <StatusPill status={t.status} />
-                      {t.paper?.generation_status === "pending" && (
+                      {["queued", "pending", "generating", "reviewing"].includes(t.paper?.generation_status) && (
                         <span className="text-xs text-neutral-500">
                           Generating questions…
                         </span>

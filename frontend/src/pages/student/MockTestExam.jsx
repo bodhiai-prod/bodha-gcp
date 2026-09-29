@@ -60,7 +60,7 @@ export default function MockTestExam() {
       try {
         const data = await fetchTest();
         if (!active) return;
-        if (data.paper?.generation_status === "pending") {
+        if (["queued", "pending", "generating", "reviewing"].includes(data.paper?.generation_status)) {
           setTimeout(pollGen, 3000);
         } else {
           setLoading(false);
@@ -179,7 +179,7 @@ export default function MockTestExam() {
   }
 
   // Paper still being generated (background LLM job).
-  if (test.paper?.generation_status === "pending") {
+  if (["queued", "pending", "generating", "reviewing"].includes(test.paper?.generation_status)) {
     return (
       <div className="min-h-screen bg-[#FAFAFA]">
         <Header />
@@ -196,7 +196,7 @@ export default function MockTestExam() {
     );
   }
 
-  if (test.paper?.generation_status === "failed") {
+  if (["failed", "needs_review"].includes(test.paper?.generation_status)) {
     return (
       <div className="min-h-screen bg-[#FAFAFA]">
         <Header />

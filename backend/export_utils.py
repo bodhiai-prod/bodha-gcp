@@ -49,17 +49,16 @@ def hydrate_question_types(paper: dict) -> None:
 
 
 def printable_instructions(raw: Any, *, template_instructions: Any = "", custom_instructions: str = "") -> str:
-    """Return student-facing instructions with a deterministic safe default.
+    """Return saved student-facing instructions with a deterministic fallback.
 
-    Board-template instructions are authoritative. Additional Instructions are
-    generation-only, so they must never make model/prompt prose printable.
+    A teacher's saved edit is authoritative.  ``custom_instructions`` remains
+    generation-only, but it must not cause a separately saved paper
+    instruction to disappear when the paper is loaded or exported.
     """
+    saved = str(raw or "").strip()
+    if saved:
+        return saved
     template = str(template_instructions or "").strip()
     if template:
         return template
-    # `raw` is deliberately ignored for non-template papers. Older records
-    # sometimes contain model instructions or prompt leakage here.
-    if not (custom_instructions or "").strip():
-        return DEFAULT_INSTRUCTIONS
-    # Keep custom instructions generation-only even for legacy papers.
     return DEFAULT_INSTRUCTIONS

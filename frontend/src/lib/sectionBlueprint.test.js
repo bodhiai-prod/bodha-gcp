@@ -1,4 +1,4 @@
-import { retainCompatibleAllocations, updateAllocation } from "./sectionBlueprint";
+import { allocationBuckets, normalizeBucketAllocations, retainCompatibleAllocations, updateAllocation } from "./sectionBlueprint";
 
 const topic = { textbook_id: "book", topic_id: "transformers" };
 const bp = { sections: [{ id: "A", groups: [{ id: "main", count: 2, marks: 1, format: "mcq" }] }] };
@@ -23,4 +23,19 @@ test("identical topic names in different books stay separate", () => {
   rows = updateAllocation(rows, "A", "main", { ...topic, textbook_id: "other" }, {});
   expect(rows).toHaveLength(2);
   expect(rows[0].difficulty).toBeNull();
+});
+test("contiguous compatible slots become one picker and legacy slot rows collapse into it", () => {
+  const slots = [
+    { id: "q20", parent_label: "Question 20", marks: 2, format: "short_answer" },
+    { id: "q21", parent_label: "Question 21", marks: 2, format: "short_answer" },
+    { id: "q22", parent_label: "Question 22", marks: 5, format: "long_answer" },
+  ];
+  const blueprint = { sections: [{ id: "A", groups: [{ id: "questions", count: 3, marks: 2, format: "short_answer", slots }] }] };
+  expect(allocationBuckets(blueprint.sections[0].groups[0]).map(bucket => [bucket.id, bucket.slots.length])).toEqual([
+    ["questions:q20", 2], ["questions:q22", 1],
+  ]);
+  const rows = slots.slice(0, 2).map(slot => ({ section_id: "A", group_id: "questions", slot_id: slot.id, ...topic, count: 1, difficulty: null, diagrams: false }));
+  expect(normalizeBucketAllocations(rows, blueprint)).toEqual([{
+    section_id: "A", group_id: "questions", slot_id: null, bucket_id: "questions:q20", ...topic, count: 2, difficulty: null, diagrams: false,
+  }]);
 });
