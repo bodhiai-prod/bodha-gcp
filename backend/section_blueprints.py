@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Literal
+from typing import Any, Literal
 
 
 # Student-facing content is deliberately separate from the generation template.
@@ -669,6 +669,90 @@ def allocation_buckets(group):
     return buckets
 
 
+def normalize_template_allocations(bp: dict, allocations: list[Any]) -> tuple[list[dict], list[str]]:
+    """Convert every current-template selection into canonical bucket rows.
+
+    Earlier versions of the editor saved a count against a printable slot (or
+    its parent question).  Current templates allocate a count across a bucket
+    of compatible slots.  Keeping that migration only in the browser meant a
+    saved configuration could look complete in the UI but fail differently in
+    the API.  This backend boundary is authoritative for preview *and*
+    generation, so both paths now see exactly the same allocation contract.
+    """
+    groups = {(section["id"], group["id"]): group
+              for section in bp.get("sections") or []
+              for group in section.get("groups") or []}
+    bucket_by_id, bucket_for_slot, buckets_for_parent = {}, {}, {}
+    for pair, group in groups.items():
+        for bucket in allocation_buckets(group):
+            bucket_by_id[(*pair, bucket["id"])] = bucket
+            for slot in bucket["slots"]:
+                bucket_for_slot[(*pair, slot["id"])] = bucket
+                parent_key = (*pair, slot.get("parent_id"))
+                buckets_for_parent.setdefault(parent_key, []).append(bucket)
+
+    normalized: list[dict] = []
+    errors: list[str] = []
+    occupancy: Counter = Counter()
+    merged: dict[tuple, dict] = {}
+
+    def add(row: dict, pair: tuple[str, str], bucket: dict, count: int) -> None:
+        key = (*pair, bucket["id"], row["textbook_id"], row["topic_id"],
+               row.get("difficulty"), bool(row.get("diagrams")))
+        if key in merged:
+            merged[key]["count"] += count
+        else:
+            item = {**row, "slot_id": None, "bucket_id": bucket["id"], "count": count}
+            merged[key] = item
+            normalized.append(item)
+        occupancy[(*pair, bucket["id"])] += count
+
+    for raw in allocations or []:
+        row = raw.model_dump() if isinstance(raw, Allocation) else dict(raw)
+        pair = (row.get("section_id"), row.get("group_id"))
+        group = groups.get(pair)
+        if not group:
+            errors.append("An assignment refers to a section or question type that is no longer in this template. Re-select its topics.")
+            continue
+        # Count-based custom/legacy templates deliberately keep their old
+        # behaviour.  Only official slot templates need migration.
+        if not group.get("slots"):
+            normalized.append(row)
+            continue
+        requested = int(row.get("count") or 0)
+        bucket_id, slot_id = row.get("bucket_id"), row.get("slot_id")
+        if bucket_id:
+            bucket = bucket_by_id.get((*pair, bucket_id))
+            candidates = [bucket] if bucket else []
+        elif slot_id:
+            exact = bucket_for_slot.get((*pair, slot_id))
+            candidates = [exact] if exact else []
+            if not candidates:
+                seen_bucket_ids = set()
+                for candidate in buckets_for_parent.get((*pair, slot_id), []):
+                    if candidate["id"] not in seen_bucket_ids:
+                        candidates.append(candidate)
+                        seen_bucket_ids.add(candidate["id"])
+        else:
+            candidates = []
+        if not candidates:
+            errors.append(f"Section {pair[0]} / {group.get('label', pair[1])}: an assignment uses an outdated question-part identifier. Re-select its topics.")
+            continue
+        remaining = requested
+        for bucket in candidates:
+            if remaining <= 0:
+                break
+            capacity = len(bucket["slots"]) - occupancy[(*pair, bucket["id"])]
+            accepted = min(remaining, max(0, capacity))
+            if accepted:
+                add(row, pair, bucket, accepted)
+                remaining -= accepted
+        if remaining:
+            available = requested - remaining
+            errors.append(f"Section {pair[0]} / {group.get('label', pair[1])}: requested {requested} parts but only {available} matching parts are available. Re-select this assignment.")
+    return normalized, errors
+
+
 def group_offered_marks(group):
     return sum(slot.get("marks", 0) for slot in group_slots(group))
 
@@ -747,6 +831,8 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
     errors = blueprint_errors(bp)
     if errors:
         return {}, errors
+    allocations, migration_errors = normalize_template_allocations(bp, allocations)
+    errors.extend(migration_errors)
     if bp["total_marks"] != total_marks:
         errors.append(f"Paper marks must match this blueprint ({bp['total_marks']}).")
     topics = {(r["textbook_id"], r["topic_id"]): r for b in books for r in topic_catalog(b)}
@@ -829,10 +915,22 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
         resolve(a, pair, slot)
     for pair, group in groups.items():
         if group.get("slots"):
+            # Report missing selections by their printable parent question,
+            # rather than flooding the teacher with one warning per subpart.
+            # The exact-slot count remains enforced; only the presentation is
+            # compact and actionable.
+            by_parent: dict[str, list[dict]] = {}
             for slot in group_slots(group):
-                key = (*pair, slot["id"])
-                if counts[key] != 1:
-                    errors.append(f"Section {pair[0]} / {slot.get('parent_label') or group.get('label', pair[1])} {slot.get('part_label', '')}: assigned {counts[key]} of 1 parts.")
+                parent = slot.get("parent_id") or slot["id"]
+                by_parent.setdefault(parent, []).append(slot)
+            for parent_slots in by_parent.values():
+                missing = [slot for slot in parent_slots if counts[(*pair, slot["id"])] == 0]
+                overfilled = [slot for slot in parent_slots if counts[(*pair, slot["id"])] > 1]
+                label = parent_slots[0].get("parent_label") or group.get("label", pair[1])
+                if missing:
+                    errors.append(f"Section {pair[0]} / {label}: {len(missing)} of {len(parent_slots)} parts still need topic assignments.")
+                if overfilled:
+                    errors.append(f"Section {pair[0]} / {label}: {len(overfilled)} parts have conflicting topic assignments. Re-select those parts.")
         elif counts[(*pair, None)] != group["count"]:
             errors.append(f"Section {pair[0]} / {group.get('label', pair[1])}: assigned {counts[(*pair, None)]} of {group['count']} questions.")
         if group.get("diagram_minimum", 0) > sum(a["count"] for a in resolved if (a["section_id"], a["group_id"]) == pair and a["diagrams"]):
