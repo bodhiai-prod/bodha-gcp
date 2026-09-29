@@ -39,7 +39,7 @@ steps:
       - compute
       - scp
       - deploy/docker-compose.gcp.yml
-      - ${_VM_NAME}:/tmp/docker-compose.gcp.yml
+      - ${_VM_NAME}:/tmp/bodha-compose-$BUILD_ID.yml
       - --zone=${_VM_ZONE}
       - --tunnel-through-iap
   - name: gcr.io/cloud-builders/gcloud
@@ -50,7 +50,7 @@ steps:
       - ${_VM_NAME}
       - --zone=${_VM_ZONE}
       - --tunnel-through-iap
-      - --command=sudo install -m 0755 /tmp/bodha-deploy /usr/local/bin/bodha-deploy && sudo install -m 0644 /tmp/docker-compose.gcp.yml /srv/bodha/docker-compose.gcp.yml && sudo /usr/local/bin/bodha-deploy $BUILD_ID
+      - --command=sudo install -m 0755 /tmp/bodha-deploy /usr/local/bin/bodha-deploy && sudo install -m 0644 /tmp/bodha-compose-$BUILD_ID.yml /srv/bodha/docker-compose.gcp.yml && sudo /usr/local/bin/bodha-deploy $BUILD_ID
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/backend:$BUILD_ID
