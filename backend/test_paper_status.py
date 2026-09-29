@@ -28,6 +28,7 @@ class PaperLibraryStatusTests(unittest.TestCase):
         for paper in (
             {"generation_recovery": {"status": "queued", "reason": "allocation_metadata"}},
             {"generation_recovery": {"status": "recovering", "reason": "allocation_metadata"}},
+            {"generation_recovery": {"status": "queued", "reason": "internal_choices"}},
             {"topup": {"status": "generating"}},
             {"regen": {"status": "generating"}},
         ):

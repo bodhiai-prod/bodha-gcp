@@ -878,7 +878,7 @@ def qgen_prompt(
     section_identity_field = '"section_id": "A", ' if template_sections else ""
     allocation_identity_fields = (
         '"allocation_id": "exact contract id", "textbook_id": "exact contract id", '
-        '"topic_id": "exact contract id", "group_id": "exact contract id", '
+        '"topic_id": "exact contract id", "group_id": "exact contract id", "slot_id": "exact contract id", '
         if allocation_contract else ""
     )
 
@@ -925,7 +925,7 @@ def qgen_prompt(
         f"{syllabus_rule}"
         "- Set 'topic' field on every question to the matching topic name from the list above.\n"
         "- Set 'format' field on every question (use one of the provided format labels, or empty string if none specified).\n"
-        + ("- For a SECTION ALLOCATION CONTRACT, section_id and allocation_id/textbook_id/topic_id/group_id are mandatory exact identifiers on every returned object.\n" if spec.get("section_allocations") else "")
+        + ("- For a SECTION ALLOCATION CONTRACT, section_id and allocation_id/textbook_id/topic_id/group_id/slot_id are mandatory exact identifiers on every returned object.\n" if spec.get("section_allocations") else "")
         + "- Put any section-wide directions, lead-ins, or rules in that section's 'section_instructions' field. Never turn a section instruction into Q1. Every entry in 'questions' must be an assessable numbered question with its own student task.\n"
         "- For format='mcq', 'options' MUST be an array of EXACTLY 4 plain strings, and 'correct_option' MUST be one of 0,1,2,3 pointing to the correct entry. Omit these fields for non-MCQ questions.\n"
         + ("" if has_blueprint or topup_count else
@@ -1075,10 +1075,21 @@ def regen_question_prompt(
         f"  - Difficulty: {difficulty}",
     ]
     choices = slot.get("internal_choice_count")
-    if choices:
+    if choices == 1:
         slot_lines.append(
-            f"  - This slot is one of {choices} internal 'OR' alternatives; write "
-            "a single question, not the alternatives."
+            "  - Internal choice REQUIRED: write one numbered question block with "
+            "two complete alternatives, labelled (a) and (b), separated by a "
+            "standalone line containing exactly OR."
+        )
+    elif choices:
+        slot_lines.append(
+            f"  - Internal choices REQUIRED: include exactly {choices} standalone "
+            "OR lines, each joining complete student-facing alternatives."
+        )
+    else:
+        slot_lines.append(
+            "  - Internal choice FORBIDDEN: do not include a standalone OR line "
+            "or alternative (a)/(b) choice."
         )
     slot_lines.append(
         "  - Figure: this slot MAY carry a figure, if the question genuinely "

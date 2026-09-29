@@ -41,6 +41,8 @@ from section_blueprints import (
     allocation_misses,
     attemptable_marks,
     compact_validation_misses,
+    derived_internal_choice_count,
+    internal_choice_misses,
     normalize_internal_choice_counts,
     hydrate_section_instructions,
     normalize_template_sections,
@@ -827,6 +829,28 @@ async def generate_paper_background(
     # only reaches "ready" once the questions actually render.
     latex_stats = await repair_sections(sections, ref=paper_id)
     normalize_internal_choice_counts(sections)
+    internal_choice_recovery = None
+    choice_diagnostics = internal_choice_misses(sections, spec)
+    if choice_diagnostics:
+        # A complete paper can still be structurally wrong for a student when
+        # its required internal alternatives are absent.  Repair the minimum
+        # slots before publishing; unlike count top-up this never appends a
+        # question or shifts the board-template allocation.
+        try:
+            repaired_choices = await repair_internal_choices({
+                "id": paper_id, "owner_id": owner_id, "subject": subject,
+                "class_name": klass, "difficulty": difficulty,
+                "custom_instructions": custom_instructions,
+                "generation_requirements": spec, "sections": sections,
+            }, context_excerpt=context_excerpt, feedback_hints=feedback_hints)
+            sections = repaired_choices["sections"]
+        except Exception as exc:  # keep the original complete paper available
+            logger.warning("Internal OR auto-repair failed for %s: %s", paper_id, exc)
+            internal_choice_recovery = {
+                "status": "needs_review", "reason": "internal_choices", "attempt": 1,
+                "max_attempts": 1, "finished_at": utcnow_iso(),
+                "validation_summary": [str(exc)[:500]], "diagnostics": choice_diagnostics,
+            }
 
     # Drop figures the model asked for but the question must not have — the
     # student's own drawing task, a decorative illustration, or a spec carrying
@@ -914,9 +938,11 @@ async def generate_paper_background(
                  "max_attempts": TEMPLATE_RECOVERY_MAX_ATTEMPTS, "started_at": None,
                  "finished_at": None, "validation_summary": compact_validation_misses(allocation_issues)}
                 if structural_recovery else (
+                    internal_choice_recovery if internal_choice_recovery else (
                     {"status": "queued", "reason": "validation", "attempt": 0,
                      "max_attempts": 0, "validation_summary": [validation_error]}
                     if validation_error and not normal_plan else None
+                    )
                 )
             ),
             "review_status": normal_review_status(normal_issues) if normal_plan else None,
@@ -1791,6 +1817,7 @@ REGEN_HISTORY_MAX = 5
 PRESERVED_SLOT_FIELDS = (
     "id", "slot_id", "section_id", "topic", "type", "format", "difficulty", "marks", "important",
     "allocation_id", "textbook_id", "topic_id", "group_id",
+    "parent_id", "parent_label", "part_label", "parent_lead_in",
     "internal_choice_count",
 )
 # What the model IS asked for -- the stem and the things that follow from it.
@@ -1819,6 +1846,88 @@ def _find_question(sections: list, question_id: str) -> tuple:
 def _slot_of(question: dict) -> dict:
     """The fixed shape of the slot this question occupies."""
     return {k: question.get(k) for k in PRESERVED_SLOT_FIELDS if k in question}
+
+
+def internal_choice_repair_targets(sections: list, spec: dict) -> list[dict]:
+    """Choose the smallest deterministic set of slots needed to fix OR totals."""
+    by_id = {
+        q.get("id"): q
+        for section in sections or []
+        for q in section.get("questions") or []
+        if isinstance(q, dict) and q.get("id")
+    }
+    targets: list[dict] = []
+    for miss in internal_choice_misses(sections, spec):
+        questions = [by_id[qid] for qid in miss["eligible_question_ids"] if qid in by_id]
+        delta = int(miss["expected"]) - int(miss["actual"])
+        # Preserve compliant and teacher-starred questions where possible.
+        if delta > 0:
+            candidates = [q for q in questions if q.get("internal_choice_count", 0) == 0]
+            candidates.sort(key=lambda q: (bool(q.get("important")), q.get("id", "")))
+            if len(candidates) < delta:
+                raise RegenerationFailed("There are not enough question slots to add the required internal OR choices.")
+            targets.extend({"question_id": q["id"], "required_internal_choice_count": 1} for q in candidates[:delta])
+            continue
+
+        remaining = -delta
+        # Remove several accidental separators from one malformed question in a
+        # single rewrite before disturbing a second otherwise-valid question.
+        candidates = [q for q in questions if int(q.get("internal_choice_count") or 0) > 0]
+        candidates.sort(key=lambda q: (-int(q.get("internal_choice_count") or 0), bool(q.get("important")), q.get("id", "")))
+        for question in candidates:
+            if remaining <= 0:
+                break
+            current = int(question.get("internal_choice_count") or 0)
+            reduced = min(current, remaining)
+            targets.append({
+                "question_id": question["id"],
+                "required_internal_choice_count": current - reduced,
+            })
+            remaining -= reduced
+        if remaining:
+            raise RegenerationFailed("Could not select question slots to remove the extra internal OR choices.")
+    return targets
+
+
+async def repair_internal_choices(
+    paper: dict,
+    *,
+    context_excerpt: str = "",
+    feedback_hints: str = "",
+) -> dict:
+    """Repair only the question blocks required to satisfy internal OR totals.
+
+    Nothing is written here.  A failed second rewrite therefore cannot leave a
+    paper half-repaired; callers only publish the returned sections once the
+    complete contract has been checked again.
+    """
+    spec = paper.get("generation_requirements") or {}
+    working = copy.deepcopy(paper)
+    normalize_internal_choice_counts(working.get("sections") or [])
+    targets = internal_choice_repair_targets(working.get("sections") or [], spec)
+    if not targets:
+        return {"sections": working.get("sections") or [], "repairs": [], "diagram_pending": False}
+    repairs = []
+    for target in targets:
+        result = await regenerate_question(
+            working,
+            target["question_id"],
+            context_excerpt=context_excerpt,
+            feedback_hints=feedback_hints,
+            required_internal_choice_count=target["required_internal_choice_count"],
+        )
+        working["sections"] = result["sections"]
+        repairs.append({**target, "old_text": result["old_text"], "question": result["question"],
+                        "diagram_pending": result["diagram_pending"]})
+    normalize_internal_choice_counts(working["sections"])
+    remaining = internal_choice_misses(working["sections"], spec)
+    if remaining:
+        raise RegenerationFailed("Internal OR repair did not satisfy the board-template requirement.")
+    return {
+        "sections": working["sections"],
+        "repairs": repairs,
+        "diagram_pending": any(repair["diagram_pending"] for repair in repairs),
+    }
 
 
 def _extract_candidate(data) -> dict:
@@ -1868,6 +1977,7 @@ async def regenerate_question(
     *,
     context_excerpt: str = "",
     feedback_hints: str = "",
+    required_internal_choice_count: int | None = None,
 ) -> dict:
     """Produce a replacement for one question, in the same slot.
 
@@ -1886,6 +1996,11 @@ async def regenerate_question(
         raise RegenerationFailed("Question not found on this paper.")
 
     slot = _slot_of(old)
+    if required_internal_choice_count is not None:
+        # The OR count is normally part of a fixed slot.  Targeted recovery is
+        # the deliberate exception: it changes exactly this rendered property
+        # while retaining every allocation identity and other slot field.
+        slot["internal_choice_count"] = required_internal_choice_count
     old_text = old.get("question") or ""
     difficulty = str(slot.get("difficulty") or paper.get("difficulty") or "medium")
     # Everything the replacement must not collide with. The old question is not
@@ -1947,6 +2062,16 @@ async def regenerate_question(
             flags=coercions,
         )
         cand = holder[0]["questions"][0]
+
+        actual_choice_count = derived_internal_choice_count(cand)
+        if required_internal_choice_count is not None and actual_choice_count != required_internal_choice_count:
+            logger.info(
+                f"[regen] {paper_id} attempt {attempt}/{REGEN_MAX_ATTEMPTS} "
+                f"returned {actual_choice_count} OR choices; expected {required_internal_choice_count}"
+            )
+            rejected_now.append(cand.get("question") or "")
+            continue
+        cand["internal_choice_count"] = actual_choice_count
 
         duplicate, reason = await is_duplicate(
             cand, rest, topic=str(slot.get("topic") or ""), ref=paper_id
@@ -2133,6 +2258,69 @@ async def _fail_regen(paper_id: str, question_id: str, err: str) -> None:
             "finished_at": utcnow_iso(),
         }}},
     )
+
+
+async def repair_internal_choices_background(
+    paper_id: str,
+    owner_id: str,
+    context_excerpt: str = "",
+    feedback_hints: str = "",
+    solution_is_live: bool = False,
+) -> None:
+    """Run a teacher-requested internal-OR repair without hiding the paper."""
+    tag("paper_internal_choice_repair", paper_id)
+    try:
+        paper = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
+        if not paper:
+            return
+        await db.papers.update_one({"id": paper_id}, {"$set": {"generation_recovery.status": "recovering"}})
+        result = await repair_internal_choices(
+            paper, context_excerpt=context_excerpt, feedback_hints=feedback_hints
+        )
+        repaired_check = verify_instructions(result["sections"], paper.get("generation_requirements") or {})
+        repaired_check["misses"] = list(dict.fromkeys([
+            *(repaired_check.get("misses") or []),
+            *allocation_misses(result["sections"], paper.get("generation_requirements") or {}),
+        ]))
+        repaired_check["honoured"] = not repaired_check["misses"]
+        update = {
+            "sections": result["sections"],
+            "instruction_check": repaired_check,
+            "generation_recovery": {
+                "status": "ready", "reason": "internal_choices", "attempt": 1,
+                "max_attempts": 1, "finished_at": utcnow_iso(), "validation_summary": [],
+                "diagnostics": [],
+            },
+        }
+        solution = paper
+        for repair in result["repairs"]:
+            changed = _invalidate_solution(solution, repair["question_id"], targeted=not solution_is_live)
+            if changed is not None:
+                solution = {**solution, "solution": changed}
+        if solution.get("solution") is not paper.get("solution"):
+            update["solution"] = solution["solution"]
+        if result["diagram_pending"]:
+            update["diagrams_pending"] = sum(
+                1 for section in result["sections"] for question in (section.get("questions") or [])
+                if question.get("diagram_status") == "pending"
+            )
+        await db.papers.update_one({"id": paper_id}, {"$set": update})
+        for repair in result["repairs"]:
+            await db.paper_edits.insert_one({
+                "paper_id": paper_id, "owner_id": owner_id,
+                "subject": paper.get("subject", ""), "class_name": paper.get("class_name", ""),
+                "edit_type": "repair_internal_choice", "original": repair["old_text"],
+                "revised": repair["question"].get("question", ""), "created_at": utcnow_iso(),
+            })
+        if result["diagram_pending"]:
+            await generate_diagrams_background(paper_id, owner_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Internal OR repair failed")
+        await db.papers.update_one({"id": paper_id}, {"$set": {"generation_recovery": {
+            "status": "needs_review", "reason": "internal_choices", "attempt": 1,
+            "max_attempts": 1, "finished_at": utcnow_iso(),
+            "validation_summary": [str(exc)[:500]], "diagnostics": [],
+        }}})
 
 
 # ---------------------------------------------------------------------------

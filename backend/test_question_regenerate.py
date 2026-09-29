@@ -25,6 +25,7 @@ from workers import (
     REGEN_MAX_ATTEMPTS,
     RegenerationFailed,
     reconcile_solution_shell,
+    repair_internal_choices,
     regenerate_question,
     regenerate_question_background,
 )
@@ -149,6 +150,27 @@ class SlotTests(RegenBase):
         })
         with patch.object(workers, "chat_complete", self.scripted(rogue)):
             out = run(regenerate_question(p, target))
+        self.assertEqual(allocation_misses(out["sections"], spec), [])
+
+    def test_internal_choice_repair_rewrites_only_the_minimum_slots(self):
+        from section_blueprints import allocation_misses
+        from test_section_blueprints import fixture
+
+        _, _, _, spec, sections = fixture()
+        spec = copy.deepcopy(spec)
+        spec["blueprint"]["sections"][0]["groups"][0]["internal_choices"] = 1
+        paper = make_paper(
+            sections=copy.deepcopy(sections), generation_requirements=spec,
+            subject="Physics", class_name="12",
+        )
+        with patch.object(workers, "chat_complete", self.scripted(reply(
+            "(a) Explain the voltage ratio of an ideal transformer.\nOR\n"
+            "(b) Explain how the turns ratio changes the current ratio."
+        ))), patch.object(workers, "is_duplicate", AsyncMock(return_value=(False, ""))):
+            out = run(repair_internal_choices(paper))
+        self.assertEqual(len(out["repairs"]), 1)
+        self.assertEqual(out["repairs"][0]["question_id"], "A-0")
+        self.assertEqual(out["sections"][0]["questions"][1]["question"], sections[0]["questions"][1]["question"])
         self.assertEqual(allocation_misses(out["sections"], spec), [])
 
     def test_the_star_and_the_position_survive(self):

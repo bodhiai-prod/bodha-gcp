@@ -1,8 +1,9 @@
 """Structured board contracts, allocation validation and observable summaries.
 
 No database or model dependencies: the preview and worker use the same rules.
-Counts refer to numbered question blocks; subparts and OR alternatives stay in
-their parent question and do not add to the attemptable marks.
+Legacy counts refer to numbered question blocks.  Current official templates
+also declare scored *slots*: a slot is a printable subpart with its own topic
+allocation, while its parent question remains one printed question.
 """
 from collections import Counter
 from copy import deepcopy
@@ -65,6 +66,10 @@ class BlueprintGroup(BaseModel):
     format: Literal["mcq", "short_answer", "long_answer", "fill_blank", "true_false"]
     diagram_minimum: int = Field(default=0, ge=0, le=200)
     internal_choices: int | None = Field(default=None, ge=0, le=200)
+    # Current official templates use this to describe printable subparts.  It
+    # intentionally remains a JSON-shaped extension so old saved blueprints
+    # with just count/marks keep their original contract.
+    slots: list[dict] = Field(default_factory=list, max_length=200)
 
 
 class BlueprintSection(BaseModel):
@@ -86,6 +91,7 @@ class Allocation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_id: str
     group_id: str
+    slot_id: str | None = None
     textbook_id: str
     topic_id: str
     count: int = Field(strict=True, ge=1, le=200)
@@ -93,9 +99,221 @@ class Allocation(BaseModel):
     diagrams: bool = False
 
 
+def _slot(parent, index, marks, fmt, *, lead_in="", label=None):
+    """Describe one independently allocatable, printable question part."""
+    part = label or (f"({index})" if isinstance(index, int) else str(index))
+    return {
+        "id": f"{parent}-{str(index).lower().replace(' ', '-')}",
+        "parent_id": parent,
+        "parent_label": f"Question {parent[1:]}" if parent.startswith("q") else parent,
+        "part_label": part,
+        "lead_in": lead_in,
+        "marks": marks,
+        "format": fmt,
+    }
+
+
+def _range_group(group_id, start, count, marks, fmt, *, label=None, internal_choices=None):
+    """One printed question/one allocation slot for a numbered range."""
+    group = {
+        "id": group_id,
+        "count": count,
+        "marks": marks,
+        "format": fmt,
+        "label": label or f"Questions {start}-{start + count - 1}: {count} x {marks}",
+        "slots": [_slot(f"q{n}", "", marks, fmt, label="") for n in range(start, start + count)],
+    }
+    # A blank label means this is the entire numbered question, not a visible
+    # '(i)' subpart.  The renderer uses parent_label for the question heading.
+    for n, slot in zip(range(start, start + count), group["slots"]):
+        slot["id"] = f"q{n}"
+        slot["parent_id"] = f"q{n}"
+        slot["parent_label"] = f"Question {n}"
+        slot["part_label"] = ""
+    if internal_choices is not None:
+        group["internal_choices"] = internal_choices
+    return group
+
+
+def _compound_group(group_id, number, parts, fmt, *, label=None, lead_in="", internal_choices=None):
+    """One printed question made from individually allocatable scored parts."""
+    slots = [_slot(f"q{number}", i + 1, mark, fmt, lead_in=lead_in) for i, mark in enumerate(parts)]
+    group = {
+        "id": group_id,
+        "count": 1,
+        "marks": sum(parts),
+        "format": fmt,
+        "label": label or f"Question {number}: {len(parts)} scored parts",
+        "slots": slots,
+    }
+    if internal_choices is not None:
+        group["internal_choices"] = internal_choices
+    return group
+
+
+def _section(identifier, title, groups, **extra):
+    return {"id": identifier, "title": title, "groups": groups, **extra}
+
+
+def _icse_sections(subject):
+    """Exact 2026 ICSE printable structures, including their subpart marks."""
+    mcq_lead = "Choose the correct answers from the given options."
+    if subject == "mathematics":
+        a = [
+            _compound_group("q1", 1, [1] * 15, "mcq", lead_in=mcq_lead),
+            _compound_group("q2", 2, [4, 4, 4], "short_answer"),
+            _compound_group("q3", 3, [4, 4, 5], "short_answer"),
+        ]
+        b = [_compound_group(f"q{n}", n, ([5, 5] if n == 7 else [3, 3, 4]), "long_answer") for n in range(4, 11)]
+    elif subject == "physics":
+        a = [
+            _compound_group("q1", 1, [1] * 15, "mcq", lead_in=mcq_lead),
+            _compound_group("q2", 2, [1] * 6 + [2, 2], "short_answer"),
+            _compound_group("q3", 3, [2] * 6 + [3], "short_answer"),
+        ]
+        b = [_compound_group(f"q{n}", n, [3, 3, 4], "long_answer") for n in range(4, 11)]
+    elif subject == "chemistry":
+        a = [
+            _compound_group("q1", 1, [1] * 15, "mcq", lead_in=mcq_lead),
+            _compound_group("q2", 2, [5] * 5, "short_answer"),
+        ]
+        b = [_compound_group(f"q{n}", n, [2, 2, 3, 3], "long_answer") for n in range(3, 9)]
+    else:  # biology
+        a = [
+            _compound_group("q1", 1, [1] * 15, "mcq", lead_in=mcq_lead),
+            _compound_group("q2", 2, [5] * 5, "short_answer"),
+        ]
+        b = [_compound_group(f"q{n}", n, [1, 2, 2, 2, 3], "long_answer") for n in range(3, 9)]
+    return [
+        _section("A", "SECTION A (40 MARKS)", a, section_instructions="Attempt all questions from this Section."),
+        _section("B", "SECTION B (40 MARKS)", b, attempt_count=4,
+                 section_instructions="Attempt any four questions from this Section."),
+    ]
+
+
+def _isc_sections(subject):
+    if subject == "mathematics":
+        return [
+            _section("A", "SECTION A - 65 MARKS", [
+                _compound_group("q1", 1, [1] * 15, "mcq", lead_in="In subparts (i) to (xi), choose the correct option; answer the remaining parts as instructed."),
+                _range_group("q2-q6", 2, 5, 2, "short_answer", internal_choices=2),
+                _range_group("q7-q10", 7, 4, 4, "short_answer", internal_choices=2),
+                _range_group("q11-q14", 11, 4, 6, "long_answer", internal_choices=2),
+            ], section_instructions="Attempt all questions from this Section."),
+            _section("B", "SECTION B - 15 MARKS", [
+                _compound_group("q15", 15, [1, 1, 1, 2], "short_answer"),
+                _range_group("q16", 16, 1, 2, "short_answer", internal_choices=1),
+                _range_group("q17-q18", 17, 2, 4, "long_answer", internal_choices=1),
+            ], choice_set="optional-stream", section_instructions="Attempt this complete section or Section C, not both."),
+            _section("C", "SECTION C - 15 MARKS", [
+                _compound_group("q19", 19, [1, 1, 3], "short_answer"),
+                _range_group("q20", 20, 1, 2, "short_answer", internal_choices=1),
+                _range_group("q21-q22", 21, 2, 4, "long_answer", internal_choices=1),
+            ], choice_set="optional-stream", section_instructions="Attempt this complete section or Section B, not both."),
+        ]
+    distributions = {
+        "physics": (14, 2, 7, 3, 9, 5, 3, (2, 2, 2)),
+        "chemistry": (14, 2, 10, 3, 7, 5, 3, (1, 1, 1)),
+        "biology": (20, 2, 7, 3, 7, 5, 3, (1, 1, 1)),
+    }
+    first, bmarks, bcount, cmarks, ccount, dmarks, dcount, choices = distributions[subject]
+    q1parts = ([1] * 14 + [2] * 3) if subject == "biology" else [1] * first
+    return [
+        _section("A", f"SECTION A - {first} MARKS", [_compound_group("q1", 1, q1parts, "mcq", lead_in="Choose the correct answer or answer each subpart as instructed.")]),
+        _section("B", f"SECTION B - {bmarks * bcount} MARKS", [_range_group("main", 2, bcount, bmarks, "short_answer", internal_choices=choices[0])]),
+        _section("C", f"SECTION C - {cmarks * ccount} MARKS", [_range_group("main", 2 + bcount, ccount, cmarks, "short_answer", internal_choices=choices[1])]),
+        _section("D", f"SECTION D - {dmarks * dcount} MARKS", [_range_group("main", 2 + bcount + ccount, dcount, dmarks, "long_answer", internal_choices=choices[2])]),
+    ]
+
+
+def _cbse12_row(subject, source, *, mathematics=False):
+    if mathematics:
+        sections = [
+            _section("A", "SECTION A (20 x 1 = 20)", [_range_group("mcq", 1, 18, 1, "mcq"), _range_group("assertion_reason", 19, 2, 1, "mcq")], section_instructions="This section comprises 18 MCQs and two Assertion-Reason questions of 1 mark each."),
+            _section("B", "SECTION B (5 x 2 = 10)", [_range_group("vsa", 21, 5, 2, "short_answer", internal_choices=2)]),
+            _section("C", "SECTION C (6 x 3 = 18)", [_range_group("sa", 26, 6, 3, "short_answer", internal_choices=3)]),
+            _section("D", "SECTION D (4 x 5 = 20)", [_range_group("la", 32, 4, 5, "long_answer", internal_choices=2)]),
+            _section("E", "SECTION E (3 x 4 = 12)", [
+                _compound_group("q36", 36, [1, 1, 2], "short_answer", internal_choices=1),
+                _compound_group("q37", 37, [1, 1, 2], "short_answer", internal_choices=1),
+                _compound_group("q38", 38, [2, 2], "short_answer"),
+            ]),
+        ]
+        marks = 80
+    else:
+        sections = [
+            _section("A", "SECTION A (16 x 1 = 16)", [_range_group("mcq", 1, 12, 1, "mcq"), _range_group("assertion_reason", 13, 4, 1, "mcq")]),
+            _section("B", "SECTION B (5 x 2 = 10)", [_range_group("vsa", 17, 5, 2, "short_answer", internal_choices=2)]),
+            _section("C", "SECTION C (7 x 3 = 21)", [_range_group("sa", 22, 7, 3, "short_answer", internal_choices=1)]),
+            _section("D", "SECTION D (2 x 4 = 8)", [_compound_group("q29", 29, [1, 2, 1], "short_answer", internal_choices=1), _compound_group("q30", 30, [1, 2, 1], "short_answer", internal_choices=1)]),
+            _section("E", "SECTION E (3 x 5 = 15)", [_range_group("la", 31, 3, 5, "long_answer", internal_choices=3)]),
+        ]
+        marks = 70
+    return {
+        "id": f"cbse12-{subject.lower()}", "version": 2,
+        "label": f"CBSE Class 12 {subject}", "family": "cbse12", "subject_variant": subject,
+        "subject_aliases": [subject.lower(), "maths" if mathematics else subject.lower()],
+        "academic_session": "2026-27", "official_source": source, "legacy": False,
+        "total_marks": marks, "duration_minutes": 180, "sections": sections,
+        "template": f"Generate the current CBSE Class 12 {subject.upper()} paper using the server-owned section, question, part, marks and choice contract. Print only candidate-facing question content. Section instructions and question lead-ins are printed by the server; never turn them into the first numbered question.",
+    }
+
+
+def _apply_current_official_structures(rows):
+    """Upgrade catalog rows to slot-aware official 2026 structures."""
+    by_id = {row.get("id"): row for row in rows}
+    for subject in ("physics", "chemistry", "biology", "mathematics"):
+        row = by_id.get(f"icse10-{subject}")
+        if row:
+            row["version"] = 2
+            row["sections"] = _icse_sections(subject)
+    for subject in ("mathematics", "physics", "chemistry", "biology"):
+        row = by_id.get(f"isc12-{subject}")
+        if row:
+            row["version"] = 2
+            row["sections"] = _isc_sections(subject)
+    # CBSE X already has official question ranges.  Add a slot for every
+    # scorable part; case-study groups are expanded below by their 1+1+2 form.
+    for row in rows:
+        if row.get("family") == "cbse10" and not row.get("legacy"):
+            row["version"] = 2
+            for section in row.get("sections") or []:
+                for group in section.get("groups") or []:
+                    if group.get("slots"):
+                        continue
+                    start = _question_start(group.get("label", ""))
+                    if start is None:
+                        continue
+                    slots = []
+                    for number in range(start, start + group["count"]):
+                        if "case" in group.get("id", ""):
+                            slots.extend(_compound_group(group["id"], number, [1, 1, max(1, group["marks"] - 2)], group["format"]).get("slots", []))
+                        else:
+                            slots.extend(_range_group(group["id"], number, 1, group["marks"], group["format"]).get("slots", []))
+                    group["slots"] = slots
+    legacy_cbse12 = by_id.get("cbse12")
+    if legacy_cbse12:
+        legacy_cbse12.setdefault("family", "cbse12")
+        legacy_cbse12.setdefault("subject_variant", "Legacy generic")
+        legacy_cbse12.setdefault("legacy", True)
+    rows.extend([
+        _cbse12_row("Mathematics", "https://cbseacademic.nic.in/web_material/SQP/ClassXII_2026_27/Maths-SQP.pdf", mathematics=True),
+        _cbse12_row("Physics", "https://cbseacademic.nic.in/web_material/SQP/ClassXII_2026_27/Physics-SQP.pdf"),
+        _cbse12_row("Chemistry", "https://cbseacademic.nic.in/web_material/SQP/ClassXII_2026_27/Chemistry-SQP.pdf"),
+        _cbse12_row("Biology", "https://cbseacademic.nic.in/web_material/SQP/ClassXII_2026_27/Biology-SQP.pdf"),
+    ])
+    return rows
+
+
+def _question_start(label):
+    match = re.search(r"Questions?\s+(\d+)", str(label), re.I)
+    return int(match.group(1)) if match else None
+
+
 def catalog():
     rows = json.loads(Path(__file__).with_name("blueprint_catalog.json").read_text(encoding="utf-8"))
     rows.extend(json.loads(Path(__file__).with_name("official_blueprint_catalog.json").read_text(encoding="utf-8")))
+    rows = _apply_current_official_structures(rows)
     for row in rows:
         if row.get("id") in {"icse10", "cbse10", "isc12"}:
             row.setdefault("legacy", True)
@@ -107,7 +325,7 @@ def catalog():
         row["student_instructions"] = printable.get("instructions", "")
         section_instructions = printable.get("sections", {})
         for section in row.get("sections") or []:
-            section["section_instructions"] = section_instructions.get(section.get("id"), "")
+            section["section_instructions"] = section.get("section_instructions") or section_instructions.get(section.get("id"), "")
     return rows
 
 
@@ -160,12 +378,12 @@ def restore_allocation_identity(question: dict, spec: dict) -> bool:
     known = {row.get("allocation_id"): row for row in rows}
     if question.get("allocation_id") in known:
         return False
-    identity = tuple(question.get(key) for key in ("textbook_id", "topic_id", "group_id"))
+    identity = tuple(question.get(key) for key in ("textbook_id", "topic_id", "group_id", "slot_id"))
     if any(value in (None, "") for value in identity):
         return False
     matches = [
         row for row in rows
-        if tuple(row.get(key) for key in ("textbook_id", "topic_id", "group_id")) == identity
+        if tuple(row.get(key) for key in ("textbook_id", "topic_id", "group_id", "slot_id")) == identity
     ]
     if len(matches) != 1:
         return False
@@ -199,6 +417,9 @@ def normalize_template_sections(sections: list, spec: dict) -> tuple[list, list[
             # Allocation placement is authoritative; a model-supplied section
             # id or title cannot override it.
             question["section_id"] = row["section_id"]
+            for key in ("slot_id", "parent_id", "parent_label", "part_label", "parent_lead_in"):
+                if row.get(key) not in (None, ""):
+                    question[key] = row[key]
             by_section[row["section_id"]]["questions"].append(question)
     normalized = [section for section in skeleton if section["questions"]]
     if unknown:
@@ -208,6 +429,29 @@ def normalize_template_sections(sections: list, spec: dict) -> tuple[list, list[
             "questions": unknown,
         })
     return normalized, misses
+
+
+def printable_question_blocks(section: dict) -> list[dict]:
+    """Group adjacent allocated slots into their server-owned printed question.
+
+    Older papers have no parent metadata and deliberately remain one printed
+    question per stored object.
+    """
+    blocks = []
+    current = None
+    for question in section.get("questions") or []:
+        parent_id = question.get("parent_id")
+        if parent_id and current and current["parent_id"] == parent_id:
+            current["parts"].append(question)
+            continue
+        current = {
+            "parent_id": parent_id,
+            "label": question.get("parent_label") or "",
+            "lead_in": question.get("parent_lead_in") or "",
+            "parts": [question],
+        }
+        blocks.append(current)
+    return blocks
 
 
 def compact_validation_misses(misses: list[str]) -> list[str]:
@@ -246,6 +490,51 @@ def normalize_internal_choice_counts(sections: list) -> bool:
     return changed
 
 
+def internal_choice_misses(sections: list, spec: dict) -> list[dict]:
+    """Return machine-readable internal-OR mismatches for a compiled blueprint.
+
+    The rendered standalone ``OR`` line is the source of truth.  Keeping this
+    structured means recovery code never has to parse a teacher-facing warning
+    string to learn which question slots are safe to replace.
+    """
+    if not spec.get("section_allocations") or spec.get("is_topup"):
+        return []
+    questions_by_row: dict[str, list] = {}
+    for section in sections or []:
+        for question in section.get("questions") or []:
+            if isinstance(question, dict) and question.get("allocation_id"):
+                questions_by_row.setdefault(question["allocation_id"], []).append(question)
+
+    rows = spec.get("section_allocations") or []
+    out = []
+    for section in (spec.get("blueprint") or {}).get("sections") or []:
+        for group in section.get("groups") or []:
+            wanted = group.get("internal_choices")
+            if wanted is None:
+                continue
+            group_questions = [
+                question
+                for row in rows
+                if row.get("section_id") == section.get("id") and row.get("group_id") == group.get("id")
+                for question in questions_by_row.get(row.get("allocation_id"), [])
+            ]
+            # Do not trust provider or legacy metadata here: this validator is
+            # specifically about what a student can see in the rendered text.
+            counts = [derived_internal_choice_count(question) for question in group_questions]
+            actual = sum(counts)
+            unspecified = 0
+            if unspecified or actual != wanted:
+                out.append({
+                    "section_id": section.get("id"),
+                    "group_id": group.get("id"),
+                    "expected": wanted,
+                    "actual": actual,
+                    "unspecified": unspecified,
+                    "eligible_question_ids": [q.get("id") for q in group_questions if q.get("id")],
+                })
+    return out
+
+
 def topic_id(book_id, name, parent=""):
     return hashlib.sha256(json.dumps([book_id, parent, name], ensure_ascii=False).encode()).hexdigest()[:24]
 
@@ -269,6 +558,22 @@ def section_key(value):
     return match.group(1).upper() if match else str(value).strip().upper()
 
 
+def group_slots(group):
+    """Return allocation units for a group; synthesize legacy numbered slots."""
+    declared = group.get("slots") or []
+    if declared:
+        return declared
+    return [{
+        "id": f"{group.get('id')}-{index}", "parent_id": f"{group.get('id')}-{index}",
+        "parent_label": "", "part_label": "", "lead_in": "",
+        "marks": group.get("marks"), "format": group.get("format"),
+    } for index in range(1, int(group.get("count") or 0) + 1)]
+
+
+def group_offered_marks(group):
+    return sum(slot.get("marks", 0) for slot in group_slots(group))
+
+
 def blueprint_errors(bp):
     errors, section_ids = [], set()
     if not isinstance(bp, dict) or not isinstance(bp.get("sections"), list) or not bp["sections"]:
@@ -290,6 +595,15 @@ def blueprint_errors(bp):
                     errors.append(f"Section {sid}: {key} must be a positive integer, at most 200.")
             if group.get("format") not in ("mcq", "short_answer", "long_answer", "fill_blank", "true_false"):
                 errors.append(f"Section {sid}: specify a supported question format.")
+            slot_ids = set()
+            for slot in group_slots(group):
+                if not slot.get("id") or slot["id"] in slot_ids:
+                    errors.append(f"Section {sid} / {group.get('id')}: slot identifiers must be unique.")
+                slot_ids.add(slot.get("id"))
+                if type(slot.get("marks")) is not int or not 1 <= slot["marks"] <= 200:
+                    errors.append(f"Section {sid} / {group.get('id')}: slot marks must be positive integers.")
+                if slot.get("format", group.get("format")) not in ("mcq", "short_answer", "long_answer", "fill_blank", "true_false"):
+                    errors.append(f"Section {sid} / {group.get('id')}: slot format is unsupported.")
         attempt = section.get("attempt_count")
         if attempt is not None and (type(attempt) is not int or attempt < 1 or
                 attempt > sum(g.get("count", 0) for g in groups)):
@@ -316,7 +630,7 @@ def section_marks(section):
     groups = section.get("groups", [])
     if section.get("attempt_count"):
         return section["attempt_count"] * groups[0]["marks"]
-    return sum(g["count"] * g["marks"] for g in groups)
+    return sum(group_offered_marks(g) for g in groups)
 
 
 def attemptable_marks(sections):
@@ -338,23 +652,49 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
         errors.append(f"Paper marks must match this blueprint ({bp['total_marks']}).")
     topics = {(r["textbook_id"], r["topic_id"]): r for b in books for r in topic_catalog(b)}
     groups = {(s["id"], g["id"]): g for s in bp["sections"] for g in s["groups"]}
+    slots = {(sid, gid, slot["id"]): {**slot, "marks": slot.get("marks", group["marks"]),
+                                       "format": slot.get("format", group["format"])}
+             for (sid, gid), group in groups.items() for slot in group_slots(group)}
     counts, seen, resolved = Counter(), set(), []
     for raw in allocations:
         a = raw.model_dump() if isinstance(raw, Allocation) else dict(raw)
         pair = (a["section_id"], a["group_id"])
-        key = (*pair, a["textbook_id"], a["topic_id"])
+        # Slot-aware templates require one topic assignment per exact printed
+        # part.  Legacy rows deliberately retain their count-based behaviour.
+        explicit_slots = bool(groups.get(pair, {}).get("slots"))
+        slot_id = a.get("slot_id")
+        if explicit_slots and not slot_id:
+            errors.append("An official template assignment is missing its question-part slot. Review the section editor.")
+            continue
+        if not explicit_slots:
+            slot_id = slot_id or None
+        slot = slots.get((*pair, slot_id)) if slot_id else None
+        key = (*pair, slot_id, a["textbook_id"], a["topic_id"])
         topic = topics.get((a["textbook_id"], a["topic_id"]))
-        if pair not in groups or not topic or key in seen:
+        if pair not in groups or not topic or key in seen or (explicit_slots and not slot):
             errors.append("An assignment has a stale section/topic or is duplicated. Review the section editor.")
             continue
+        if explicit_slots and a["count"] != 1:
+            errors.append("Each official question part must be assigned exactly once.")
+            continue
         seen.add(key)
-        counts[pair] += a["count"]
+        counts[(*pair, slot_id)] += a["count"]
         resolved.append({**a, **topic, "difficulty": a.get("difficulty") or difficulty,
-                         "marks": groups[pair]["marks"], "format": groups[pair]["format"],
+                         "slot_id": slot_id, "marks": (slot or groups[pair])["marks"],
+                         "format": (slot or groups[pair])["format"],
+                         "parent_id": (slot or {}).get("parent_id"),
+                         "parent_label": (slot or {}).get("parent_label", ""),
+                         "part_label": (slot or {}).get("part_label", ""),
+                         "parent_lead_in": (slot or {}).get("lead_in", ""),
                          "allocation_id": hashlib.sha256(json.dumps(key).encode()).hexdigest()[:24]})
     for pair, group in groups.items():
-        if counts[pair] != group["count"]:
-            errors.append(f"Section {pair[0]} / {group.get('label', pair[1])}: assigned {counts[pair]} of {group['count']} questions.")
+        if group.get("slots"):
+            for slot in group_slots(group):
+                key = (*pair, slot["id"])
+                if counts[key] != 1:
+                    errors.append(f"Section {pair[0]} / {slot.get('parent_label') or group.get('label', pair[1])} {slot.get('part_label', '')}: assigned {counts[key]} of 1 parts.")
+        elif counts[(*pair, None)] != group["count"]:
+            errors.append(f"Section {pair[0]} / {group.get('label', pair[1])}: assigned {counts[(*pair, None)]} of {group['count']} questions.")
         if group.get("diagram_minimum", 0) > sum(a["count"] for a in resolved if (a["section_id"], a["group_id"]) == pair and a["diagrams"]):
             errors.append(f"Section {pair[0]} / {pair[1]}: this template requires at least {group['diagram_minimum']} diagram question(s); enable diagrams on an allocation.")
     minimum = sum(bool(a["diagrams"]) for a in resolved)
@@ -367,8 +707,11 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
         if identities(first) & identities(second):
             errors.append(f"Optional Sections {first} and {second} require disjoint chapters.")
     spec = {"compiled": True, "blueprint": deepcopy(bp), "section_allocations": resolved,
-            "total_questions": sum(g["count"] for g in groups.values()),
-            "total_marks": sum(g["count"] * g["marks"] for g in groups.values()),
+            # Generation operates on scored slots; printable parent-question
+            # count remains separately available for UI and exports.
+            "total_questions": sum(len(group_slots(g)) for g in groups.values()),
+            "printed_question_count": sum(g["count"] for g in groups.values()),
+            "total_marks": sum(group_offered_marks(g) for g in groups.values()),
             "attemptable_marks": bp["total_marks"], "topic_difficulty": {},
             "topic_counts": {}, "format_counts": {}, "type_counts": {}}
     if diagram_count is not None:
@@ -382,8 +725,9 @@ def allocation_prompt(spec):
     bp = spec["blueprint"]
     return ("\nSECTION ALLOCATION CONTRACT: The following rows replace all global topic weights and "
             "topic difficulty defaults. Use exactly the section titles in the blueprint below. "
-            "Keep compound subparts and OR alternatives in ONE numbered question. Each question must "
-            "return allocation_id, textbook_id, topic_id, group_id and topic (the topic name), "
+            "Each returned object is one scored printable slot. The renderer groups slots under their server-owned parent question; "
+            "do not write numbering, section directions, parent lead-ins, or part labels in question text. Each question must "
+            "return allocation_id, textbook_id, topic_id, group_id, slot_id and topic (the topic name), "
             "and each section must return section_id. Copy these identifiers exactly. "
             "Each row requires its count of questions with its marks, format and difficulty. "
             "diagrams=true requires at least one necessary supplied diagram in the row; false forbids "
@@ -411,7 +755,7 @@ def allocation_misses(sections, spec):
             found.setdefault(row["allocation_id"], []).append(q)
             if sid != row["section_id"] or section_key(section.get("title", sid)) != section_key(row["section_id"]):
                 misses.append(f"Question {index}: must be in Section {row['section_id']}.")
-            if any(q.get(k) != row[k] for k in ("textbook_id", "topic_id", "group_id")) or q.get("topic") != row["name"]:
+            if any(q.get(k) != row.get(k) for k in ("textbook_id", "topic_id", "group_id", "slot_id")) or q.get("topic") != row["name"]:
                 misses.append(f"Question {index}: textbook/topic/group identity mismatch.")
             if q.get("marks") != row["marks"] or q.get("format") != row["format"]:
                 misses.append(f"Question {index}: expected {row['marks']} marks, {row['format']}.")
@@ -430,13 +774,14 @@ def allocation_misses(sections, spec):
                 misses.append(f"{label}: requires at least one supplied diagram.")
             if not row["diagrams"] and diagrams:
                 misses.append(f"{label}: supplied diagrams are disabled.")
-    if not spec.get("is_topup"):
-        for section in spec["blueprint"]["sections"]:
-            for group in section["groups"]:
-                group_qs = [q for a in rows if a["section_id"] == section["id"] and a["group_id"] == group["id"] for q in found.get(a["allocation_id"], [])]
-                wanted = group.get("internal_choices")
-                if wanted is not None and (any(type(q.get("internal_choice_count")) is not int for q in group_qs) or sum(q.get("internal_choice_count", 0) for q in group_qs if type(q.get("internal_choice_count")) is int) != wanted):
-                    misses.append(f"Section {section['id']} / {group['id']}: expected {wanted} internal OR choices.")
+    for miss in internal_choice_misses(sections, spec):
+        actual = f"{miss['actual']} rendered"
+        if miss["unspecified"]:
+            actual += f", {miss['unspecified']} unclassified"
+        misses.append(
+            f"Section {miss['section_id']} / {miss['group_id']}: expected "
+            f"{miss['expected']} internal OR choices, got {actual}."
+        )
     return misses
 
 
@@ -523,7 +868,8 @@ def paper_summary(paper):
     # attempt. Raw question marks include every optional stream and therefore
     # must never replace this total in the primary summary.
     attemptable = bp.get("total_marks") if bp else printed_marks
-    return {"question_count": len(qs), "target_question_count": spec.get("total_questions") or paper.get("target_question_count"),
+    return {"question_count": spec.get("printed_question_count") or len(qs), "scored_part_count": len(qs),
+            "target_question_count": spec.get("printed_question_count") or spec.get("total_questions") or paper.get("target_question_count"),
             "target_marks": paper.get("total_marks"), "offered_marks": attemptable, "printed_marks": printed_marks, "attemptable_marks": attemptable,
             "duration_minutes": paper.get("duration_minutes"), "sections": actual_sections,
             "difficulty": mix("difficulty", ["easy", "medium", "hard"]),

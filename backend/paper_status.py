@@ -46,7 +46,7 @@ def library_status_for_paper(paper, needs_review=False):
     recovery = paper.get("generation_recovery") or {}
     recovery_status = recovery.get("status")
     recovery_reason = recovery.get("reason")
-    if recovery_reason == "allocation_metadata" and recovery_status in {"queued", "recovering"}:
+    if recovery_reason in {"allocation_metadata", "internal_choices"} and recovery_status in {"queued", "recovering"}:
         return _status("updating", "Updating", active=True)
 
     for job_name in ("topup", "regen"):

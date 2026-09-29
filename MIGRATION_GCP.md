@@ -28,7 +28,7 @@ State is split as follows:
 - Application documents: Firestore in Native mode, in this GCP project.
 - PDFs and diagrams: regional Cloud Storage, with existing object keys intact.
 - OCR: Cloud Vision Document Text Detection.
-- text and diagrams: OpenRouter.
+- text and policy generation: OpenRouter; diagrams: Vertex AI Gemini.
 - token CSV and deployment state: the attached `/srv/bodha` persistent disk.
 - secrets: Secret Manager, fetched into `/run/bodha/backend.env` at deployment.
 
@@ -140,6 +140,8 @@ GCS/Firestore writes:
 
 ```bash
 PYTHONPATH=backend python scripts/check_gcp.py
+# This makes one billable 1:1 image request and verifies Vertex model access.
+PYTHONPATH=backend python scripts/check_vertex_image.py
 curl -fsS "https://$APP_DOMAIN/health/live"
 curl -fsS "https://$APP_DOMAIN/health/ready"
 ```
@@ -168,7 +170,7 @@ approval.
 ## Expected monthly cost
 
 For 100 monthly users, 10 GB of objects, and 10,000 OCR pages, budget roughly
-USD 75–125 per month before OpenRouter and Internet egress. Vision OCR is about
+USD 75–125 per month before OpenRouter, Vertex AI image generation, and Internet egress. Vision OCR is about
 USD 13.50 after its first 1,000 free monthly units. VM/disk/snapshots are
 approximately USD 55–75, with Firestore billed for its operations and storage,
 and the remaining GCP services approximately USD 5–15. Confirm final figures in the GCP

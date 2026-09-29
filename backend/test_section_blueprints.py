@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 from section_blueprints import (Allocation, catalog, blueprint_errors, compile_allocations,
     topic_catalog, allocation_misses, paper_summary, apply_allocation_overrides,
-    derived_internal_choice_count, normalize_internal_choice_counts, section_marks)
+    derived_internal_choice_count, internal_choice_misses, normalize_internal_choice_counts, section_marks)
 from generation_requirements import remaining_requirements
 from textbook_topics import merge_topic_batches, topic_context
 from prompts import qgen_prompt
@@ -45,6 +45,7 @@ class BlueprintTests(unittest.TestCase):
             "cbse10-mathematics-standard", "cbse10-mathematics-basic", "cbse10-science",
             "icse10-physics", "icse10-chemistry", "icse10-biology", "icse10-mathematics",
             "isc12-physics", "isc12-chemistry", "isc12-biology", "isc12-mathematics",
+            "cbse12-mathematics", "cbse12-physics", "cbse12-chemistry", "cbse12-biology",
         }
         self.assertTrue(expected <= set(presets))
         for key in expected:
@@ -67,6 +68,51 @@ class BlueprintTests(unittest.TestCase):
         self.assertEqual(sum(group["count"] for section in presets["cbse10-science"]["sections"] for group in section["groups"]), 39)
         self.assertEqual(sum(group["count"] for section in presets["isc12-biology"]["sections"] for group in section["groups"]), 18)
         self.assertEqual(presets["isc12-mathematics"]["disjoint_section_pairs"], [["B", "C"]])
+        self.assertTrue(presets["cbse12"]["legacy"])
+        self.assertEqual(presets["cbse12-mathematics"]["total_marks"], 80)
+        for subject in ("physics", "chemistry", "biology"):
+            self.assertEqual(presets[f"cbse12-{subject}"]["total_marks"], 70)
+
+    def test_current_templates_expose_one_slot_for_every_scorable_part(self):
+        presets = {b["id"]: b for b in catalog()}
+        for key in ("icse10-physics", "icse10-chemistry", "icse10-biology", "icse10-mathematics",
+                    "isc12-physics", "isc12-chemistry", "isc12-biology", "isc12-mathematics",
+                    "cbse12-mathematics", "cbse12-physics", "cbse12-chemistry", "cbse12-biology"):
+            blueprint = presets[key]
+            for section in blueprint["sections"]:
+                for group in section["groups"]:
+                    slots = group.get("slots") or []
+                    self.assertTrue(slots, f"{key}/{section['id']}/{group['id']}")
+                    self.assertEqual(len({slot["id"] for slot in slots}), len(slots))
+                    self.assertTrue(all(slot["marks"] > 0 and slot.get("parent_id") for slot in slots))
+
+        icse_math = presets["icse10-mathematics"]
+        self.assertEqual([sum(slot["marks"] for slot in group["slots"]) for group in icse_math["sections"][0]["groups"]], [15, 12, 13])
+        self.assertEqual(len(icse_math["sections"][1]["groups"]), 7)
+        self.assertTrue(all(sum(slot["marks"] for slot in group["slots"]) == 10 for group in icse_math["sections"][1]["groups"]))
+
+    def test_slot_allocations_require_exact_part_identity(self):
+        book, *_ = fixture()
+        topic = topic_catalog(book)[1]
+        bp = {
+            "id": "slot-test", "version": 1, "label": "Slots", "total_marks": 2,
+            "duration_minutes": 30, "sections": [{"id": "A", "title": "Section A", "groups": [{
+                "id": "q1", "count": 1, "marks": 2, "format": "short_answer", "slots": [
+                    {"id": "q1-i", "parent_id": "q1", "parent_label": "Question 1", "part_label": "(i)", "marks": 1, "format": "short_answer"},
+                    {"id": "q1-ii", "parent_id": "q1", "parent_label": "Question 1", "part_label": "(ii)", "marks": 1, "format": "short_answer"},
+                ]
+            }]}]
+        }
+        rows = [
+            Allocation(section_id="A", group_id="q1", slot_id=slot, textbook_id=book["id"], topic_id=topic["topic_id"], count=1)
+            for slot in ("q1-i", "q1-ii")
+        ]
+        spec, errors = compile_allocations(bp, rows, [book], "medium", 2)
+        self.assertFalse(errors)
+        self.assertEqual(spec["total_questions"], 2)
+        self.assertEqual(spec["printed_question_count"], 1)
+        _, errors = compile_allocations(bp, rows[:1], [book], "medium", 2)
+        self.assertTrue(any("assigned 0 of 1 parts" in error for error in errors))
 
     def test_declarative_disjoint_sections_replace_template_id_special_case(self):
         book, *_ = fixture()
@@ -114,6 +160,22 @@ class BlueprintTests(unittest.TestCase):
         self.assertEqual(question["internal_choice_count"], 1)
         self.assertEqual(allocation_misses(sections, spec), [])
         self.assertEqual(derived_internal_choice_count({"question": "Explain whether A or B applies."}), 0)
+
+    def test_internal_choice_diagnostics_report_missing_and_excess_rendered_ors(self):
+        _, _, _, spec, sections = fixture()
+        spec = copy.deepcopy(spec)
+        spec["blueprint"]["sections"][0]["groups"][0]["internal_choices"] = 1
+        missing = internal_choice_misses(sections, spec)
+        self.assertEqual(missing[0]["expected"], 1)
+        self.assertEqual(missing[0]["actual"], 0)
+        self.assertEqual(missing[0]["eligible_question_ids"], ["A-0", "A-1"])
+        sections[0]["questions"][0]["question"] = "(a) First alternative.\nOR\n(b) Second alternative."
+        normalize_internal_choice_counts(sections)
+        self.assertEqual(internal_choice_misses(sections, spec), [])
+        sections[0]["questions"][1]["question"] = "(a) Another.\nOR\n(b) Alternative."
+        normalize_internal_choice_counts(sections)
+        excess = internal_choice_misses(sections, spec)
+        self.assertEqual(excess[0]["actual"], 2)
 
     def test_duplicate_stale_and_underallocated_rows_rejected(self):
         book, bp, rows, *_ = fixture()

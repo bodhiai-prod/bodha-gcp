@@ -16,8 +16,8 @@ export const BLUEPRINT_PRESETS = [
     testId: "blueprint-preset-isc-12",
   },
   {
-    id: "cbse12",
-    label: "Use CBSE Class 12 (80m / 3h)",
+    family: "cbse12",
+    label: "Use CBSE Class 12",
     testId: "blueprint-preset-cbse-12",
   },
 ];

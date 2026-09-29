@@ -825,7 +825,22 @@ def render_paper_docx(
             lead.paragraph_format.space_after = Pt(4)
             lead.paragraph_format.left_indent = Inches(0.12)
             lead.add_run(section_instructions).italic = True
+        printed_parent = None
         for question in section_data.get("questions", []):
+            parent_id = question.get("parent_id")
+            first_part = bool(parent_id and parent_id != printed_parent)
+            if first_part:
+                if printed_parent is not None:
+                    question_number += 1
+                printed_parent = parent_id
+                if question.get("parent_lead_in"):
+                    parent_lead = document.add_paragraph()
+                    parent_lead.paragraph_format.left_indent = Inches(0.12)
+                    parent_lead.paragraph_format.space_after = Pt(3)
+                    parent_lead.add_run(question["parent_lead_in"]).italic = True
+            elif not parent_id and printed_parent is not None:
+                question_number += 1
+                printed_parent = None
             question_table = document.add_table(rows=1, cols=2)
             question_table.alignment = WD_TABLE_ALIGNMENT.LEFT
             question_table.autofit = False
@@ -847,7 +862,8 @@ def render_paper_docx(
             question_paragraph.paragraph_format.space_before = Pt(5)
             question_paragraph.paragraph_format.space_after = Pt(3)
             _set_keep(question_paragraph, keep_together=True)
-            prefix = f"Q{question_number}. "
+            prefix = (f"Q{question_number}. {question.get('part_label', '')} " if first_part
+                      else (f"{question.get('part_label', '')} " if parent_id else f"Q{question_number}. "))
             question_paragraph.add_run(prefix).bold = True
             marks_paragraph = marks_cell.paragraphs[0]
             marks_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -916,6 +932,9 @@ def render_paper_docx(
                     )
                 else:
                     _append_rich_text(answer_paragraph, question_cell, answer_text)
+            if not parent_id:
+                question_number += 1
+        if printed_parent is not None:
             question_number += 1
 
     footer = (paper.get("branding_footer") or "").strip()

@@ -43,6 +43,7 @@ boto3>=1.34                  # only needed if selecting the legacy Bedrock provi
 # --- Google Cloud ------------------------------------------------------------
 google-cloud-storage>=2.18
 google-cloud-vision>=3.8
+google-genai>=1.0
 
 # --- misc --------------------------------------------------------------------
 requests>=2.31               # used by the integration test suites

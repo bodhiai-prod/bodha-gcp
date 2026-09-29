@@ -860,7 +860,23 @@ def render_paper_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> 
         section_instructions = (section.get("section_instructions") or "").strip()
         if section_instructions:
             story.append(Paragraph(_math_to_paragraph_html(section_instructions), q_style))
+        printed_parent = None
         for q in section.get("questions", []):
+            parent_id = q.get("parent_id")
+            if parent_id and parent_id != printed_parent:
+                if printed_parent is not None:
+                    q_counter += 1
+                printed_parent = parent_id
+                if q.get("parent_lead_in"):
+                    story.append(Paragraph(_math_to_paragraph_html(q["parent_lead_in"]), q_style))
+                prefix = f"<b>Q{q_counter}.</b> {q.get('part_label', '')}".strip()
+            elif parent_id:
+                prefix = f"<b>{q.get('part_label', '')}</b>".strip()
+            else:
+                if printed_parent is not None:
+                    q_counter += 1
+                    printed_parent = None
+                prefix = f"<b>Q{q_counter}.</b>"
             marks_q = q.get("marks", 0)
             difficulty = q.get("difficulty", "")
             qtype = q.get("type", "")
@@ -868,7 +884,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> 
             q_html = _math_to_paragraph_html(q.get("question", ""))
             story.append(
                 Paragraph(
-                    f"<b>Q{q_counter}.</b> {important}{q_html} "
+                    f"{prefix} {important}{q_html} "
                     f"<font color='#000000'>[{format_mark(marks_q)} marks]</font>",
                     q_style,
                 )
@@ -901,6 +917,9 @@ def render_paper_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> 
                     pass
 
             story.append(Spacer(1, 2 * mm))
+            if not parent_id:
+                q_counter += 1
+        if printed_parent is not None:
             q_counter += 1
 
     page_branding = _page_branding(paper)

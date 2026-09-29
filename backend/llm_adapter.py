@@ -1,4 +1,4 @@
-"""LLM adapter for text and diagram generation, backed by Bedrock or OpenRouter.
+"""LLM adapter for text and diagram generation, backed by Bedrock, Vertex, or OpenRouter.
 
 Replaces the original universal-key adapter. The public surface is
 unchanged — `chat_complete`, `chain_for_exam`, `generate_diagram`, and
@@ -14,11 +14,12 @@ Configuration (all via environment / backend/.env):
     BEDROCK_TEMPERATURE        sampling temperature
     ENABLE_DIAGRAMS            "false" disables diagram generation entirely
     TEXT_PROVIDER              bedrock | openrouter (text only)
-    IMAGE_PROVIDER             bedrock | huggingface | openrouter (images only)
+    IMAGE_PROVIDER             bedrock | huggingface | vertex | openrouter (images only)
     OPENROUTER_API_KEY         key for both OpenRouter providers
     OPENROUTER_TEXT_MODEL_DEFAULT   e.g. openai/gpt-5.6
     OPENROUTER_TEXT_MODEL_FALLBACK  e.g. anthropic/claude-opus-5
-    OPENROUTER_IMAGE_MODEL     e.g. google/gemini-2.5-flash-image
+    VERTEX_IMAGE_MODEL         e.g. gemini-3.1-flash-lite-image
+    OPENROUTER_IMAGE_MODEL     optional inactive image-provider fallback
     DIAGRAM_MAX_CONCURRENCY    process-wide ceiling on diagrams in flight
 
 AWS credentials are resolved by boto3 in the usual order (env vars, shared
@@ -74,14 +75,14 @@ ENABLE_DIAGRAMS = os.environ.get("ENABLE_DIAGRAMS", "true").lower() not in (
 # --- providers ---------------------------------------------------------------
 # Text and images switch independently: the two workloads have different model
 # requirements and different billing, and in practice we have run a Bedrock text
-# model alongside an OpenRouter image model. Both default to bedrock so an
-# un-updated .env keeps working exactly as before.
+# model alongside a Vertex image model. Text and images remain independently
+# switchable because they have different billing and availability requirements.
 #
 # The model ids per provider live further down (BEDROCK_MODEL_* above,
 # OPENROUTER_TEXT_MODEL_* below); the active pair is resolved once into
 # TEXT_MODEL_DEFAULT / TEXT_MODEL_FALLBACK where PROVIDER_CHAIN is built.
 TEXT_PROVIDER = os.environ.get("TEXT_PROVIDER", "openrouter").strip().lower()
-IMAGE_PROVIDER = os.environ.get("IMAGE_PROVIDER", "openrouter").strip().lower()
+IMAGE_PROVIDER = os.environ.get("IMAGE_PROVIDER", "vertex").strip().lower()
 
 # Hugging Face dedicated Inference Endpoint. The text-to-image task schema is
 # the same for every diffusion model behind an endpoint, so the model choice
@@ -100,6 +101,18 @@ HF_IMAGE_SIZE = int(os.environ.get("HF_IMAGE_SIZE", "1024"))
 # failure fails fast instead of hanging for the full cold-start window.
 HF_COLD_START_TIMEOUT = float(os.environ.get("HF_COLD_START_TIMEOUT", "300"))
 HF_READ_TIMEOUT = float(os.environ.get("HF_READ_TIMEOUT", "90"))
+
+# Vertex AI Gemini image generation uses the VM's Application Default
+# Credentials.  The image models are global publisher models, while the rest of
+# this application's regional GCP resources continue using GCP_REGION.
+VERTEX_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "").strip()
+VERTEX_IMAGE_LOCATION = os.environ.get("VERTEX_IMAGE_LOCATION", "global").strip()
+VERTEX_IMAGE_MODEL = os.environ.get(
+    "VERTEX_IMAGE_MODEL", "gemini-3.1-flash-lite-image"
+)
+VERTEX_IMAGE_ASPECT_RATIO = os.environ.get("VERTEX_IMAGE_ASPECT_RATIO", "1:1")
+VERTEX_TIMEOUT = float(os.environ.get("VERTEX_TIMEOUT", "90"))
+VERTEX_MAX_RETRIES = int(os.environ.get("VERTEX_MAX_RETRIES", "3"))
 
 # OpenRouter, used for the Gemini Flash image models. Unlike the two diffusion
 # providers this is an instruction-following model behind a plain hosted API:
@@ -874,6 +887,154 @@ def _generate_image_hf(prompt: str) -> bytes | None:
 _openrouter_lock = threading.Lock()
 _openrouter_session_obj = None
 
+_vertex_lock = threading.Lock()
+_vertex_client_obj = None
+
+
+def _vertex_client():
+    """Lazily create the ADC-backed Gemini API on Vertex AI client."""
+    global _vertex_client_obj
+    if not VERTEX_PROJECT_ID:
+        raise RuntimeError("IMAGE_PROVIDER=vertex but GCP_PROJECT_ID is unset")
+    if _vertex_client_obj is None:
+        with _vertex_lock:
+            if _vertex_client_obj is None:
+                from google import genai
+
+                _vertex_client_obj = genai.Client(
+                    vertexai=True,
+                    project=VERTEX_PROJECT_ID,
+                    location=VERTEX_IMAGE_LOCATION,
+                )
+    return _vertex_client_obj
+
+
+def _vertex_status_code(error: BaseException) -> int | None:
+    """Extract an HTTP status from either google-genai or api-core errors."""
+    for attr in ("status_code", "code"):
+        value = getattr(error, attr, None)
+        if callable(value):
+            try:
+                value = value()
+            except Exception:  # noqa: BLE001 - best-effort error classification
+                continue
+        if isinstance(value, int):
+            return value
+        raw = getattr(value, "value", value)
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    match = re.search(r"(?:status|code)\s*[=:]?\s*(\d{3})", str(error), re.I)
+    return int(match.group(1)) if match else None
+
+
+def _vertex_image_parts(response) -> list:
+    """Return image parts regardless of whether Gemini also returned text."""
+    candidates = getattr(response, "candidates", None) or []
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or []
+        images = [part for part in parts if getattr(part, "inline_data", None)]
+        if images:
+            return images
+    return []
+
+
+def _generate_image_vertex(prompt: str) -> bytes | None:
+    """Generate one Gemini image through Vertex AI using ADC.
+
+    Gemini image models require both TEXT and IMAGE response modalities. Text
+    parts are deliberately ignored; a diagram is successful only when an inline
+    image part is returned. OpenRouter is not consulted if this path fails.
+    """
+    from google.genai import types
+
+    started = time.perf_counter()
+    deadline = started + VERTEX_TIMEOUT
+    delay = 2.0
+    attempt = 0
+    while True:
+        attempt += 1
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Vertex AI did not respond within {VERTEX_TIMEOUT:.0f}s "
+                f"({attempt - 1} attempt(s))"
+            )
+        try:
+            config = types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"],
+                candidate_count=1,
+                image_config=types.ImageConfig(aspect_ratio=VERTEX_IMAGE_ASPECT_RATIO),
+                # The SDK expects milliseconds. Rebuild per attempt so one
+                # socket cannot outlive the provider-wide retry deadline.
+                http_options=types.HttpOptions(
+                    timeout=int(max(5.0, remaining) * 1000)
+                ),
+            )
+            response = _vertex_client().models.generate_content(
+                model=VERTEX_IMAGE_MODEL,
+                contents=prompt,
+                config=config,
+            )
+            break
+        except Exception as error:  # noqa: BLE001 - provider exceptions vary by SDK version
+            status = _vertex_status_code(error)
+            if status in (401, 403):
+                raise RuntimeError(
+                    f"Vertex AI rejected credentials or model access ({status}). "
+                    "Check the VM service account's roles/aiplatform.user grant."
+                ) from error
+            if status not in (408, 409, 429, 500, 502, 503, 504) or attempt > VERTEX_MAX_RETRIES:
+                raise RuntimeError(
+                    f"Vertex AI image generation failed"
+                    f"{f' ({status})' if status else ''}: {str(error)[:300]}"
+                ) from error
+            wait = min(delay, max(0.0, deadline - time.perf_counter()))
+            if status == 429:
+                logger.warning(
+                    "Vertex AI rate-limited (429), retrying in %.1fs "
+                    "(attempt %s/%s); consider lowering DIAGRAM_MAX_CONCURRENCY "
+                    "(currently %s)",
+                    wait,
+                    attempt,
+                    VERTEX_MAX_RETRIES,
+                    DIAGRAM_MAX_CONCURRENCY,
+                )
+            time.sleep(wait)
+            delay = min(delay * 1.5, 15.0)
+
+    image_parts = _vertex_image_parts(response)
+    if not image_parts:
+        logger.warning("Vertex AI returned no image part")
+        return None
+    data = getattr(image_parts[0].inline_data, "data", None)
+    if not data:
+        logger.warning("Vertex AI returned an empty image part")
+        return None
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    if _image_usage_sink:
+        try:
+            usage = getattr(response, "usage_metadata", None)
+            output_tokens = int(
+                getattr(usage, "candidates_token_count", 0)
+                or getattr(usage, "output_token_count", 0)
+                or 0
+            )
+            total_tokens = int(getattr(usage, "total_token_count", 0) or output_tokens)
+            _image_usage_sink(
+                VERTEX_IMAGE_MODEL,
+                images=1,
+                latency_ms=latency_ms,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+            )
+        except Exception:  # noqa: BLE001 - accounting must never break generation
+            logger.debug("image usage sink failed", exc_info=True)
+    return _normalize_png(bytes(data))
+
 
 def _openrouter_session():
     """Lazily create (and cache) the OpenRouter session.
@@ -1089,6 +1250,8 @@ def _generate_image_sync(prompt: str) -> bytes | None:
     """Dispatch to the configured image provider. Always run in a worker thread."""
     if IMAGE_PROVIDER == "huggingface":
         return _generate_image_hf(prompt)
+    if IMAGE_PROVIDER == "vertex":
+        return _generate_image_vertex(prompt)
     if IMAGE_PROVIDER == "openrouter":
         return _generate_image_openrouter(prompt)
     return _generate_image_bedrock(prompt)
@@ -1101,6 +1264,8 @@ def _diagram_timeout() -> float:
     inner retry loop might spend. Getting this wrong is silent: generate_diagram
     swallows the TimeoutError and the question simply loses its figure.
     """
+    if IMAGE_PROVIDER == "vertex":
+        return VERTEX_TIMEOUT + 30.0
     if IMAGE_PROVIDER == "openrouter":
         return OPENROUTER_TIMEOUT + 30.0
     if IMAGE_PROVIDER != "huggingface":
@@ -1135,7 +1300,7 @@ def _diagram_prompt(spec: str | dict) -> str:
     else:
         description, labels, givens, unknowns = str(spec), [], [], []
 
-    if IMAGE_PROVIDER == "openrouter":
+    if IMAGE_PROVIDER in ("openrouter", "vertex"):
         # The exclusions carried by _NEGATIVE_PROMPT have to live in the
         # positive text here: the Gemini image endpoints take no negative
         # prompt. The blanket label ban is still dropped — legible labelling is

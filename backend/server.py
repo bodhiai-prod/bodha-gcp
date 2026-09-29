@@ -38,7 +38,8 @@ from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_er
                                 compile_allocations, paper_summary, BlueprintStructure,
                                 apply_allocation_overrides, hydrate_section_instructions,
                                 printable_template_instructions, compact_validation_misses,
-                                allocation_misses, normalize_internal_choice_counts)
+                                allocation_misses, internal_choice_misses,
+                                normalize_internal_choice_counts)
 from normal_paper_contract import (
     normalize_normal_sections,
     review_status as normal_review_status,
@@ -79,6 +80,7 @@ from workers import (
     load_paper_feedback_hints,
     paper_target_count,
     recover_template_generation_background,
+    repair_internal_choices_background,
     reconcile_solution_shell,
     regenerate_question_background,
     reconcile_section_plan,
@@ -1987,9 +1989,13 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
     if repaired_recovery or choice_counts_changed or section_plan != (p.get("section_plan") or []):
         repaired_fields = {"sections": repaired_sections, "section_plan": section_plan}
         if choice_counts_changed:
-            repaired_fields["instruction_check"] = verify(
-                repaired_sections, p.get("generation_requirements") or {}
-            )
+            repaired_check = verify(repaired_sections, p.get("generation_requirements") or {})
+            repaired_check["misses"] = list(dict.fromkeys([
+                *(repaired_check.get("misses") or []),
+                *allocation_misses(repaired_sections, p.get("generation_requirements") or {}),
+            ]))
+            repaired_check["honoured"] = not repaired_check["misses"]
+            repaired_fields["instruction_check"] = repaired_check
         await db.papers.update_one(
             {"id": paper_id}, {"$set": repaired_fields}
         )
@@ -2693,6 +2699,44 @@ async def retry_template_recovery(paper_id: str, user: dict = Depends(get_curren
     await db.papers.update_one({"id": paper_id}, {"$set": {"generation_recovery": queued}})
     _spawn(recover_template_generation_background(
         paper_id, paper["owner_id"], context_excerpt=context_excerpt, feedback_hints=feedback_hints
+    ))
+    return queued
+
+
+@api_router.post("/papers/{paper_id}/repair-internal-choices")
+async def repair_paper_internal_choices(paper_id: str, user: dict = Depends(get_current_user)):
+    """Retry the bounded, slot-preserving repair for rendered OR alternatives."""
+    paper = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if paper["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if paper.get("generation_status") != "ready":
+        raise HTTPException(status_code=400, detail="Paper is not ready. Use 'Retry generation' instead.")
+    diagnostics = internal_choice_misses(
+        paper.get("sections") or [], paper.get("generation_requirements") or {}
+    )
+    if not diagnostics:
+        raise HTTPException(status_code=400, detail="This paper has no internal OR choices to repair.")
+    recovery = paper.get("generation_recovery") or {}
+    if recovery.get("status") in {"queued", "recovering"}:
+        raise HTTPException(status_code=409, detail="Another paper recovery is already in progress.")
+    if _generation_is_live(paper.get("topup") or {}) or _generation_is_live(
+        paper.get("regen") or {}, max_age=REGEN_LOCK_SECONDS
+    ):
+        raise HTTPException(status_code=409, detail="Question generation is already in progress.")
+
+    queued = {
+        "status": "queued", "reason": "internal_choices", "attempt": 0,
+        "max_attempts": 1, "started_at": utcnow_iso(), "finished_at": None,
+        "validation_summary": [], "diagnostics": diagnostics,
+    }
+    await db.papers.update_one({"id": paper_id}, {"$set": {"generation_recovery": queued}})
+    context_excerpt, feedback_hints = await _paper_generation_inputs(paper)
+    _spawn(repair_internal_choices_background(
+        paper_id, paper["owner_id"], context_excerpt=context_excerpt,
+        feedback_hints=feedback_hints,
+        solution_is_live=_generation_is_live(paper.get("solution") or {}),
     ))
     return queued
 

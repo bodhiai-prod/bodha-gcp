@@ -27,6 +27,11 @@ import QuestionDiagram from "@/components/QuestionDiagram";
 import BrandingLogo from "@/components/BrandingLogo";
 import { printDocument, diagramsReady } from "@/lib/print";
 import { canRegenerate, regeneratingId } from "@/lib/regenerate";
+import {
+  canRepairInternalChoices,
+  internalChoiceRecovery,
+  internalChoiceRepairLive,
+} from "@/lib/internalChoiceRepair";
 import { DEFAULT_PAPER_INSTRUCTIONS, formatMark } from "@/lib/exportFormat";
 import { canonicalQuestionType, questionTypeLabel } from "@/lib/questionType";
 import {
@@ -190,6 +195,16 @@ export default function PaperView() {
       await load();
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Could not retry template recovery");
+    }
+  };
+
+  const repairInternalChoices = async () => {
+    try {
+      await api.post(`/papers/${id}/repair-internal-choices`);
+      toast.success("Repairing the missing internal OR choices — unaffected questions stay as they are");
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not repair the internal OR choices");
     }
   };
 
@@ -529,6 +544,9 @@ export default function PaperView() {
     && paper.generation_recovery?.status !== "ready"
     ? paper.generation_recovery : null;
   const recoveryLive = ["queued", "recovering"].includes(templateRecovery?.status);
+  const choiceRecovery = internalChoiceRecovery(paper);
+  const choiceRepairLive = internalChoiceRepairLive(paper);
+  const choiceRepairAllowed = canRepairInternalChoices({ paper, editing });
   const isPartial = paper.recovered_from_truncation || missingCount > 0;
   const busy = queuing || topup?.status === "generating";
   // Which question the server is rewriting, and whether the button is offered
@@ -562,6 +580,37 @@ export default function PaperView() {
                 : "The generated paper could not be proven to match its board-template allocation. Nothing has been replaced."}
             </p>
             {!recoveryLive && <button onClick={retryTemplateRecovery} className="qp-btn qp-btn-primary text-xs mt-3" data-testid="retry-template-recovery-button">Retry template recovery</button>}
+          </div>
+        )}
+        {choiceRecovery && (
+          <div className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4" data-testid="internal-choice-recovery-banner">
+            <div className="font-bold uppercase tracking-wider text-sm">
+              {choiceRepairLive ? "Repairing internal OR choices" : "Internal OR choices need repair"}
+            </div>
+            <p className="text-sm text-neutral-700 mt-1">
+              {choiceRepairLive
+                ? "Rewriting only the affected question blocks with the required student-facing alternatives. Your other questions remain unchanged."
+                : "Automatic repair could not restore the required internal OR choices. You can safely retry the targeted repair or edit the paper yourself."}
+            </p>
+            {(choiceRecovery.diagnostics || []).length > 0 && (
+              <ul className="mt-2 list-disc pl-5 text-xs text-neutral-700">
+                {choiceRecovery.diagnostics.map((issue) => (
+                  <li key={`${issue.section_id}-${issue.group_id}`}>
+                    Section {issue.section_id} / {issue.group_id}: expected {issue.expected}, found {issue.actual} internal OR choices.
+                  </li>
+                ))}
+              </ul>
+            )}
+            {!choiceRepairLive && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button onClick={repairInternalChoices} disabled={!choiceRepairAllowed} className="qp-btn qp-btn-primary text-xs" data-testid="repair-internal-choices-button">
+                  <ArrowClockwise size={14} weight="bold" /> Resolve OR choices
+                </button>
+                <button onClick={enterEdit} className="qp-btn qp-btn-secondary text-xs" data-testid="edit-internal-choices-button">
+                  <PencilSimple size={14} weight="bold" /> Edit manually
+                </button>
+              </div>
+            )}
           </div>
         )}
         {topup?.status === "generating" && (
@@ -688,7 +737,7 @@ export default function PaperView() {
             </div>
           </div>
         )}
-        {paper.instruction_check?.honoured === false && !busy && !templateRecovery && (
+        {paper.instruction_check?.honoured === false && !busy && !templateRecovery && !choiceRecovery && (
           <div className="no-print mb-6 border border-amber-300 bg-amber-50 p-4"
             data-testid="paper-requirements-check">
             <p className="font-bold text-sm">Some requested settings need review</p>
@@ -878,7 +927,9 @@ export default function PaperView() {
             )
           )}
 
-          {(view.sections || []).map((section, si) => (
+          {(view.sections || []).map((section, si) => {
+            let printedParent = null;
+            return (
             <section key={si} className="mb-8" data-testid={`section-${si}`}>
               <h2 className="font-display text-xl md:text-2xl text-[#002FA7] mb-4 border-b border-neutral-300 pb-2">
                 {section.title}
@@ -890,7 +941,16 @@ export default function PaperView() {
               )}
               <ol className="space-y-4">
                 {(section.questions || []).map((q, qi) => {
-                  const qNum = counter++;
+                  const parentId = q.parent_id;
+                  const firstPart = Boolean(parentId && parentId !== printedParent);
+                  let qNum = null;
+                  if (firstPart) {
+                    qNum = counter++;
+                    printedParent = parentId;
+                  } else if (!parentId) {
+                    qNum = counter++;
+                    printedParent = null;
+                  }
                   if (editing) {
                     return (
                       <li
@@ -898,8 +958,9 @@ export default function PaperView() {
                         className="border-2 border-neutral-300 p-4"
                         data-testid={`edit-question-${q.id}`}
                       >
+                        {firstPart && q.parent_lead_in && <p className="text-sm italic mb-2">{q.parent_lead_in}</p>}
                         <div className="flex items-start gap-2 mb-2">
-                          <span className="font-bold pt-2">Q{qNum}.</span>
+                          <span className="font-bold pt-2">{qNum ? `Q${qNum}.` : q.part_label}</span>
                           <textarea
                             value={q.question}
                             onChange={(e) =>
@@ -1018,8 +1079,9 @@ export default function PaperView() {
                       data-testid={`question-item-${q.id}`}
                     >
                       <div className="flex-1">
+                        {firstPart && q.parent_lead_in && <p className="text-sm italic mb-2"><MathText text={q.parent_lead_in} /></p>}
                         <div className="flex items-start gap-2">
-                          <span className="font-bold">Q{qNum}.</span>
+                          <span className="font-bold">{qNum ? `Q${qNum}.` : q.part_label}</span>
                           {q.important && (
                             <Star
                               size={16}
@@ -1142,7 +1204,8 @@ export default function PaperView() {
                 </button>
               )}
             </section>
-          ))}
+            );
+          })}
 
           <div className="text-center mt-8 pt-4 border-t-2 border-black font-mono text-xs text-neutral-500">
             — End of Paper —

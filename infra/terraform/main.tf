@@ -7,6 +7,7 @@ locals {
   cloudbuild_sa = "serviceAccount:${google_service_account.build.email}"
   required_apis = toset([
     "artifactregistry.googleapis.com",
+    "aiplatform.googleapis.com",
     "billingbudgets.googleapis.com",
     "cloudbuild.googleapis.com",
     "cloudresourcemanager.googleapis.com",
@@ -145,6 +146,7 @@ resource "google_storage_bucket_iam_member" "cloudbuild_source_reader" {
 resource "google_project_iam_member" "app_roles" {
   for_each = toset([
     "roles/artifactregistry.reader",
+    "roles/aiplatform.user",
     "roles/firebaseauth.admin",
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
