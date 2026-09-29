@@ -32,7 +32,17 @@ steps:
     args:
       - -ceu
       - |
-        gcloud compute os-login ssh-keys list --format='value(fingerprint)' | while read -r key; do
+        # `ssh-keys list` can omit expired keys, but expired keys still count
+        # toward OS Login's 32 KiB profile limit.  Read the complete profile
+        # map and remove every stored key before SCP registers this build's key.
+        gcloud compute os-login describe-profile --format=json | python3 -c '
+        import json, sys
+        profile = json.load(sys.stdin)
+        for item in (profile.get("sshPublicKeys") or {}).values():
+            fingerprint = item.get("fingerprint")
+            if fingerprint:
+                print(fingerprint)
+        ' | while read -r key; do
           [ -z "$key" ] || gcloud compute os-login ssh-keys remove --key="$key" --quiet
         done
   - name: gcr.io/cloud-builders/gcloud
