@@ -33,17 +33,25 @@ _FULL_DISPLAY_MATH_RE = re.compile(
     r"^\s*(?:\$\$(?P<dollar>[\s\S]*?)\$\$|\\\[(?P<bracket>[\s\S]*?)\\\])\s*$"
 )
 _LATEX_SYMBOLS = {
-    "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ",
-    "theta": "θ", "lambda": "λ", "mu": "μ", "pi": "π",
-    "sigma": "σ", "phi": "φ", "omega": "ω", "Delta": "Δ",
-    "Gamma": "Γ", "Theta": "Θ", "Lambda": "Λ", "Pi": "Π",
-    "Sigma": "Σ", "Phi": "Φ", "Omega": "Ω", "infty": "∞",
-    "cdot": "·", "times": "×", "pm": "±", "leq": "≤",
-    "geq": "≥", "ge": "≥", "le": "≤", "neq": "≠", "ne": "≠",
-    "approx": "≈", "to": "→", "mapsto": "↦", "setminus": "∖",
-    "rightarrow": "→", "degree": "°", "circ": "°",
-    "in": "∈", "notin": "∉", "subset": "⊂", "subseteq": "⊆",
-    "cup": "∪", "cap": "∩", "partial": "∂", "nabla": "∇",
+    # Greek letters used frequently in physics and mathematics exports.
+    "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
+    "varepsilon": "ε", "zeta": "ζ", "eta": "η", "theta": "θ", "vartheta": "ϑ",
+    "iota": "ι", "kappa": "κ", "lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ",
+    "pi": "π", "varpi": "ϖ", "rho": "ρ", "varrho": "ϱ", "sigma": "σ",
+    "varsigma": "ς", "tau": "τ", "upsilon": "υ", "phi": "φ", "varphi": "ϕ",
+    "chi": "χ", "psi": "ψ", "omega": "ω", "Gamma": "Γ", "Delta": "Δ", "Theta": "Θ",
+    "Lambda": "Λ", "Xi": "Ξ", "Pi": "Π", "Sigma": "Σ", "Phi": "Φ", "Psi": "Ψ",
+    "Omega": "Ω", "infty": "∞",
+    # Operators, relations, and arrows emitted by the paper-generation prompts.
+    "cdot": "·", "times": "×", "div": "÷", "pm": "±", "mp": "∓", "ast": "∗",
+    "circ": "°", "degree": "°", "propto": "∝", "perp": "⊥", "parallel": "∥",
+    "leq": "≤", "le": "≤", "geq": "≥", "ge": "≥", "neq": "≠", "ne": "≠",
+    "ll": "≪", "gg": "≫", "approx": "≈", "equiv": "≡", "sim": "∼", "cong": "≅",
+    "to": "→", "rightarrow": "→", "leftarrow": "←", "leftrightarrow": "↔",
+    "Rightarrow": "⇒", "Leftarrow": "⇐", "Leftrightarrow": "⇔", "mapsto": "↦",
+    "in": "∈", "notin": "∉", "ni": "∋", "subset": "⊂", "subseteq": "⊆",
+    "supset": "⊃", "supseteq": "⊇", "setminus": "∖", "cup": "∪", "cap": "∩",
+    "emptyset": "∅", "varnothing": "∅", "partial": "∂", "nabla": "∇",
     "forall": "∀", "exists": "∃", "therefore": "∴", "because": "∵",
 }
 
@@ -77,6 +85,27 @@ def _mathbb_nodes(nodes):
             styled.append(node)
     return styled
 
+
+def _roman_nodes(nodes):
+    """Mark a parsed node sequence as upright text, e.g. SI unit symbols."""
+    roman = []
+    for node in nodes:
+        kind = node[0]
+        if kind == "text":
+            roman.append(("roman", node[1]))
+        elif kind in {"roman", "frac", "sqrt"}:
+            if kind == "roman":
+                roman.append(node)
+            elif kind == "frac":
+                roman.append((kind, _roman_nodes(node[1]), _roman_nodes(node[2])))
+            else:
+                roman.append((kind, _roman_nodes(node[1])))
+        elif kind in {"sup", "sub"}:
+            roman.append((kind, _roman_nodes([node[1]])[0], _roman_nodes(node[2])))
+        else:
+            roman.append(node)
+    return roman
+
 # These need Word's n-ary structure.  Emitting the command name as ordinary
 # math text (the old behaviour) made Word display and spell-check ``int`` and
 # then attach its limits to that text rather than to an integral sign.
@@ -88,6 +117,17 @@ _NARY_OPERATORS = {
 
 def _latex_group(source: str, index: int):
     if index >= len(source) or source[index] != "{":
+        # LaTex permits a command as an unbraced script operand: ``^\circ``
+        # and ``_\infty`` are equivalent to ``^{\circ}`` and ``_{\infty}``.
+        # Returning only the slash leaked the rest of the command as document
+        # text (for example, ``180^circ C`` in exported physics papers).
+        if index < len(source) and source[index] == "\\":
+            cursor = index + 1
+            while cursor < len(source) and source[cursor].isalpha():
+                cursor += 1
+            if cursor == index + 1 and cursor < len(source):
+                cursor += 1
+            return source[index:cursor], cursor
         return source[index:index + 1], index + 1
     depth = 1
     cursor = index + 1
@@ -134,9 +174,12 @@ def _consume_nary_base(source: str, index: int):
                 end = close + 1 if close >= 0 else end
             radicand, index = _latex_group(source, end)
             nodes = [("sqrt", _latex_to_ast(radicand))]
-        elif command in {"text", "textrm", "mathrm", "mathbf", "mathit"}:
+        elif command in {"text", "textrm", "mathrm", "mathnormal", "operatorname"}:
             content, index = _latex_group(source, end)
-            nodes = [("text", content)]
+            nodes = _roman_nodes(_latex_to_ast(content))
+        elif command in {"mathbf", "mathit"}:
+            content, index = _latex_group(source, end)
+            nodes = _latex_to_ast(content)
         elif command == "mathbb":
             content, index = _latex_group(source, end)
             nodes = _mathbb_nodes(_latex_to_ast(content))
@@ -186,10 +229,13 @@ def _latex_to_ast(source: str):
             command = source[cursor + 1:end]
             if not command and end < len(source):
                 # LaTeX spacing escapes such as ``\,`` and ``\!`` are not
-                # literal punctuation in the equation.  Treating them as
-                # commas was what made otherwise valid integral blocks look
-                # malformed in LibreOffice.
+                # literal punctuation in the equation.  Preserve the common
+                # positive spaces so SI units such as ``kg\,m^{-3}`` do not
+                # collapse into ``kgm`` in LibreOffice.
                 if source[end] in {",", ";", ":", "!", " "}:
+                    spacing = {",": " ", ";": " ", ":": " ", " ": " "}
+                    if source[end] != "!":
+                        nodes.append(("text", spacing[source[end]]))
                     cursor = end + 1
                     continue
                 nodes.append(("text", source[end]))
@@ -239,17 +285,17 @@ def _latex_to_ast(source: str):
                 radicand, cursor = _latex_group(source, end)
                 nodes.append(("sqrt", _latex_to_ast(radicand)))
                 continue
-            if command in {"text", "textrm", "mathrm", "mathbf", "mathit"}:
+            if command in {"text", "textrm", "mathrm", "mathnormal", "operatorname"}:
                 content, cursor = _latex_group(source, end)
-                nodes.append(("text", content))
+                nodes.extend(_roman_nodes(_latex_to_ast(content)))
+                continue
+            if command in {"mathbf", "mathit"}:
+                content, cursor = _latex_group(source, end)
+                nodes.extend(_latex_to_ast(content))
                 continue
             if command == "mathbb":
                 content, cursor = _latex_group(source, end)
                 nodes.extend(_mathbb_nodes(_latex_to_ast(content)))
-                continue
-            if command == "operatorname":
-                content, cursor = _latex_group(source, end)
-                nodes.append(("text", content))
                 continue
             if command in {
                 "left", "right", "displaystyle", "textstyle", "scriptstyle",
@@ -282,8 +328,14 @@ def _latex_to_ast(source: str):
     return nodes
 
 
-def _omml_run(text: str):
+def _omml_run(text: str, *, upright: bool = False):
     run = OxmlElement("m:r")
+    if upright:
+        properties = OxmlElement("m:rPr")
+        style = OxmlElement("m:sty")
+        style.set(qn("m:val"), "p")
+        properties.append(style)
+        run.append(properties)
     text_element = OxmlElement("m:t")
     text_element.text = text
     run.append(text_element)
@@ -308,6 +360,8 @@ def _omml_node(node):
     kind = node[0]
     if kind == "text":
         return _omml_run(node[1])
+    if kind == "roman":
+        return _omml_run(node[1], upright=True)
     if kind == "frac":
         fraction = OxmlElement("m:f")
         fraction.append(OxmlElement("m:fPr"))

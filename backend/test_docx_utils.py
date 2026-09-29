@@ -119,6 +119,25 @@ def test_docx_renders_blackboard_bold_and_common_set_commands_without_raw_latex(
     assert '<m:supHide m:val="1"' in document_xml
 
 
+def test_docx_renders_physics_symbols_and_upright_si_units():
+    paper = _paper()
+    paper["sections"][0]["questions"][0]["question"] = (
+        r"At $180^\circ\mathrm{C}$, $\rho=0.90\,\mathrm{kg\,m^{-3}}$ and "
+        r"$P=\epsilon\sigma A(T^4-T_s^4)$ with $v_{\mathrm{rms}}\propto\sqrt{T}$."
+    )
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    for command in ("circ", "rho", "epsilon", "propto", "mathrm"):
+        assert command not in document_xml
+    for symbol in ("°", "ρ", "ε", "∝"):
+        assert symbol in document_xml
+    assert " " in document_xml
+    # m:sty p is OMML's upright/plain style, used here for C, kg, m, and rms.
+    assert '<m:sty m:val="p"' in document_xml
+
+
 def test_docx_renders_template_section_instruction_before_question_number():
     paper = _paper()
     paper["generation_requirements"] = {"blueprint": {
