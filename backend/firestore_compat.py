@@ -323,12 +323,13 @@ class FirestoreCollection:
         for snapshot, _document in matches:
             transaction = self._client.transaction()
             try:
-                fresh = await transaction.get(snapshot.reference)
-                # firestore's async client returns a single snapshot for a
-                # document reference in current releases; accept the legacy
-                # one-item list shape too so queue leasing is version-safe.
-                if isinstance(fresh, (list, tuple)):
-                    fresh = fresh[0] if fresh else None
+                # AsyncTransaction.get() returns an async stream even for one
+                # document reference.  Treating it as an awaitable silently
+                # made every queue lease fail and left jobs queued forever.
+                fresh = None
+                async for candidate in transaction.get(snapshot.reference):
+                    fresh = candidate
+                    break
                 if fresh is None:
                     continue
                 current = _decode_generation_requirements(fresh.to_dict() or {}) if fresh.exists else None
