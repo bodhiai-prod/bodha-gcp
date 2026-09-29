@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
 import { toast } from "sonner";
+import { useConfirmation } from "@/context/ConfirmationContext";
 import {
   MagnifyingGlass,
   Trash,
@@ -11,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 
 export default function QBank() {
+  const confirm = useConfirmation();
   const [items, setItems] = useState([]);
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
@@ -43,7 +45,12 @@ export default function QBank() {
   }, [q, typeFilter, difficulty]); // eslint-disable-line
 
   const remove = async (id) => {
-    if (!window.confirm("Delete this question?")) return;
+    if (!(await confirm({
+      title: "Delete question?",
+      description: "This question will be permanently removed from the question bank.",
+      confirmLabel: "Delete question",
+      tone: "danger",
+    }))) return;
     await api.delete(`/qbank/${id}`);
     toast.success("Deleted");
     load();

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import Header from "@/components/Header";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
+import { useConfirmation } from "@/context/ConfirmationContext";
 import { CheckCircle, ImageSquare, Plus, Trash, UploadSimple, X } from "@phosphor-icons/react";
 
 const emptyPreset = {
@@ -10,6 +11,7 @@ const emptyPreset = {
 };
 
 export default function BrandingSettings() {
+  const confirm = useConfirmation();
   const [presets, setPresets] = useState([]);
   const [draft, setDraft] = useState(emptyPreset);
   const [crestUrl, setCrestUrl] = useState("");
@@ -103,7 +105,12 @@ export default function BrandingSettings() {
   };
 
   const removePreset = async () => {
-    if (!draft.id || !window.confirm(`Delete “${draft.name}”? Existing papers keep their saved branding snapshot.`)) return;
+    if (!draft.id || !(await confirm({
+      title: "Delete branding preset?",
+      description: `Delete “${draft.name}”? Existing papers keep their saved branding snapshot.`,
+      confirmLabel: "Delete preset",
+      tone: "danger",
+    }))) return;
     try {
       await api.delete(`/branding-presets/${draft.id}`);
       setDraft(emptyPreset);

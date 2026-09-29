@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
 import { toast } from "sonner";
+import { useConfirmation } from "@/context/ConfirmationContext";
 import {
   UploadSimple,
   FolderOpen,
@@ -23,6 +24,7 @@ const rememberActiveBooks = (books) => {
 };
 
 export default function Textbooks() {
+  const confirm = useConfirmation();
   const [textbooks, setTextbooks] = useState([]);
   const [subject, setSubject] = useState("");
   const [className, setClassName] = useState("");
@@ -99,10 +101,11 @@ export default function Textbooks() {
         }
 
         const existingName = detail.existing_filename || file.name;
-        const confirmed = window.confirm(
-          `A book named "${existingName}" already exists in your library. ` +
-            "Is this the same book, and do you still want to upload it again?"
-        );
+        const confirmed = await confirm({
+          title: "Upload duplicate textbook?",
+          description: `A book named "${existingName}" already exists in your library. Is this the same book, and do you still want to upload it again?`,
+          confirmLabel: "Upload anyway",
+        });
         if (!confirmed) {
           toast.message("Duplicate upload cancelled");
           return;
@@ -138,7 +141,12 @@ export default function Textbooks() {
   };
 
   const deleteTextbook = async (id) => {
-    if (!window.confirm("Delete this textbook?")) return;
+    if (!(await confirm({
+      title: "Delete textbook?",
+      description: "This textbook and its extracted content will be removed.",
+      confirmLabel: "Delete textbook",
+      tone: "danger",
+    }))) return;
     await api.delete(`/textbooks/${id}`);
     toast.success("Deleted");
     await load();

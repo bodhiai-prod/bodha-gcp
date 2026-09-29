@@ -56,7 +56,29 @@ export default function SectionBlueprintEditor({ blueprint, bookIds, details, al
       {row && !inheritsSubtopics && <div className="section-topic-controls">
         <label>Difficulty<select aria-label={`Difficulty for ${topic.name} in ${section.id}`} value={row.difficulty || ""} onChange={e => change({ difficulty: e.target.value || null })}><option value="">Default ({labels[difficulty]})</option>{Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
         <label className="diagram-toggle"><input type="checkbox" checked={row.diagrams} onChange={e => change({ diagrams: e.target.checked })} />At least one diagram</label>
-        <label>Questions<input aria-label={`Question count for ${topic.name} in ${section.id}`} type="number" min="1" max={row.count + remaining} value={row.count} onChange={e => change({ count: Number(e.target.value) })} /><small>{row.count * group.marks} marks</small></label>
+        <div className="question-stepper-field">
+          <span>Questions</span>
+          <div className="question-stepper" role="group" aria-label={`Question count for ${topic.name} in ${section.id}`}>
+            <button
+              type="button"
+              aria-label={`Decrease questions for ${topic.name}`}
+              disabled={row.count <= 1}
+              onClick={() => change({ count: row.count - 1 })}
+            >
+              −
+            </button>
+            <output aria-live="polite">{row.count}</output>
+            <button
+              type="button"
+              aria-label={`Increase questions for ${topic.name}`}
+              disabled={remaining <= 0}
+              onClick={() => change({ count: row.count + 1 })}
+            >
+              +
+            </button>
+          </div>
+          <small>{row.count * group.marks} marks</small>
+        </div>
       </div>}
     </div>;
   };

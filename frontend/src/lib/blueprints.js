@@ -1,18 +1,18 @@
 // Preset identities only. The backend catalog owns structure and prompt prose.
 export const BLUEPRINT_PRESETS = [
   {
-    id: "icse10",
-    label: "Use ICSE Class 10 (80m / 2h)",
+    family: "icse10",
+    label: "Use ICSE Class 10",
     testId: "blueprint-preset-icse",
   },
   {
-    id: "cbse10",
-    label: "Use CBSE Class 10 (80m / 3h)",
+    family: "cbse10",
+    label: "Use CBSE Class 10",
     testId: "blueprint-preset-cbse",
   },
   {
-    id: "isc12",
-    label: "Use ISC Class 12 (80m / 3h)",
+    family: "isc12",
+    label: "Use ISC Class 12",
     testId: "blueprint-preset-isc-12",
   },
   {

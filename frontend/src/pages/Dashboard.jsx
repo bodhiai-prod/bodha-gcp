@@ -5,6 +5,7 @@ import Header from "@/components/Header";
 import PaperStatusBadge from "@/components/PaperStatusBadge";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
+import { useConfirmation } from "@/context/ConfirmationContext";
 import {
   Plus,
   FileText,
@@ -26,6 +27,7 @@ const StatCard = ({ label, value, testid }) => (
 );
 
 export default function Dashboard() {
+  const confirm = useConfirmation();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [papers, setPapers] = useState([]);
@@ -53,7 +55,11 @@ export default function Dashboard() {
   }, [papers]);
 
   const bulkGenerateSolutions = async () => {
-    if (!window.confirm("Generate solutions for all papers without one? This may take a while.")) {
+    if (!(await confirm({
+      title: "Generate missing solutions?",
+      description: "Generate solutions for all papers without one? This may take a while.",
+      confirmLabel: "Generate solutions",
+    }))) {
       return;
     }
     setBulkBusy(true);

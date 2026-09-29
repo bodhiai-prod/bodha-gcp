@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import Header from "@/components/Header";
 import PaperSummary from "@/components/PaperSummary";
 import { toast } from "sonner";
+import { useConfirmation } from "@/context/ConfirmationContext";
 import {
   Star,
   ArrowLeft,
@@ -61,6 +62,7 @@ const instructionLines = (instructions = "") =>
     .filter(Boolean);
 
 export default function PaperView() {
+  const confirm = useConfirmation();
   const { id } = useParams();
   const [paper, setPaper] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -667,12 +669,13 @@ export default function PaperView() {
                   : `Generate ${topupValue} more`}
               </button>
               <button
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "Regenerate the whole paper? The questions you already have — and any edits — will be discarded."
-                    )
-                  ) {
+                onClick={async () => {
+                  if (await confirm({
+                    title: "Regenerate the whole paper?",
+                    description: "The questions you already have — and any edits — will be discarded.",
+                    confirmLabel: "Regenerate paper",
+                    tone: "danger",
+                  })) {
                     regenerateAll();
                   }
                 }}

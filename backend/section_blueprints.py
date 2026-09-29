@@ -39,6 +39,24 @@ _PRINTABLE_TEMPLATE_CONTENT = {
 }
 
 
+def _official_printable_content(row: dict) -> dict:
+    """Safe candidate-facing lead-ins for catalog templates added after v1."""
+    if row.get("legacy") or row.get("id") == "cbse12":
+        return {}
+    family = str(row.get("family") or "").upper()
+    instructions = (
+        f"Read the following instructions carefully. This is the {family} "
+        f"{row.get('subject_variant', '')} template for {row.get('academic_session', '')}. "
+        "Follow the section-wise choices and marks printed below."
+    )
+    sections = {}
+    for section in row.get("sections") or []:
+        section_id = section.get("id")
+        title = section.get("title") or f"Section {section_id}"
+        sections[section_id] = f"{title}. Answer only the questions and choices specified for this section."
+    return {"instructions": instructions, "sections": sections}
+
+
 class BlueprintGroup(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     label: str = ""
@@ -77,8 +95,15 @@ class Allocation(BaseModel):
 
 def catalog():
     rows = json.loads(Path(__file__).with_name("blueprint_catalog.json").read_text(encoding="utf-8"))
+    rows.extend(json.loads(Path(__file__).with_name("official_blueprint_catalog.json").read_text(encoding="utf-8")))
     for row in rows:
-        printable = _PRINTABLE_TEMPLATE_CONTENT.get(row.get("id"), {})
+        if row.get("id") in {"icse10", "cbse10", "isc12"}:
+            row.setdefault("legacy", True)
+            row.setdefault("family", row["id"])
+            row.setdefault("subject_variant", "Legacy generic")
+            if row["id"] == "isc12":
+                row.setdefault("disjoint_section_pairs", [["B", "C"]])
+        printable = _PRINTABLE_TEMPLATE_CONTENT.get(row.get("id"), {}) or _official_printable_content(row)
         row["student_instructions"] = printable.get("instructions", "")
         section_instructions = printable.get("sections", {})
         for section in row.get("sections") or []:
@@ -336,11 +361,11 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
     maximum = sum(a["count"] for a in resolved if a["diagrams"])
     if diagram_count is not None and not minimum <= diagram_count <= maximum:
         errors.append(f"Supplied diagrams must be between {minimum} and {maximum} for these assignments.")
-    # These optional streams are explicitly disjoint in the existing ISC prose.
-    if bp.get("id") == "isc12":
-        identities = lambda sid: {(a["textbook_id"], a["parent_topic"] or a["name"]) for a in resolved if a["section_id"] == sid}
-        if identities("B") & identities("C"):
-            errors.append("ISC optional Sections B and C require disjoint chapters.")
+    for first, second in bp.get("disjoint_section_pairs") or []:
+        identities = lambda sid: {(a["textbook_id"], a["parent_topic"] or a["name"])
+                                  for a in resolved if a["section_id"] == sid}
+        if identities(first) & identities(second):
+            errors.append(f"Optional Sections {first} and {second} require disjoint chapters.")
     spec = {"compiled": True, "blueprint": deepcopy(bp), "section_allocations": resolved,
             "total_questions": sum(g["count"] for g in groups.values()),
             "total_marks": sum(g["count"] * g["marks"] for g in groups.values()),

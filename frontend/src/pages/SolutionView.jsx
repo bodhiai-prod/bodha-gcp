@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
 import { toast } from "sonner";
+import { useConfirmation } from "@/context/ConfirmationContext";
 import {
   ArrowLeft,
   Download,
@@ -35,6 +36,7 @@ const typeBadge = (t) => {
 };
 
 export default function SolutionView() {
+  const confirm = useConfirmation();
   const { id } = useParams();
   const [paper, setPaper] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -68,7 +70,12 @@ export default function SolutionView() {
     if (
       paper?.solution &&
       paper.solution.status !== "generating" &&
-      !window.confirm("Regenerate solution? Your current edits will be overwritten.")
+      !(await confirm({
+        title: "Regenerate solution?",
+        description: "Your current edits will be overwritten.",
+        confirmLabel: "Regenerate solution",
+        tone: "danger",
+      }))
     ) {
       return;
     }
@@ -172,7 +179,7 @@ export default function SolutionView() {
 
   // Saved via the browser's print engine rather than the backend renderer, so
   // the PDF keeps the fonts and KaTeX math shown on screen.
-  const download = () => {
+  const download = async () => {
     if (!diagramsReady()) {
       toast.error("Diagrams are still loading — try again in a moment");
       return;
@@ -180,7 +187,11 @@ export default function SolutionView() {
     const answeredIds = new Set((paper.solution?.sections || []).flatMap(section => (section.answers || []).filter(answer => answer.answer).map(answer => answer.question_id)));
     const unanswered = (paper.sections || []).flatMap(section => section.questions || []).filter(question => question.question && !answeredIds.has(question.id)).length;
     const generating = paper.solution?.status === "generating";
-    if ((generating || unanswered > 0) && !window.confirm(`${generating ? "Answer-key generation is still in progress" : `${unanswered} answer${unanswered === 1 ? " is" : "s are"} still missing`}. Download the incomplete answer key anyway? Selecting Cancel keeps generation running.`)) return;
+    if ((generating || unanswered > 0) && !(await confirm({
+      title: "Download incomplete answer key?",
+      description: `${generating ? "Answer-key generation is still in progress" : `${unanswered} answer${unanswered === 1 ? " is" : "s are"} still missing`}. Download the incomplete answer key anyway? Selecting Cancel keeps generation running.`,
+      confirmLabel: "Download anyway",
+    }))) return;
     printDocument(`${paper.title} - Solution`);
   };
 
@@ -188,7 +199,11 @@ export default function SolutionView() {
     const answeredIds = new Set((paper.solution?.sections || []).flatMap(section => (section.answers || []).filter(answer => answer.answer).map(answer => answer.question_id)));
     const unanswered = (paper.sections || []).flatMap(section => section.questions || []).filter(question => question.question && !answeredIds.has(question.id)).length;
     const generating = paper.solution?.status === "generating";
-    if ((generating || unanswered > 0) && !window.confirm(`${generating ? "Answer-key generation is still in progress" : `${unanswered} answer${unanswered === 1 ? " is" : "s are"} still missing`}. Download the incomplete answer key anyway?`)) return;
+    if ((generating || unanswered > 0) && !(await confirm({
+      title: "Download incomplete answer key?",
+      description: `${generating ? "Answer-key generation is still in progress" : `${unanswered} answer${unanswered === 1 ? " is" : "s are"} still missing`}. Download the incomplete answer key anyway?`,
+      confirmLabel: "Download anyway",
+    }))) return;
     setDocxDownloading(true);
     try {
       const { data } = await api.get(`/papers/${id}/solution/docx`, { responseType: "blob" });

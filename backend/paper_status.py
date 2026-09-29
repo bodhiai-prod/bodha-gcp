@@ -20,7 +20,7 @@ def _status(key, label, active=False, progress=None):
     return result
 
 
-def library_status_for_paper(paper):
+def library_status_for_paper(paper, needs_review=False):
     """Return the single lifecycle state to show in a paper-library row.
 
     Initial generation is always authoritative.  After that finishes, active
@@ -57,13 +57,10 @@ def library_status_for_paper(paper):
     if any((paper.get(job_name) or {}).get("status") == "failed" for job_name in ("topup", "regen")):
         return _status("update_failed", "Update failed")
 
-    if recovery_status == "needs_review" or (
-        recovery_status == "queued" and recovery_reason == "validation"
-    ):
-        return _status("needs_review", "Needs review")
-
-    instruction_check = paper.get("instruction_check") or {}
-    if instruction_check.get("honoured") is False or instruction_check.get("misses"):
+    # This must be supplied from a fresh validation of the paper's current
+    # sections. `instruction_check` is intentionally not consulted here: it
+    # is a historical audit snapshot and can be stale after recovery or edits.
+    if needs_review:
         return _status("needs_review", "Needs review")
 
     return _status("ready", "Ready")

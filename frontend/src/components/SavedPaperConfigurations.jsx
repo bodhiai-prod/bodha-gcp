@@ -2,11 +2,13 @@ import React, { useEffect, useState } from "react";
 import { Check, FloppyDisk, PencilSimple, Trash, X } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
+import { useConfirmation } from "@/context/ConfirmationContext";
 
 const describe = (config) =>
   `${config.total_marks} marks · ${config.duration_minutes} min · ${config.difficulty}`;
 
 export default function SavedPaperConfigurations({ currentConfiguration, onApply }) {
+  const confirm = useConfirmation();
   const [configurations, setConfigurations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -49,7 +51,12 @@ export default function SavedPaperConfigurations({ currentConfiguration, onApply
   };
 
   const remove = async (config) => {
-    if (!window.confirm(`Delete "${config.name}"?`)) return;
+    if (!(await confirm({
+      title: "Delete saved configuration?",
+      description: `Delete "${config.name}"?`,
+      confirmLabel: "Delete configuration",
+      tone: "danger",
+    }))) return;
     try {
       await api.delete(`/paper-configurations/${config.id}`);
       setConfigurations((current) => current.filter((item) => item.id !== config.id));

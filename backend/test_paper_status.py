@@ -34,14 +34,16 @@ class PaperLibraryStatusTests(unittest.TestCase):
             with self.subTest(paper=paper):
                 self.assertEqual(library_status_for_paper(paper)["key"], "updating")
 
-    def test_validation_signals_need_review(self):
-        for paper in (
-            {"generation_recovery": {"status": "queued", "reason": "validation"}},
-            {"generation_recovery": {"status": "needs_review", "reason": "allocation_metadata"}},
-            {"instruction_check": {"honoured": False, "misses": ["wrong count"]}},
-        ):
-            with self.subTest(paper=paper):
-                self.assertEqual(library_status_for_paper(paper)["key"], "needs_review")
+    def test_review_state_comes_from_current_validation(self):
+        stale_paper = {
+            "generation_recovery": {"status": "queued", "reason": "validation"},
+            "instruction_check": {"honoured": False, "misses": ["wrong count"]},
+        }
+        self.assertEqual(library_status_for_paper(stale_paper)["key"], "ready")
+        self.assertEqual(
+            library_status_for_paper(stale_paper, needs_review=True)["key"],
+            "needs_review",
+        )
 
     def test_terminal_and_ready_states(self):
         cases = (

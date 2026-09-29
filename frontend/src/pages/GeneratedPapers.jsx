@@ -11,8 +11,10 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
+import { useConfirmation } from "@/context/ConfirmationContext";
 
 export default function GeneratedPapers() {
+  const confirm = useConfirmation();
   const [papers, setPapers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
@@ -52,7 +54,12 @@ export default function GeneratedPapers() {
   }, [papers, q, subjectFilter]);
 
   const deletePaper = async (paper) => {
-    if (!window.confirm(`Delete "${paper.title || "this paper"}"? This cannot be undone.`)) {
+    if (!(await confirm({
+      title: "Delete paper?",
+      description: `Delete "${paper.title || "this paper"}"? This cannot be undone.`,
+      confirmLabel: "Delete paper",
+      tone: "danger",
+    }))) {
       return;
     }
     try {

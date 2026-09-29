@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
 import { toast } from "sonner";
+import { useConfirmation } from "@/context/ConfirmationContext";
 import {
   ArrowLeft,
   UploadSimple,
@@ -22,6 +23,7 @@ const STATUS_PILL = {
 };
 
 export default function CompetitiveExamDetail() {
+  const confirm = useConfirmation();
   const { id } = useParams();
   const navigate = useNavigate();
   const [exam, setExam] = useState(null);
@@ -96,7 +98,12 @@ export default function CompetitiveExamDetail() {
   };
 
   const deletePastPaper = async (paperId) => {
-    if (!window.confirm("Remove this past paper and its indexed questions?")) return;
+    if (!(await confirm({
+      title: "Remove past paper?",
+      description: "This past paper and its indexed questions will be permanently removed.",
+      confirmLabel: "Remove paper",
+      tone: "danger",
+    }))) return;
     try {
       await api.delete(`/competitive-exams/${id}/papers/${paperId}`);
       toast.success("Removed");

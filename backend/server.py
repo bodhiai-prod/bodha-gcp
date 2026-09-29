@@ -1922,18 +1922,54 @@ async def get_paper_header_image(paper_id: str, user: dict = Depends(get_current
     return Response(content=data, media_type=content_type, headers={"Cache-Control": "private, max-age=300"})
 
 
+def _current_paper_validation(paper: dict) -> tuple[dict, dict, dict | None]:
+    """Calculate review state from the paper's current questions.
+
+    The detail view and library both use this helper so a historical
+    `instruction_check` can never leave a correct paper stuck in review.
+    """
+    summary = paper_summary(paper)
+    checks = verify(paper.get("sections") or [], paper.get("generation_requirements") or {})
+    review_status = None
+    if not (paper.get("generation_requirements") or {}).get("section_allocations"):
+        plan = paper.get("normal_generation_plan")
+        review_status = (
+            normal_review_status(validate_normal_plan(paper.get("sections") or [], plan))
+            if plan else review_status_from_misses(checks.get("misses") or [])
+        )
+        checks["misses"] = [] if review_status["status"] == "ready" else [review_status["summary"]]
+        checks["honoured"] = review_status["status"] == "ready"
+
+    summary["mismatches"] = compact_validation_misses(list(dict.fromkeys(
+        summary["mismatches"] + checks.get("misses", [])
+    )))
+    if summary["mismatches"]:
+        summary["status"] = "Needs review"
+    summary["review_status"] = (paper.get("generation_recovery") or {}).get("status") or (
+        (review_status or {}).get("status") or ("needs_review" if summary["mismatches"] else "ready")
+    )
+    return summary, checks, review_status
+
+
 @api_router.get("/papers")
 async def list_papers(user: dict = Depends(get_current_user)):
     items = (
         await db.papers.find(
             {"owner_id": user["id"], "is_deleted": False},
-            {"_id": 0, "sections": 0},
+            {"_id": 0},
         )
         .sort("created_at", -1)
         .to_list(200)
     )
     for paper in items:
-        paper["library_status"] = library_status_for_paper(paper)
+        summary, checks, _ = _current_paper_validation(paper)
+        paper["instruction_check"] = checks
+        paper["library_status"] = library_status_for_paper(
+            paper, needs_review=bool(summary["mismatches"])
+        )
+        # Sections are required only to calculate the current status; preserve
+        # the list endpoint's compact response shape.
+        paper.pop("sections", None)
     return items
 
 
@@ -1996,28 +2032,9 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
     textbook_names = {row["id"]: row.get("original_filename") or row["id"] for row in textbook_rows}
     # Preserve the paper's original ingestion order rather than database order.
     p["source_textbooks"] = [textbook_names[textbook_id] for textbook_id in textbook_ids if textbook_id in textbook_names]
-    p["summary"] = paper_summary(p)
-    checks = verify(p.get("sections") or [], p.get("generation_requirements") or {})
-    if not (p.get("generation_requirements") or {}).get("section_allocations"):
-        plan = p.get("normal_generation_plan")
-        status = (
-            normal_review_status(validate_normal_plan(p.get("sections") or [], plan))
-            if plan else review_status_from_misses(checks.get("misses") or [])
-        )
-        p["review_status"] = status
-        checks["misses"] = [] if status["status"] == "ready" else [status["summary"]]
-        checks["honoured"] = status["status"] == "ready"
-    # Always respond with validation computed from the current normalized
-    # content, so a stale historical check cannot reintroduce a false banner.
-    p["instruction_check"] = checks
-    p["summary"]["mismatches"] = compact_validation_misses(list(dict.fromkeys(
-        p["summary"]["mismatches"] + checks.get("misses", [])
-    )))
-    if p["summary"]["mismatches"]:
-        p["summary"]["status"] = "Needs review"
-    p["summary"]["review_status"] = (p.get("generation_recovery") or {}).get("status") or (
-        p.get("review_status", {}).get("status") or ("needs_review" if p["summary"]["mismatches"] else "ready")
-    )
+    p["summary"], p["instruction_check"], review_status = _current_paper_validation(p)
+    if review_status is not None:
+        p["review_status"] = review_status
     return p
 
 

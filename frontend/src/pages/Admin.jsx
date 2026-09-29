@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
 import { toast } from "sonner";
+import { useConfirmation } from "@/context/ConfirmationContext";
 import {
   Users,
   Books,
@@ -31,6 +32,7 @@ const TABS = [
 ];
 
 export default function Admin() {
+  const confirm = useConfirmation();
   const [tab, setTab] = useState("library");
   const [overview, setOverview] = useState(null);
   const [textbooks, setTextbooks] = useState([]);
@@ -144,11 +146,12 @@ export default function Admin() {
   };
 
   const removeTextbook = async (tb) => {
-    if (
-      !window.confirm(
-        `Delete "${tb.original_filename}" (owned by ${tb.owner_email})?`
-      )
-    )
+    if (!(await confirm({
+      title: "Delete textbook?",
+      description: `Delete "${tb.original_filename}" (owned by ${tb.owner_email})?`,
+      confirmLabel: "Delete textbook",
+      tone: "danger",
+    })))
       return;
     try {
       await api.delete(`/textbooks/${tb.id}`);

@@ -60,6 +60,7 @@ export default function NewPaper() {
   const [brandingPresets, setBrandingPresets] = useState([]);
   const [brandingId, setBrandingId] = useState("");
   const [blueprint, setBlueprint] = useState(null);
+  const [blueprintFamily, setBlueprintFamily] = useState(null);
   const [allocations, setAllocations] = useState([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [step, setStep] = useState(0);
@@ -351,19 +352,35 @@ export default function NewPaper() {
     }
   };
 
-  // Preset buttons drop a board blueprint into the textarea, with {SUBJECT}
-  // resolved from the same "first selected textbook" the generate call uses.
+  // Preset buttons either apply the unchanged direct template or open a
+  // subject-aware official-variant picker.
   const adoptBlueprint = next => {
     setAllocations(curr => retainCompatibleAllocations(curr, blueprint, next, selectedTbIds));
     setBlueprint(next);
     setTotalMarks(next.total_marks);
     setDuration(next.duration_minutes);
   };
-  const applyPreset = preset => {
-    const next = blueprintCatalog.find(bp => bp.id === preset.id);
+  const selectedSubjects = selectedTbIds.map((id) => (
+    tbDetails[id]?.subject || textbooks.find((book) => book.id === id)?.subject || ""
+  )).filter(Boolean);
+  const subjectMatchesVariant = (next) => {
+    const aliases = (next.subject_aliases || []).map((value) => String(value).trim().toLowerCase());
+    if (!aliases.length) return true;
+    return selectedSubjects.some((subject) => aliases.includes(String(subject).trim().toLowerCase()));
+  };
+  const applyBlueprint = next => {
     if (!next) return toast.error("Board catalog unavailable. Reload to retry.");
+    if (!selectedTbIds.length) return toast.error("Select a matching textbook before applying an official template.");
+    if (!next.legacy && !subjectMatchesVariant(next)) {
+      return toast.error(`Select a ${next.subject_variant} textbook before applying this template.`);
+    }
     adoptBlueprint(next);
-    setSectionBlueprint(fillBlueprint(next.template, { subject: tbDetails[selectedTbIds[0]]?.subject }));
+    setSectionBlueprint(fillBlueprint(next.template, { subject: selectedSubjects[0] }));
+    setBlueprintFamily(null);
+  };
+  const applyPreset = preset => {
+    if (preset.family) return setBlueprintFamily(preset.family);
+    applyBlueprint(blueprintCatalog.find(bp => bp.id === preset.id));
   };
   const editBlueprint = text => {
     setSectionBlueprint(text);
@@ -793,6 +810,18 @@ export default function NewPaper() {
                   </button>
                 )}
               </div>
+              {blueprintFamily && (() => {
+                const current = blueprintCatalog.filter((item) => item.family === blueprintFamily && !item.legacy);
+                const legacy = blueprintCatalog.filter((item) => item.family === blueprintFamily && item.legacy);
+                const familyLabel = BLUEPRINT_PRESETS.find((item) => item.family === blueprintFamily)?.label || "Board template";
+                return <div className="border border-neutral-300 bg-white p-3 mb-3" data-testid="blueprint-variant-picker">
+                  <div className="flex items-center justify-between gap-3 mb-2"><div><strong className="text-sm">Choose {familyLabel} subject</strong><p className="text-xs text-neutral-500">Official current STEM patterns</p></div><button type="button" className="text-xs underline" onClick={() => setBlueprintFamily(null)}>Close</button></div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {current.map((item) => <button key={item.id} type="button" onClick={() => applyBlueprint(item)} className="border border-neutral-300 p-2 text-left hover:border-blue-700" data-testid={`blueprint-variant-${item.id}`}><strong className="block text-xs">{item.subject_variant}</strong><span className="block text-xs text-neutral-600">{item.total_marks} marks · {item.duration_minutes / 60}h · {item.academic_session}</span><span className="block text-[10px] text-blue-700 mt-1">Official current format</span></button>)}
+                  </div>
+                  {legacy.length > 0 && <details className="mt-3 text-xs"><summary className="cursor-pointer font-semibold">Legacy templates</summary><div className="grid gap-2 sm:grid-cols-2 mt-2">{legacy.map((item) => <button key={item.id} type="button" onClick={() => applyBlueprint(item)} className="border border-amber-300 bg-amber-50 p-2 text-left"><strong>{item.subject_variant}</strong><span className="block text-neutral-600">Previous generic format · validation status shown before generation</span></button>)}</div></details>}
+                </div>;
+              })()}
               <textarea
                 value={sectionBlueprint}
                 onChange={(e) => editBlueprint(e.target.value)}

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 from section_blueprints import (Allocation, catalog, blueprint_errors, compile_allocations,
     topic_catalog, allocation_misses, paper_summary, apply_allocation_overrides,
-    derived_internal_choice_count, normalize_internal_choice_counts)
+    derived_internal_choice_count, normalize_internal_choice_counts, section_marks)
 from generation_requirements import remaining_requirements
 from textbook_topics import merge_topic_batches, topic_context
 from prompts import qgen_prompt
@@ -38,6 +38,56 @@ class BlueprintTests(unittest.TestCase):
         for key in ("icse10", "isc12", "cbse12"):
             self.assertEqual(blueprint_errors(presets[key]), [], key)
         self.assertIn("79", " ".join(blueprint_errors(presets["cbse10"])))
+
+    def test_current_official_variants_have_metadata_and_valid_contracts(self):
+        presets = {b["id"]: b for b in catalog()}
+        expected = {
+            "cbse10-mathematics-standard", "cbse10-mathematics-basic", "cbse10-science",
+            "icse10-physics", "icse10-chemistry", "icse10-biology", "icse10-mathematics",
+            "isc12-physics", "isc12-chemistry", "isc12-biology", "isc12-mathematics",
+        }
+        self.assertTrue(expected <= set(presets))
+        for key in expected:
+            preset = presets[key]
+            self.assertFalse(preset["legacy"])
+            self.assertTrue(preset["official_source"])
+            self.assertTrue(preset["academic_session"])
+            self.assertEqual(blueprint_errors(preset), [], key)
+            self.assertTrue(any(phrase in preset["template"].lower() for phrase in (
+                "candidate-facing", "never turn", "directions belong under headings",
+                "never put", "never inside", "never in the", "never as question"
+            )))
+
+        cbse_math = presets["cbse10-mathematics-standard"]
+        self.assertEqual(sum(group["count"] for section in cbse_math["sections"] for group in section["groups"]), 38)
+        self.assertEqual([section_marks(section) for section in cbse_math["sections"]], [20, 10, 18, 20, 12])
+        self.assertEqual(presets["isc12-physics"]["total_marks"], 70)
+        self.assertEqual(presets["isc12-chemistry"]["total_marks"], 70)
+        self.assertEqual(presets["isc12-biology"]["total_marks"], 70)
+        self.assertEqual(sum(group["count"] for section in presets["cbse10-science"]["sections"] for group in section["groups"]), 39)
+        self.assertEqual(sum(group["count"] for section in presets["isc12-biology"]["sections"] for group in section["groups"]), 18)
+        self.assertEqual(presets["isc12-mathematics"]["disjoint_section_pairs"], [["B", "C"]])
+
+    def test_declarative_disjoint_sections_replace_template_id_special_case(self):
+        book, *_ = fixture()
+        topic = topic_catalog(book)[1]
+        bp = {
+            "id": "custom-streams", "version": 1, "label": "Streams", "total_marks": 2,
+            "duration_minutes": 30, "disjoint_section_pairs": [["B", "C"]],
+            "sections": [
+                {"id": "B", "title": "Section B", "choice_set": "stream", "groups": [{"id": "main", "count": 1, "marks": 2, "format": "short_answer"}]},
+                {"id": "C", "title": "Section C", "choice_set": "stream", "groups": [{"id": "main", "count": 1, "marks": 2, "format": "short_answer"}]},
+            ],
+        }
+        rows = [
+            Allocation(section_id=sid, group_id="main", textbook_id=book["id"], topic_id=topic["topic_id"], count=1)
+            for sid in ("B", "C")
+        ]
+        _, errors = compile_allocations(bp, rows, [book], "medium", 2)
+        self.assertTrue(any("Optional Sections B and C" in error for error in errors))
+        bp.pop("disjoint_section_pairs")
+        _, errors = compile_allocations(bp, rows, [book], "medium", 2)
+        self.assertFalse(errors)
 
     def test_topic_identity_includes_book_and_parent(self):
         book, *_ = fixture()
