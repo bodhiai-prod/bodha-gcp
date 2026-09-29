@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import uuid
 from dataclasses import dataclass
 from functools import cmp_to_key
@@ -24,6 +25,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 
 _MISSING = object()
+logger = logging.getLogger("bodhiai.firestore")
 
 
 def _encode_generation_requirements(document: dict[str, Any]) -> dict[str, Any]:
@@ -323,31 +325,34 @@ class FirestoreCollection:
         for snapshot, _document in matches:
             transaction = self._client.transaction()
             try:
-                # Read through the document reference rather than
-                # ``AsyncTransaction.get``.  The latter has returned
-                # incompatible coroutine / iterator shapes across Firestore
-                # client releases.  ``AsyncDocumentReference.get`` has the
-                # stable, documented single-snapshot result and still records
-                # the read on this transaction.
-                fresh = await snapshot.reference.get(transaction=transaction)
-                if fresh is None:
-                    continue
-                current = _decode_generation_requirements(fresh.to_dict() or {}) if fresh.exists else None
-                if not current or not _matches(current, query):
-                    continue
-                updated = copy.deepcopy(current)
-                for path, value in fields.items():
-                    _set(updated, path, value)
-                transaction.set(snapshot.reference, _encode_generation_requirements(updated))
-                await transaction.commit()
-                return updated
-            except Exception:
-                # A concurrent winner invalidates this candidate.  The next
-                # polling pass (or candidate) safely retries it.
-                try:
-                    await transaction.rollback()
-                except Exception:
-                    pass
+                # ``AsyncDocumentReference.get(transaction=...)`` only joins
+                # an *already begun* transaction.  Starting a transaction by
+                # hand is easy to get wrong and used to make every paper-job
+                # lease fail without surfacing an error.  The official wrapper
+                # begins, commits, and retries the optimistic transaction.
+                @firestore.async_transactional
+                async def claim_in_transaction(txn: Any) -> dict[str, Any] | None:
+                    fresh = await snapshot.reference.get(transaction=txn)
+                    current = (
+                        _decode_generation_requirements(fresh.to_dict() or {})
+                        if fresh.exists else None
+                    )
+                    if not current or not _matches(current, query):
+                        return None
+                    updated = copy.deepcopy(current)
+                    for path, value in fields.items():
+                        _set(updated, path, value)
+                    txn.set(snapshot.reference, _encode_generation_requirements(updated))
+                    return updated
+
+                claimed = await claim_in_transaction(transaction)
+                if claimed is not None:
+                    return claimed
+            except Exception as exc:
+                # A concurrent winner is expected occasionally, but logging
+                # the actual failure keeps a misconfigured Firestore client
+                # from looking like an idle queue.
+                logger.warning("Firestore claim failed for %s: %s", self._name, exc)
                 continue
         return None
 

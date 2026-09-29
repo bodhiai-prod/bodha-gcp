@@ -1,4 +1,8 @@
+import asyncio
+
+import firestore_compat
 from firestore_compat import (
+    FirestoreCollection,
     _decode_generation_requirements,
     _encode_generation_requirements,
     _get,
@@ -63,3 +67,58 @@ def test_generation_requirements_are_firestore_safe_and_round_trip():
         "q1-ii": {"id": "q1-ii", "marks": 1},
     }
     assert _decode_generation_requirements(encoded) == document
+
+
+def test_claim_one_uses_a_begun_transaction_for_its_read(monkeypatch):
+    """A queued paper must be leased through Firestore's transaction wrapper.
+
+    Passing an unstarted ``AsyncTransaction`` directly to document.get makes
+    Firestore reject the read at runtime, leaving the worker quietly idle.
+    """
+    document = {"id": "job-1", "kind": "paper_generation", "status": "queued"}
+
+    class Reference:
+        def __init__(self):
+            self.read_transaction = None
+
+        async def get(self, *, transaction):
+            self.read_transaction = transaction
+            assert transaction.begun
+            return type("Snapshot", (), {"exists": True, "to_dict": lambda self: document})()
+
+    class Transaction:
+        def __init__(self):
+            self.begun = False
+            self.writes = []
+
+        def set(self, reference, value):
+            self.writes.append((reference, value))
+
+    transaction = Transaction()
+    reference = Reference()
+    snapshot = type("Candidate", (), {"reference": reference})()
+    collection = object.__new__(FirestoreCollection)
+    collection._name = "paper_review_jobs"
+    collection._client = type("Client", (), {"transaction": lambda self: transaction})()
+
+    async def matching(_query):
+        return [(snapshot, document)]
+
+    collection._matching_snapshots = matching
+
+    def transactional(func):
+        async def invoke(txn):
+            txn.begun = True
+            return await func(txn)
+        return invoke
+
+    monkeypatch.setattr(firestore_compat.firestore, "async_transactional", transactional)
+
+    claimed = asyncio.run(collection.claim_one(
+        {"status": "queued"}, {"status": "leased", "worker_id": "worker-1"}
+    ))
+
+    assert claimed["status"] == "leased"
+    assert claimed["worker_id"] == "worker-1"
+    assert reference.read_transaction is transaction
+    assert transaction.writes[0][1]["status"] == "leased"
