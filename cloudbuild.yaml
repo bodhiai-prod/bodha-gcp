@@ -24,6 +24,17 @@ steps:
     args: ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/backend:$BUILD_ID"]
   - name: gcr.io/cloud-builders/docker
     args: ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/frontend:$BUILD_ID"]
+  # `gcloud compute scp` registers an ephemeral OS Login key for this build
+  # service account.  Remove keys from previous builds first; otherwise the
+  # 32 KiB OS Login profile limit eventually blocks every deployment.
+  - name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud compute os-login ssh-keys list --format='value(fingerprint)' | while read -r key; do
+          [ -z "$key" ] || gcloud compute os-login ssh-keys remove --key="$key" --quiet
+        done
   - name: gcr.io/cloud-builders/gcloud
     entrypoint: gcloud
     args:
