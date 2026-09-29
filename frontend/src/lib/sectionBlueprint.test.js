@@ -39,3 +39,15 @@ test("contiguous compatible slots become one picker and legacy slot rows collaps
     section_id: "A", group_id: "questions", slot_id: null, bucket_id: "questions:q20", ...topic, count: 2, difficulty: null, diagrams: false,
   }]);
 });
+test("legacy parent-question allocations spread across compatible buckets", () => {
+  const slots = [
+    { id: "q1-i", parent_id: "q1", parent_label: "Question 1", marks: 1, format: "mcq" },
+    { id: "q1-ii", parent_id: "q1", parent_label: "Question 1", marks: 1, format: "mcq" },
+    { id: "q1-iii", parent_id: "q1", parent_label: "Question 1", marks: 2, format: "short_answer" },
+  ];
+  const blueprint = { sections: [{ id: "A", groups: [{ id: "q1", count: 1, marks: 1, format: "mcq", slots }] }] };
+  const rows = [{ section_id: "A", group_id: "q1", slot_id: "q1", ...topic, count: 3, difficulty: null, diagrams: false }];
+  expect(normalizeBucketAllocations(rows, blueprint).map(row => [row.bucket_id, row.count])).toEqual([
+    ["q1:q1-i", 2], ["q1:q1-iii", 1],
+  ]);
+});

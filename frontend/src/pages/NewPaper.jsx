@@ -9,7 +9,7 @@ import Header from "@/components/Header";
 import SectionBlueprintEditor from "@/components/SectionBlueprintEditor";
 import ConfigurationSummary from "@/components/ConfigurationSummary";
 import SavedPaperConfigurations from "@/components/SavedPaperConfigurations";
-import { retainCompatibleAllocations } from "@/lib/sectionBlueprint";
+import { normalizeBucketAllocations, retainCompatibleAllocations } from "@/lib/sectionBlueprint";
 import useConfigurationPreview from "@/hooks/useConfigurationPreview";
 import { toast } from "sonner";
 import {
@@ -89,6 +89,13 @@ export default function NewPaper() {
     () => formats.some((f) => Number(f.value || 0) > 0),
     [formats]
   );
+  // Saved configurations may still carry one row per old question slot.
+  // Normalize at the form boundary as well as inside the editor so previews
+  // and generation can never send that stale shape to the backend.
+  const blueprintAllocations = useMemo(
+    () => blueprint ? normalizeBucketAllocations(allocations, blueprint) : allocations,
+    [allocations, blueprint]
+  );
 
   const currentConfiguration = useMemo(() => ({
     difficulty,
@@ -102,10 +109,10 @@ export default function NewPaper() {
     section_blueprint: sectionBlueprint.trim() || null,
     blueprint_id: blueprint?.id || null,
     blueprint_version: blueprint?.version || null,
-    section_topic_allocations: blueprint ? allocations : null,
+    section_topic_allocations: blueprint ? blueprintAllocations : null,
     textbook_ids: selectedTbIds,
     topics: selectedTopics.map(({ key, ...topic }) => ({ ...topic, difficulty: topicDifficulties[key] || null })),
-  }), [difficulty, duration, totalMarks, effectiveQuestionCount, diagramCount, info, concept, application, formatMode, formats, customInstructions, sectionBlueprint, blueprint, allocations, selectedTbIds, selectedTopics, topicDifficulties]);
+  }), [difficulty, duration, totalMarks, effectiveQuestionCount, diagramCount, info, concept, application, formatMode, formats, customInstructions, sectionBlueprint, blueprint, blueprintAllocations, selectedTbIds, selectedTopics, topicDifficulties]);
 
   const applySavedConfiguration = (config) => {
     const available = new Set(textbooks.map((book) => book.id));
@@ -340,7 +347,7 @@ export default function NewPaper() {
         section_blueprint: sectionBlueprint.trim() || null,
         blueprint_id: blueprint?.id || null,
         blueprint_version: blueprint?.version || null,
-        section_topic_allocations: blueprint ? allocations : null,
+        section_topic_allocations: blueprint ? blueprintAllocations : null,
         branding_id: brandingId || null,
       });
       toast.success("Generation started — opening paper…");
@@ -431,7 +438,7 @@ export default function NewPaper() {
     format_distribution: !promptOverride && formatMode === "percentages" ? Object.fromEntries(formats.filter(f => f.value > 0).map(f => [f.key, f.value])) : null,
     custom_instructions: customInstructions.trim() || null, section_blueprint: sectionBlueprint.trim() || null,
     blueprint_id: blueprint?.id || null, blueprint_version: blueprint?.version || null,
-    section_topic_allocations: blueprint ? allocations : null,
+    section_topic_allocations: blueprint ? blueprintAllocations : null,
     branding_id: brandingId || null,
   });
   const { preview, loading: previewLoading, error: previewError } = useConfigurationPreview(requestKey);
@@ -441,7 +448,7 @@ export default function NewPaper() {
   );
   const topicOverview = useMemo(() => {
     if (blueprint) {
-      return allocations.reduce((rows, allocation) => {
+      return blueprintAllocations.reduce((rows, allocation) => {
         const topic = tbDetails[allocation.textbook_id]?.topic_catalog?.find(item => item.topic_id === allocation.topic_id);
         const label = topic?.parent_topic ? `${topic.parent_topic} › ${topic.name}` : topic?.name || allocation.topic_id;
         rows[label] = (rows[label] || 0) + allocation.count;
@@ -453,11 +460,11 @@ export default function NewPaper() {
       rows[label] = (rows[label] || 0) + 1;
       return rows;
     }, {});
-  }, [allocations, blueprint, selectedTopics, tbDetails]);
+  }, [blueprintAllocations, blueprint, selectedTopics, tbDetails]);
   const sectionTopicOverview = useMemo(() => {
     if (!blueprint) return [];
     return blueprint.sections.map(section => {
-      const topics = allocations.filter(allocation => allocation.section_id === section.id).reduce((rows, allocation) => {
+      const topics = blueprintAllocations.filter(allocation => allocation.section_id === section.id).reduce((rows, allocation) => {
         const topic = tbDetails[allocation.textbook_id]?.topic_catalog?.find(item => item.topic_id === allocation.topic_id);
         const label = topic?.parent_topic ? `${topic.parent_topic} › ${topic.name}` : topic?.name || allocation.topic_id;
         rows[label] = (rows[label] || 0) + allocation.count;
@@ -471,7 +478,7 @@ export default function NewPaper() {
         topics: Object.entries(topics),
       };
     });
-  }, [allocations, blueprint, tbDetails]);
+  }, [blueprintAllocations, blueprint, tbDetails]);
 
   return (
     <div className="min-h-screen bg-[#FAFAFA]">
@@ -841,7 +848,7 @@ Section B (40 marks) - Attempt any FOUR of the following SIX questions
             </ExpandableCard>
 
             {sectionBlueprint.trim() && !blueprint && <button type="button" onClick={analyzeBlueprint} disabled={analyzing} className="qp-btn qp-btn-secondary" data-testid="analyze-blueprint">{analyzing ? "Analyzing blueprint…" : "Analyze blueprint"}</button>}
-            <SectionBlueprintEditor blueprint={blueprint} bookIds={selectedTbIds} details={tbDetails} allocations={allocations} onChange={setAllocations} difficulty={difficulty} onExtract={extractTopicsFor} />
+            <SectionBlueprintEditor blueprint={blueprint} bookIds={selectedTbIds} details={tbDetails} allocations={blueprintAllocations} onChange={setAllocations} difficulty={difficulty} onExtract={extractTopicsFor} />
             <ExpandableCard id="custom-instructions" title="Additional instructions" summary={customInstructions.trim() ? customInstructions.trim() : "Optional · Refine how questions are generated"}>
               <p className="text-xs text-neutral-500 font-mono mb-3">
                 Optional. Your form settings already define the paper. Add only

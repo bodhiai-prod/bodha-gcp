@@ -37,33 +37,55 @@ export function allocationBuckets(group) {
 
 export function normalizeBucketAllocations(rows, blueprint) {
   const slotBuckets = new Map();
+  const parentBuckets = new Map();
   const groupBuckets = new Map();
   (blueprint?.sections || []).forEach(section => section.groups.forEach(group => {
     const buckets = allocationBuckets(group);
     groupBuckets.set(`${section.id}:${group.id}`, buckets);
     buckets.forEach(bucket => bucket.slots.forEach(slot => {
       slotBuckets.set(`${section.id}:${group.id}:${slot.id}`, bucket.id);
+      const key = `${section.id}:${group.id}:${slot.parent_id}`;
+      parentBuckets.set(key, [...new Set([...(parentBuckets.get(key) || []), bucket.id])]);
     }));
   }));
   const merged = new Map();
+  const assigned = new Map();
+  const add = (row, bucketId, count) => {
+    const key = JSON.stringify([row.section_id, row.group_id, bucketId, row.textbook_id, row.topic_id, row.difficulty || null, Boolean(row.diagrams)]);
+    const previous = merged.get(key);
+    merged.set(key, { ...row, slot_id: null, bucket_id: bucketId, count: (previous?.count || 0) + count });
+    const target = `${row.section_id}:${row.group_id}:${bucketId}`;
+    assigned.set(target, (assigned.get(target) || 0) + count);
+  };
   rows.forEach(row => {
     const groupKey = `${row.section_id}:${row.group_id}`;
-    const bucketId = row.bucket_id || slotBuckets.get(`${groupKey}:${row.slot_id}`)
-      || (groupBuckets.get(groupKey)?.length === 1 ? groupBuckets.get(groupKey)[0].id : null);
-    // A stale row is left untouched for server-side validation rather than
-    // silently discarded from a saved configuration.
-    if (!bucketId) {
+    const bucketId = row.bucket_id || slotBuckets.get(`${groupKey}:${row.slot_id}`);
+    if (bucketId) {
+      add(row, bucketId, row.count);
+      return;
+    }
+    // Older saved configurations sometimes targeted a printable parent
+    // question (such as `q1`) rather than its scored subparts.  Spread that
+    // count through the matching compatible buckets, then through the whole
+    // group when no parent identity is available.
+    const group = groupBuckets.get(groupKey) || [];
+    const parentIds = parentBuckets.get(`${groupKey}:${row.slot_id}`);
+    const candidates = parentIds ? parentIds.map(id => group.find(bucket => bucket.id === id)).filter(Boolean) : group;
+    if (!candidates?.length) {
       merged.set(`stale:${JSON.stringify(row)}`, row);
       return;
     }
-    const key = JSON.stringify([row.section_id, row.group_id, bucketId, row.textbook_id, row.topic_id, row.difficulty || null, Boolean(row.diagrams)]);
-    const previous = merged.get(key);
-    merged.set(key, {
-      ...row,
-      slot_id: null,
-      bucket_id: bucketId,
-      count: (previous?.count || 0) + row.count,
+    let remaining = row.count;
+    candidates.forEach(bucket => {
+      if (remaining <= 0) return;
+      const capacity = bucket.slots.length - (assigned.get(`${groupKey}:${bucket.id}`) || 0);
+      const count = Math.min(remaining, Math.max(0, capacity));
+      if (count) add(row, bucket.id, count);
+      remaining -= count;
     });
+    // Preserve an overflow as a bucket row so the backend reports a concise
+    // grouped-limit error instead of silently dropping a teacher selection.
+    if (remaining) add(row, candidates.at(-1).id, remaining);
   });
   return [...merged.values()];
 }
