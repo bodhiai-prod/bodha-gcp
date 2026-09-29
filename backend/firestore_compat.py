@@ -323,13 +323,13 @@ class FirestoreCollection:
         for snapshot, _document in matches:
             transaction = self._client.transaction()
             try:
-                # AsyncTransaction.get() returns an async stream even for one
-                # document reference.  Treating it as an awaitable silently
-                # made every queue lease fail and left jobs queued forever.
-                fresh = None
-                async for candidate in transaction.get(snapshot.reference):
-                    fresh = candidate
-                    break
+                # Read through the document reference rather than
+                # ``AsyncTransaction.get``.  The latter has returned
+                # incompatible coroutine / iterator shapes across Firestore
+                # client releases.  ``AsyncDocumentReference.get`` has the
+                # stable, documented single-snapshot result and still records
+                # the read on this transaction.
+                fresh = await snapshot.reference.get(transaction=transaction)
                 if fresh is None:
                     continue
                 current = _decode_generation_requirements(fresh.to_dict() or {}) if fresh.exists else None
