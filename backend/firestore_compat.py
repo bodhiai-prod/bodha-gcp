@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import contextvars
+from datetime import datetime, timezone
 import logging
 import uuid
 from dataclasses import dataclass
@@ -25,6 +27,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 
 _MISSING = object()
+worker_write_lease = contextvars.ContextVar("worker_write_lease", default=None)
 logger = logging.getLogger("bodhiai.firestore")
 
 
@@ -221,6 +224,7 @@ class FirestoreCursor:
 
 class FirestoreCollection:
     def __init__(self, client: AsyncClient, name: str):
+        self._name = name
         self._client = client
         self._collection = client.collection(name)
 
@@ -291,21 +295,50 @@ class FirestoreCollection:
         return _WriteResult(modified_count=count)
 
     async def _apply_update(self, snapshot: Any, document: dict[str, Any], update: dict[str, Any]) -> None:
-        updated = copy.deepcopy(document)
-        for path, value in update.get("$set", {}).items():
-            _set(updated, path, value)
-        for path, value in update.get("$inc", {}).items():
-            _set(updated, path, (_get(updated, path, 0) or 0) + value)
+        # Field updates do not replay unrelated fields from a stale snapshot.
         unsupported = set(update) - {"$set", "$inc"}
         if unsupported:
             raise ValueError(f"Unsupported Firestore compatibility update: {sorted(unsupported)}")
-        await snapshot.reference.set(_encode_generation_requirements(updated))
+        fields = dict(update.get("$set", {}))
+        if "generation_requirements" in fields:
+            fields["generation_requirements"] = _encode_generation_requirements(
+                {"generation_requirements": fields["generation_requirements"]}
+            )["generation_requirements"]
+        fields.update({path: firestore.Increment(value) for path, value in update.get("$inc", {}).items()})
+        if fields:
+            await snapshot.reference.update(fields)
 
     async def update_one(self, query: dict[str, Any], update: dict[str, Any], upsert: bool = False) -> _WriteResult:
         matches = await self._matching_snapshots(query)
-        if matches:
-            await self._apply_update(matches[0][0], matches[0][1], update)
-            return _WriteResult(modified_count=1)
+        for snapshot, _ in matches:
+            @firestore.async_transactional
+            async def apply(txn):
+                fresh = await snapshot.reference.get(transaction=txn)
+                current = _decode_generation_requirements(fresh.to_dict() or {}) if fresh.exists else None
+                if current is None or not _matches(current, query):
+                    return False
+                guard = worker_write_lease.get() if self._name == "papers" else None
+                if guard and current.get("id") == guard["job"]["paper_id"]:
+                    lease = await guard["reference"].get(transaction=txn)
+                    owner = lease.to_dict() or {}
+                    job = guard["job"]
+                    if (owner.get("status") != "leased" or owner.get("lease_token") != job.get("lease_token")
+                        or owner.get("worker_id") != job.get("worker_id")
+                        or (owner.get("lease_until") or "") <= datetime.now(timezone.utc).isoformat()
+                        or int(current.get("generation_revision") or 1) != int(job.get("revision") or 1)
+                        or current.get("is_deleted") or current.get("generation_status") == "cancelled"):
+                        return False
+                unsupported = set(update) - {"$set", "$inc"}
+                if unsupported:
+                    raise ValueError(f"Unsupported Firestore compatibility update: {sorted(unsupported)}")
+                for path, value in update.get("$set", {}).items():
+                    _set(current, path, value)
+                for path, value in update.get("$inc", {}).items():
+                    _set(current, path, (_get(current, path, 0) or 0) + value)
+                txn.set(snapshot.reference, _encode_generation_requirements(current))
+                return True
+            if await apply(self._client.transaction()):
+                return _WriteResult(modified_count=1)
         if upsert:
             document = {key: value for key, value in query.items() if not key.startswith("$") and not isinstance(value, dict)}
             for path, value in update.get("$set", {}).items():
@@ -313,6 +346,13 @@ class FirestoreCollection:
             await self.insert_one(document)
             return _WriteResult(modified_count=1)
         return _WriteResult()
+
+    async def insert_once(self, key: str, document: dict[str, Any]) -> None:
+        from google.api_core.exceptions import AlreadyExists
+        try:
+            await self._collection.document(key).create(_encode_generation_requirements(document))
+        except AlreadyExists:
+            pass
 
     async def claim_one(self, query: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any] | None:
         """Atomically transition one matching document to a leased state.

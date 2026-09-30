@@ -392,6 +392,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         })()})()
         with patch.object(workers, "db", db), patch.object(workers, "chat_complete", AsyncMock(side_effect=["bad", "good"])) as chat, \
              patch.object(workers, "parse_json_response", side_effect=[{"sections": bad}, {"sections": sections}]), \
+             patch.object(workers, "record_activity", AsyncMock()), \
              patch.object(workers, "parse_instructions", AsyncMock()) as parse, \
              patch.object(workers, "complete_sections", AsyncMock(return_value={})), \
              patch.object(workers, "repair_sections", AsyncMock(return_value={})), \

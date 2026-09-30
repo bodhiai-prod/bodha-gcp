@@ -1002,7 +1002,8 @@ async def generate_competitive_paper(
         "instructions": "",
         "sections": [],
         "diagrams_pending": 0,
-        "generation_status": "pending",
+        "generation_status": "queued",
+        "generation_revision": 1,
         "generation_error": None,
         "is_competitive": True,
         "competitive_exam_id": exam_id,
@@ -1011,7 +1012,8 @@ async def generate_competitive_paper(
     }
     await db.papers.insert_one(paper_doc)
 
-    _asyncio.create_task(_generate_competitive_paper(paper_id, req, user["id"]))
+    from paper_review_queue import enqueue_generation
+    await enqueue_generation(paper_id=paper_id, payload={"competitive_request": req.model_dump()})
     paper_doc.pop("_id", None)
     return paper_doc
 

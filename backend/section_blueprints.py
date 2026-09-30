@@ -459,12 +459,13 @@ def restore_allocation_identity(question: dict, spec: dict) -> bool:
     known = {row.get("allocation_id"): row for row in rows}
     if question.get("allocation_id") in known:
         return False
-    identity = tuple(question.get(key) for key in ("textbook_id", "topic_id", "group_id", "slot_id"))
+    keys = ("textbook_id", "topic_id", "group_id", "slot_id") if any(row.get("slot_id") for row in rows) else ("textbook_id", "topic_id", "group_id")
+    identity = tuple(question.get(key) for key in keys)
     if any(value in (None, "") for value in identity):
         return False
     matches = [
         row for row in rows
-        if tuple(row.get(key) for key in ("textbook_id", "topic_id", "group_id", "slot_id")) == identity
+        if tuple(row.get(key) for key in keys) == identity
     ]
     if len(matches) != 1:
         return False
@@ -972,6 +973,9 @@ def allocation_prompt(spec):
             "diagrams=true requires at least one necessary supplied diagram in the row; false forbids "
             "supplied diagrams. diagram_minimum_satisfied=true makes diagrams optional for that top-up row. Follow existing diagram_spec requirements. Explicit Additional Instructions "
             "and per-question overrides take precedence over conflicting row fields. "
+            "For each group's internal_choices quota, write both complete alternatives inside "
+            "the question text, separated by a standalone OR line. Each alternative must have "
+            "the same assigned topic, marks and difficulty. A metadata count is not an alternative. "
             "Return internal_choice_count (integer, number of OR blocks) on every question.\n" +
             json.dumps({"sections": bp["sections"], "allocations": spec["section_allocations"]}, ensure_ascii=False) + "\n")
 
@@ -994,7 +998,7 @@ def allocation_misses(sections, spec):
             found.setdefault(row["allocation_id"], []).append(q)
             if sid != row["section_id"] or section_key(section.get("title", sid)) != section_key(row["section_id"]):
                 misses.append(f"Question {index}: must be in Section {row['section_id']}.")
-            if any(q.get(k) != row.get(k) for k in ("textbook_id", "topic_id", "group_id", "slot_id")) or q.get("topic") != row["name"]:
+            if any(q.get(k) != row.get(k) for k in ("textbook_id", "topic_id", "group_id")) or (row.get("slot_id") and q.get("slot_id") != row["slot_id"]) or q.get("topic") != row["name"]:
                 misses.append(f"Question {index}: textbook/topic/group identity mismatch.")
             if q.get("marks") != row["marks"] or q.get("format") != row["format"]:
                 misses.append(f"Question {index}: expected {row['marks']} marks, {row['format']}.")
@@ -1009,9 +1013,9 @@ def allocation_misses(sections, spec):
             misses.append(f"{label}: expected {row['count']} questions, got {len(qs)}.")
         if not spec.get("diagram_override"):
             diagrams = sum(bool(q.get("needs_diagram")) for q in qs)
-            if row["diagrams"] and not diagrams and not row.get("diagram_minimum_satisfied"):
+            if row.get("diagrams") and not diagrams and not row.get("diagram_minimum_satisfied"):
                 misses.append(f"{label}: requires at least one supplied diagram.")
-            if not row["diagrams"] and diagrams:
+            if not row.get("diagrams") and diagrams:
                 misses.append(f"{label}: supplied diagrams are disabled.")
     for miss in internal_choice_misses(sections, spec):
         actual = f"{miss['actual']} rendered"
@@ -1107,7 +1111,12 @@ def paper_summary(paper):
     # attempt. Raw question marks include every optional stream and therefore
     # must never replace this total in the primary summary.
     attemptable = bp.get("total_marks") if bp else printed_marks
-    return {"question_count": spec.get("printed_question_count") or len(qs), "scored_part_count": len(qs),
+    printed_count = len({(s.get("section_id") or s.get("title"), q.get("parent_id") or q.get("id") or str(i))
+                         for s in sections for i, q in enumerate(s.get("questions") or [])})
+    return {"question_count": printed_count, "scored_part_count": len(qs),
+            "actual_scored_part_count": len(qs), "actual_printed_question_count": printed_count,
+            "target_scored_part_count": spec.get("total_questions") or paper.get("target_question_count"),
+            "target_printed_question_count": spec.get("printed_question_count") or spec.get("total_questions") or paper.get("target_question_count"),
             "target_question_count": spec.get("printed_question_count") or spec.get("total_questions") or paper.get("target_question_count"),
             "target_marks": paper.get("total_marks"), "offered_marks": attemptable, "printed_marks": printed_marks, "attemptable_marks": attemptable,
             "duration_minutes": paper.get("duration_minutes"), "sections": actual_sections,

@@ -72,7 +72,7 @@ export default function PaperView() {
   const { id } = useParams();
   const [paper, setPaper] = useState(null);
   const qualityReviewRunning = paper?.quality_review?.status === "running";
-  const qualityReviewBlocked = qualityReviewRunning || paper?.quality_review?.status === "needs_review";
+  const qualityReviewBlocked = qualityReviewRunning || paper?.quality_review?.status === "needs_review" || (paper?.completion && !paper.completion.export_eligible);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -167,6 +167,7 @@ export default function PaperView() {
     try {
       const { data } = await api.post(`/papers/${id}/cancel-generation`);
       setPaper(current => ({ ...current, ...data }));
+      await load();
       toast.success("Paper generation cancelled");
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Could not cancel generation");
@@ -184,7 +185,9 @@ export default function PaperView() {
       const { data } = await api.post(`/papers/${id}/generate-missing`, {
         count: count || null,
       });
-      if (data.queued === 0) {
+      if (data.status === "queued") {
+        toast.success("Completing pending questions and OR alternatives. Your paper remains available.");
+      } else if (data.queued === 0) {
         toast.info("Nothing missing — this paper already has every question");
       } else {
         toast.success(
@@ -349,6 +352,10 @@ export default function PaperView() {
   // Saved via the browser's print engine rather than the backend renderer, so
   // the PDF keeps the fonts and KaTeX math shown on screen.
   const download = () => {
+    if (qualityReviewBlocked) {
+      toast.error("Complete all required questions before downloading");
+      return;
+    }
     if (!diagramsReady()) {
       toast.error("Diagrams are still loading — try again in a moment");
       return;
@@ -418,7 +425,9 @@ export default function PaperView() {
     );
   }
 
-  if (["queued", "pending", "generating", "reviewing"].includes(paper.generation_status)) {
+  const hasSavedQuestions = (paper.sections || []).some(section => section.questions?.length);
+
+  if (!hasSavedQuestions && ["queued", "pending", "generating", "reviewing"].includes(paper.generation_status)) {
     const generatedCount = (paper.sections || []).reduce((total, section) => total + (section.questions || []).length, 0) || paper.generation_progress?.completed || 0;
     const configuredCount = paper.generation_progress?.total || paper.target_question_count || paper.generation_requirements?.total_questions || paper.total_questions || 0;
     const progressPercent = configuredCount > 0 ? Math.min(100, Math.round(generatedCount / configuredCount * 100)) : 0;
@@ -449,7 +458,7 @@ export default function PaperView() {
               {paper.title || "Generating paper…"}
             </h1>
             <p className="text-neutral-600">
-              {paper.generation_status === "reviewing" ? "Your draft is complete. We are checking final quality before publishing it." : <>The AI is drafting questions for <b>{paper.subject}</b> · Class <b>{paper.class_name}</b>.</>}
+              {paper.generation_status === "reviewing" ? "We are validating and completing the remaining questions." : <>The AI is drafting questions for <b>{paper.subject}</b> · Class <b>{paper.class_name}</b>.</>}
             </p>
             <p className="text-sm text-neutral-500 mt-4">
               Progress updates automatically through each generation phase.
@@ -478,16 +487,16 @@ export default function PaperView() {
     );
   }
 
-  if (paper.generation_status === "cancelled") {
-    return <div className="min-h-screen bg-[#FAFAFA]"><Header /><main className="max-w-3xl mx-auto p-6 md:p-12" data-testid="paper-cancelled-page"><Link to="/" className="qp-btn-ghost inline-flex items-center gap-2 mb-8"><ArrowLeft size={16} weight="bold" /> Dashboard</Link><div className="border border-neutral-200 bg-white rounded-2xl p-10 text-center"><h1 className="text-2xl font-semibold text-neutral-900 mb-2">Generation cancelled</h1><p className="text-neutral-600">No generated paper was saved. You can restart this paper with the same configuration.</p><button type="button" onClick={regenerateAll} className="qp-btn qp-btn-primary mt-6"><ArrowClockwise size={16} weight="bold" /> Restart generation</button></div></main></div>;
+  if (paper.generation_status === "cancelled" && !(paper.sections || []).some(section => section.questions?.length)) {
+    return <div className="min-h-screen bg-[#FAFAFA]"><Header /><main className="max-w-3xl mx-auto p-6 md:p-12" data-testid="paper-cancelled-page"><Link to="/" className="qp-btn-ghost inline-flex items-center gap-2 mb-8"><ArrowLeft size={16} weight="bold" /> Dashboard</Link><div className="border border-neutral-200 bg-white rounded-2xl p-10 text-center"><h1 className="text-2xl font-semibold text-neutral-900 mb-2">Generation cancelled</h1><p className="text-neutral-600">Generation has stopped. Saved progress is retained for your next completion attempt.</p><button type="button" onClick={regenerateAll} className="qp-btn qp-btn-primary mt-6"><ArrowClockwise size={16} weight="bold" /> Restart generation</button></div></main></div>;
   }
 
-  if (paper.generation_status === "needs_review") {
+  if (paper.generation_status === "needs_review" && !hasSavedQuestions) {
     const message = paper.quality_review?.message || "The paper needs another quality-review attempt before it can be published.";
-    return <div className="min-h-screen bg-[#FAFAFA]"><Header /><main className="max-w-3xl mx-auto p-6 md:p-12"><Link to="/" className="qp-btn-ghost inline-flex items-center gap-2 mb-8"><ArrowLeft size={16} weight="bold" /> Dashboard</Link><div className="border border-amber-200 bg-amber-50 rounded-2xl p-10 text-center"><WarningCircle size={36} className="mx-auto text-amber-700 mb-4" /><h1 className="text-2xl font-semibold text-amber-900 mb-2">Paper needs review</h1><p className="text-amber-800">{message}</p><button type="button" onClick={regenerateAll} className="qp-btn qp-btn-primary mt-6"><ArrowClockwise size={16} weight="bold" /> Retry generation</button></div></main></div>;
+    return <div className="min-h-screen bg-[#FAFAFA]"><Header /><main className="max-w-3xl mx-auto p-6 md:p-12"><Link to="/" className="qp-btn-ghost inline-flex items-center gap-2 mb-8"><ArrowLeft size={16} weight="bold" /> Dashboard</Link><div className="border border-amber-200 bg-amber-50 rounded-2xl p-10 text-center"><WarningCircle size={36} className="mx-auto text-amber-700 mb-4" /><h1 className="text-2xl font-semibold text-amber-900 mb-2">Generation could not complete</h1><p className="text-amber-800">{message}</p><button type="button" onClick={regenerateAll} className="qp-btn qp-btn-primary mt-6"><ArrowClockwise size={16} weight="bold" /> {paper.completion?.action_label || "Retry completion"}</button></div></main></div>;
   }
 
-  if (paper.generation_status === "failed") {
+  if (paper.generation_status === "failed" && !hasSavedQuestions) {
     const savedError =
       paper.generation_error ||
       "The AI could not complete this paper. This is often a temporary LLM provider issue.";
@@ -566,8 +575,16 @@ export default function PaperView() {
   const choiceRecovery = internalChoiceRecovery(paper);
   const choiceRepairLive = internalChoiceRepairLive(paper);
   const choiceRepairAllowed = canRepairInternalChoices({ paper, editing });
-  const isPartial = paper.recovered_from_truncation || missingCount > 0;
-  const busy = queuing || topup?.status === "generating";
+  const completionPending = Boolean(
+    (paper.completion && !paper.completion.ready)
+    || paper.quality_review?.status === "needs_review"
+    || ["needs_review", "failed", "cancelled"].includes(paper.generation_status)
+  );
+  const completionLive = ["queued", "running"].includes(paper.completion?.status)
+    || ["queued", "pending", "generating", "reviewing"].includes(paper.generation_status)
+    || qualityReviewRunning;
+  const isPartial = paper.recovered_from_truncation || missingCount > 0 || completionPending;
+  const busy = queuing || completionLive || topup?.status === "generating";
   // Which question the server is rewriting, and whether the button is offered
   // at all. Both rules live in lib/regenerate so they stay testable and cannot
   // drift from the endpoint's own guards.
@@ -588,18 +605,20 @@ export default function PaperView() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="paper-view-page">
-        {paper.quality_review?.status === "running" && (
+        {completionLive && (
           <div className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4" data-testid="paper-quality-running-banner">
-            <div className="font-bold uppercase tracking-wider text-sm">Your paper is ready to view; final checks are continuing</div>
+            <div className="font-bold uppercase tracking-wider text-sm">Near-complete preview; completion is continuing</div>
             <p className="text-sm text-neutral-700 mt-1">
-              We are repairing or filling any remaining question blocks in the background. This view contains only questions that passed the initial render-safety checks.
+              We are completing the remaining questions and alternatives. Downloads unlock when the full paper is ready.
+              {paper.completion && ` ${paper.completion.valid_scored_parts}/${paper.completion.target_scored_parts} scored parts complete.`}
               {paper.quality_review?.withheld_count > 0 ? ` ${paper.quality_review.withheld_count} question${paper.quality_review.withheld_count === 1 ? " is" : "s are"} temporarily withheld.` : ""}
             </p>
+            <button type="button" onClick={cancelGeneration} className="qp-btn qp-btn-secondary mt-2">Cancel completion</button>
           </div>
         )}
         {paper.quality_review?.status === "needs_review" && (
           <div className="no-print mb-6 border-2 border-amber-300 bg-amber-50 p-4" data-testid="paper-quality-review-banner">
-            <div className="font-bold uppercase tracking-wider text-sm text-amber-900">Draft available; some quality checks need attention</div>
+            <div className="font-bold uppercase tracking-wider text-sm text-amber-900">Completion needs another attempt</div>
             <p className="text-sm text-amber-800 mt-1">{paper.quality_review?.message || "The safe questions remain available while the affected content is reviewed."}</p>
           </div>
         )}
@@ -703,7 +722,7 @@ export default function PaperView() {
           </div>
         )}
 
-        {isPartial && !templateRecovery && topup?.status !== "generating" && (
+        {isPartial && !completionLive && !templateRecovery && topup?.status !== "generating" && (
           <div
             className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4 flex items-start gap-3"
             data-testid="partial-banner"
@@ -718,15 +737,15 @@ export default function PaperView() {
               <div className="font-bold uppercase tracking-wider text-sm">
                 {missingCount > 0
                   ? `${missingCount} question${missingCount === 1 ? "" : "s"} missing`
-                  : "Partial recovery"}
+                  : "Questions or alternatives pending"}
               </div>
               <div className="text-sm text-neutral-700 mt-1 font-mono">
                 {target > 0
                   ? `${have} of ${target} generated. `
                   : "The AI's response was cut off before this paper was finished. "}
-                Add the rest without touching the questions you already have.
+                Complete missing questions and OR alternatives while keeping unaffected questions.
               </div>
-              <label className="flex items-center gap-2 mt-3 text-xs font-bold uppercase tracking-wider">
+              {!completionPending && !paper.completion && <label className="flex items-center gap-2 mt-3 text-xs font-bold uppercase tracking-wider">
                 How many to add
                 <input
                   type="number"
@@ -738,18 +757,18 @@ export default function PaperView() {
                   disabled={busy}
                   data-testid="topup-count-input"
                 />
-              </label>
+              </label>}
             </div>
             <div className="flex flex-col gap-2 shrink-0">
               <button
-                onClick={() => generateMissing(topupValue)}
+                onClick={() => generateMissing(completionPending || paper.completion ? null : topupValue)}
                 disabled={busy}
                 className="qp-btn qp-btn-primary text-xs"
                 data-testid="generate-missing-questions-button"
               >
                 {queuing
                   ? "Starting..."
-                  : `Generate ${topupValue} more`}
+                  : "Generate pending"}
               </button>
               <button
                 onClick={async () => {
@@ -980,10 +999,12 @@ export default function PaperView() {
                   const firstPart = Boolean(parentId && parentId !== printedParent);
                   let qNum = null;
                   if (firstPart) {
-                    qNum = counter++;
+                    qNum = q.display_number || counter;
+                    counter = qNum + 1;
                     printedParent = parentId;
                   } else if (!parentId) {
-                    qNum = counter++;
+                    qNum = q.display_number || counter;
+                    counter = qNum + 1;
                     printedParent = null;
                   }
                   if (editing) {
@@ -1103,6 +1124,7 @@ export default function PaperView() {
                               })}
                             </div>
                           )}
+                        {q.completion_pending && <p className="no-print text-sm text-amber-700">{q.completion_pending}</p>}
                         <QuestionDiagram paperId={id} question={q} />
                       </li>
                     );
@@ -1184,6 +1206,7 @@ export default function PaperView() {
                             </span>
                           )}
                         </div>
+                        {q.completion_pending && <p className="no-print text-sm text-amber-700">{q.completion_pending}</p>}
                         <QuestionDiagram paperId={id} question={q} />
                       </div>
                       <div className="no-print flex gap-1 pl-6 md:pl-0">

@@ -27,6 +27,20 @@ def library_status_for_paper(paper, needs_review=False):
     recovery or question edits take precedence over validation warnings, so a
     teacher can see work is still underway rather than a stale review signal.
     """
+    completion = paper.get("completion") or {}
+    if completion:
+        state = completion.get("status")
+        progress = {"completed": completion.get("valid_scored_parts", 0), "total": completion.get("target_scored_parts", 0)}
+        if state in {"running", "queued"}:
+            return _status("generating", "Completing questions", active=True, progress=progress)
+        if state == "incomplete":
+            if any(section.get("questions") for section in paper.get("sections") or []):
+                return _status("needs_review", "Questions pending", progress=progress)
+            return _status("generation_failed", "Generation could not complete", progress=progress)
+        if state == "cancelled":
+            return _status("generation_cancelled", "Generation cancelled")
+        if completion.get("ready"):
+            return _status("ready", "Ready")
     generation_status = paper.get("generation_status") or "ready"
     if generation_status in {"queued", "pending", "generating", "reviewing"}:
         progress_data = paper.get("generation_progress") or {}

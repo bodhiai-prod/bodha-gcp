@@ -154,8 +154,8 @@ def _screen_viewable_sections(
 
             row = allocation_rows.get(question.get("allocation_id"))
             if question.get("allocation_id") in pending_choice_allocations:
-                issues.append(f"Question {qid} is withheld until its required internal choices are repaired.")
-                continue
+                issues.append(f"Question {qid} has pending required internal choices.")
+                question["completion_pending"] = "Internal OR alternative pending"
             if spec.get("section_allocations") and (
                 not row
                 or any(question.get(field) != row.get(field) for field in (
@@ -170,6 +170,19 @@ def _screen_viewable_sections(
             safe_questions.append(question)
         section["questions"] = safe_questions
     return [section for section in screened if section.get("questions")], issues
+
+
+def _preview_allowed(sections, spec, target):
+    total = int(target or spec.get("total_questions") or 0)
+    if not total:
+        return False
+    missing = max(0, total - count_questions(sections))
+    try:
+        pending = len(internal_choice_repair_targets(sections, spec))
+    except RegenerationFailed:
+        return False
+    unresolved = missing + pending
+    return unresolved <= 6 and (total - unresolved) / total >= .85
 
 
 async def _complete_and_repair_sections_parallel(
@@ -314,7 +327,9 @@ async def generate_diagrams_for_paper(paper_id: str, owner_id: str, sections: li
     this is the last point before an image is actually paid for, and the
     paper may have been edited between generation and this call.
     """
-    apply_diagram_policy(sections, ref=paper_id)
+    apply_diagram_policy(sections, ref=paper_id, max_diagrams=sum(
+        bool(q.get("needs_diagram")) for section in sections for q in section.get("questions") or []
+    ))
 
     jobs = []
     targets = []
@@ -747,7 +762,7 @@ async def generate_paper_background(
             visible, withheld = _screen_viewable_sections(
                 draft_sections, spec=spec, normal_plan=normal_plan
             )
-            if visible:
+            if _preview_allowed(visible, spec, target_q):
                 draft_published = True
                 updates.update({
                     "sections": visible,
@@ -865,7 +880,7 @@ async def generate_paper_background(
     first_view, withheld = _screen_viewable_sections(
         sections, spec=spec, normal_plan=normal_plan
     )
-    if first_view:
+    if _preview_allowed(first_view, spec, target_q):
         draft_published = True
         await db.papers.update_one(
             {"id": paper_id, "generation_status": {"$in": [*ACTIVE_GENERATION_STATUSES, "ready"]}},
@@ -1229,7 +1244,7 @@ async def generate_paper_background(
     ]))
     final_validation_error = "; ".join(final_quality_misses)[:500] or None
     auto_topup_pending = bool(
-        spec.get("total_questions_stated")
+        (spec.get("total_questions_stated") or spec.get("section_allocations"))
         and target_q > count_questions(final_sections)
         and AUTO_TOPUP_ENABLED
     )
@@ -1245,7 +1260,7 @@ async def generate_paper_background(
             "section_plan": section_plan,
             "question_count": count_questions(final_sections),
             "diagrams_pending": pending_count,
-            "generation_status": "ready",
+            "generation_status": "ready" if _preview_allowed(final_sections, spec, target_q) else ("generating" if auto_topup_pending else "needs_review"),
             "generation_error": None,
             "generation_recovery": (
                 {"status": "queued", "reason": "allocation_metadata", "attempt": 0,
@@ -1327,6 +1342,14 @@ async def generate_paper_background(
         await _auto_topup_if_short(paper_id, owner_id, context_excerpt, feedback_hints)
         latest = await db.papers.find_one({"id": paper_id, "is_deleted": False}, {"_id": 0})
         if latest:
+            # Top-up may restore slots that were unavailable during the first
+            # OR pass. Repair their alternatives before the final validation.
+            if internal_choice_misses(latest.get("sections") or [], spec):
+                choice_result = await repair_internal_choices(
+                    {**latest, "generation_requirements": spec},
+                    context_excerpt=context_excerpt, feedback_hints=feedback_hints,
+                )
+                latest["sections"] = choice_result["sections"]
             repaired_sections, withheld_after_topup = _screen_viewable_sections(
                 latest.get("sections") or [], spec=spec, normal_plan=normal_plan
             )
@@ -1344,7 +1367,8 @@ async def generate_paper_background(
                 *(quality_misses if review_budget.exhausted_reason else []),
             ]))
             final_status = "needs_review" if remaining_gates else "passed"
-            await db.papers.update_one({"id": paper_id, "generation_status": "ready"}, {"$set": {
+            await db.papers.update_one({"id": paper_id, "generation_status": {"$in": ["ready", "generating"]}}, {"$set": {
+                "generation_status": "ready" if not remaining_gates else "needs_review",
                 "sections": repaired_sections,
                 "question_count": count_questions(repaired_sections),
                 "quality_review.status": final_status,
@@ -1412,7 +1436,7 @@ def paper_target_count(paper: dict) -> int:
     existed fall back to the same formula the prompt builder uses, so an older
     paper still gets a usable target instead of no top-up button at all.
     """
-    stored = paper.get("target_question_count")
+    stored = (paper.get("generation_requirements") or {}).get("total_questions") or paper.get("target_question_count")
     try:
         stored = int(stored)
     except (TypeError, ValueError):
@@ -1439,12 +1463,11 @@ def template_validation_misses(sections: list, spec: dict) -> list[str]:
     misses = allocation_misses(sections, spec)
     check = verify_instructions(sections, spec)
     misses.extend(check.get("misses") or [])
-    blueprint = spec.get("blueprint") or {}
-    expected_marks = blueprint.get("total_marks")
+    expected_marks = spec.get("total_marks")
     if expected_marks is not None:
-        actual_marks = attemptable_marks(sections)
+        actual_marks = sum(float(q.get("marks") or 0) for section in sections for q in section.get("questions") or [])
         if actual_marks != expected_marks:
-            misses.append(f"asked for {expected_marks} attemptable marks, got {actual_marks}")
+            misses.append(f"asked for {expected_marks} offered marks, got {actual_marks:g}")
     return list(dict.fromkeys(misses))
 
 
@@ -2171,7 +2194,7 @@ REGEN_HISTORY_MAX = 5
 PRESERVED_SLOT_FIELDS = (
     "id", "slot_id", "section_id", "topic", "type", "format", "difficulty", "marks", "important",
     "allocation_id", "textbook_id", "topic_id", "group_id",
-    "parent_id", "parent_label", "part_label", "parent_lead_in",
+    "parent_id", "parent_label", "part_label", "parent_lead_in", "display_number",
     "internal_choice_count",
 )
 # What the model IS asked for -- the stem and the things that follow from it.
@@ -2202,7 +2225,7 @@ def _slot_of(question: dict) -> dict:
     return {k: question.get(k) for k in PRESERVED_SLOT_FIELDS if k in question}
 
 
-def internal_choice_repair_targets(sections: list, spec: dict) -> list[dict]:
+def internal_choice_repair_targets(sections: list, spec: dict, *, allow_partial: bool = False) -> list[dict]:
     """Choose the smallest deterministic set of slots needed to fix OR totals."""
     by_id = {
         q.get("id"): q
@@ -2216,9 +2239,9 @@ def internal_choice_repair_targets(sections: list, spec: dict) -> list[dict]:
         delta = int(miss["expected"]) - int(miss["actual"])
         # Preserve compliant and teacher-starred questions where possible.
         if delta > 0:
-            candidates = [q for q in questions if q.get("internal_choice_count", 0) == 0]
+            candidates = [q for q in questions if derived_internal_choice_count(q) == 0]
             candidates.sort(key=lambda q: (bool(q.get("important")), q.get("id", "")))
-            if len(candidates) < delta:
+            if len(candidates) < delta and not allow_partial:
                 raise RegenerationFailed("There are not enough question slots to add the required internal OR choices.")
             targets.extend({"question_id": q["id"], "required_internal_choice_count": 1} for q in candidates[:delta])
             continue
@@ -2226,12 +2249,12 @@ def internal_choice_repair_targets(sections: list, spec: dict) -> list[dict]:
         remaining = -delta
         # Remove several accidental separators from one malformed question in a
         # single rewrite before disturbing a second otherwise-valid question.
-        candidates = [q for q in questions if int(q.get("internal_choice_count") or 0) > 0]
-        candidates.sort(key=lambda q: (-int(q.get("internal_choice_count") or 0), bool(q.get("important")), q.get("id", "")))
+        candidates = [q for q in questions if derived_internal_choice_count(q) > 0]
+        candidates.sort(key=lambda q: (-derived_internal_choice_count(q), bool(q.get("important")), q.get("id", "")))
         for question in candidates:
             if remaining <= 0:
                 break
-            current = int(question.get("internal_choice_count") or 0)
+            current = derived_internal_choice_count(question)
             reduced = min(current, remaining)
             targets.append({
                 "question_id": question["id"],
@@ -2248,40 +2271,41 @@ async def repair_internal_choices(
     *,
     context_excerpt: str = "",
     feedback_hints: str = "",
+    on_accept=None,
 ) -> dict:
-    """Repair only the question blocks required to satisfy internal OR totals.
-
-    Nothing is written here.  A failed second rewrite therefore cannot leave a
-    paper half-repaired; callers only publish the returned sections once the
-    complete contract has been checked again.
-    """
+    """Retain each accepted local repair even when a later provider call fails."""
     spec = paper.get("generation_requirements") or {}
     working = copy.deepcopy(paper)
     normalize_internal_choice_counts(working.get("sections") or [])
-    targets = internal_choice_repair_targets(working.get("sections") or [], spec)
-    if not targets:
-        return {"sections": working.get("sections") or [], "repairs": [], "diagram_pending": False}
-    repairs = []
-    for target in targets:
-        result = await regenerate_question(
-            working,
-            target["question_id"],
-            context_excerpt=context_excerpt,
-            feedback_hints=feedback_hints,
-            required_internal_choice_count=target["required_internal_choice_count"],
-        )
-        working["sections"] = result["sections"]
-        repairs.append({**target, "old_text": result["old_text"], "question": result["question"],
-                        "diagram_pending": result["diagram_pending"]})
-    normalize_internal_choice_counts(working["sections"])
-    remaining = internal_choice_misses(working["sections"], spec)
-    if remaining:
-        raise RegenerationFailed("Internal OR repair did not satisfy the board-template requirement.")
-    return {
-        "sections": working["sections"],
-        "repairs": repairs,
-        "diagram_pending": any(repair["diagram_pending"] for repair in repairs),
-    }
+    targets = internal_choice_repair_targets(working.get("sections") or [], spec, allow_partial=True)
+    repairs, errors = [], []
+    semaphore, lock = _asyncio.Semaphore(3), _asyncio.Lock()
+
+    async def repair(target):
+        async with semaphore:
+            try:
+                result = await regenerate_question(
+                    working, target["question_id"], context_excerpt=context_excerpt,
+                    feedback_hints=feedback_hints,
+                    required_internal_choice_count=target["required_internal_choice_count"],
+                )
+                async with lock:
+                    for section in working["sections"]:
+                        for index, question in enumerate(section.get("questions") or []):
+                            if question.get("id") == target["question_id"]:
+                                section["questions"][index] = result["question"]
+                    repairs.append({**target, "old_text": result["old_text"], "question": result["question"],
+                                    "diagram_pending": result["diagram_pending"]})
+                    if on_accept:
+                        await on_accept(copy.deepcopy(working["sections"]))
+            except Exception as exc:
+                errors.append(str(exc)[:500])
+
+    await _asyncio.gather(*(repair(target) for target in targets))
+    normalize_internal_choice_counts(working.get("sections") or [])
+    return {"sections": working.get("sections") or [], "repairs": repairs,
+            "remaining": internal_choice_misses(working.get("sections") or [], spec),
+            "errors": errors, "diagram_pending": any(repair["diagram_pending"] for repair in repairs)}
 
 
 def _extract_candidate(data) -> dict:

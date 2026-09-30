@@ -969,6 +969,7 @@ def normal_slots_prompt(
             "difficulty": slot["difficulty"],
             "marks": slot["marks"],
             "diagram_mode": slot.get("diagram_mode", "allowed"),
+            **({"internal_choice_count": slot["internal_choice_count"]} if "internal_choice_count" in slot else {}),
         }
         for slot in slots
     ]
@@ -998,6 +999,10 @@ def normal_slots_prompt(
         '"given_values":[],"unknowns":[],"why_required":"..."}}]}\n\n'
         "RULES:\n"
         "- Return exactly one object for each supplied slot_id and no other slot_id.\n"
+        "- When internal_choice_count is supplied, include exactly that many standalone OR lines "
+        "inside the question string, joining complete student-facing alternatives with the same "
+        "topic, marks and difficulty. Zero means no OR alternative. A metadata count alone "
+        "does not create an alternative; write both complete question texts.\n"
         "- Do not repeat structural fields such as topic, marks, type, format, difficulty, or section.\n"
         "- For MCQ slots return exactly four options and correct_option 0, 1, 2, or 3. "
         "Omit options and correct_option for non-MCQ slots.\n"

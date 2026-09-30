@@ -61,10 +61,10 @@ def test_screen_withholds_question_that_does_not_match_its_server_slot():
     assert any("paper slot" in issue for issue in issues)
 
 
-def test_screen_withholds_all_questions_in_incomplete_required_or_group():
+def test_screen_keeps_complete_stems_with_pending_required_or_group():
     q = question(
         allocation_id="allocation-1", section_id="A", group_id="g1",
-        internal_choice_count=0,
+        internal_choice_count=0, textbook_id="book", topic_id="topic", slot_id="slot", topic="Algebra",
     )
     spec = {
         "section_allocations": [{
@@ -83,5 +83,6 @@ def test_screen_withholds_all_questions_in_incomplete_required_or_group():
         spec=spec,
     )
 
-    assert visible == []
+    assert len(visible[0]["questions"]) == 1
+    assert visible[0]["questions"][0]["completion_pending"]
     assert any("internal choices" in issue for issue in issues)

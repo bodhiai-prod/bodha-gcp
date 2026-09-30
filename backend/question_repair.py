@@ -136,7 +136,11 @@ def validate_question(q: dict, *, strict_mcq: bool = False) -> list:
     stem = _stem(q)
     if len(stem) < MIN_STEM_CHARS:
         issues.add("empty_stem")
-    elif _DANGLING_RE.search(stem):
+    elif _DANGLING_RE.search(stem) and not (
+        is_mcq(q, strict_mcq) and re.search(r"\b(?:is|are|was|were|be)\s*$", stem, re.IGNORECASE)
+        and len(_options(q)) == MCQ_OPTIONS
+        and all(str(option).strip() for option in _options(q))
+    ):
         issues.add("truncated_stem")
 
     if is_mcq(q, strict_mcq):

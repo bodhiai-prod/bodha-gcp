@@ -22,20 +22,22 @@ def _after(seconds: int) -> str:
 
 def generation_job(*, paper_id: str, payload: dict[str, Any], revision: int = 1) -> dict[str, Any]:
     now = utcnow_iso()
+    engine_version = os.environ.get("PAPER_COMPLETION_ENGINE", "v1")
     return {
-        "id": str(uuid.uuid4()), "kind": "paper_review", "paper_id": paper_id,
+        "id": f"completion:{paper_id}:{revision}", "kind": "paper_review", "paper_id": paper_id,
+        "engine_version": engine_version,
         "revision": revision, "payload": payload, "status": "queued", "stage": "queued",
-        "attempt": 0, "max_attempts": MAX_ATTEMPTS, "lease_until": None,
+        "attempt": 0, "max_attempts": 3 if engine_version == "v2" else MAX_ATTEMPTS, "lease_until": None,
         "heartbeat_at": None, "queued_at": now, "started_at": None, "finished_at": None,
         "next_run_at": now, "diagnostics": [], "provider_calls_used": 0,
-        "provider_calls_limit": int(os.environ.get("PAPER_REVIEW_PROVIDER_CALL_LIMIT", "12")),
+        "provider_calls_limit": int(os.environ.get("PAPER_REVIEW_PROVIDER_CALL_LIMIT", "24")),
         "deadline_at": None, "failed_gates": [],
     }
 
 
 async def enqueue_generation(*, paper_id: str, payload: dict[str, Any], revision: int = 1) -> dict[str, Any]:
     job = generation_job(paper_id=paper_id, payload=payload, revision=revision)
-    await db.paper_review_jobs.insert_one(job)
+    await db.paper_review_jobs.insert_once(job["id"], job)
     return job
 
 
@@ -71,13 +73,14 @@ async def claim_next(worker_id: str, kinds: list[str] | None = None) -> dict[str
             ],
         },
         {"status": "leased", "worker_id": worker_id, "lease_until": _after(LEASE_SECONDS),
-         "heartbeat_at": utcnow_iso(), "stage": "generating", "started_at": utcnow_iso()},
+         "lease_token": str(uuid.uuid4()), "heartbeat_at": utcnow_iso(), "stage": "generating", "started_at": utcnow_iso()},
     )
 
 
-async def heartbeat(job_id: str, worker_id: str) -> bool:
+async def heartbeat(job_id: str, worker_id: str, lease_token: str | None = None) -> bool:
     result = await db.paper_review_jobs.update_one(
-        {"id": job_id, "status": "leased", "worker_id": worker_id},
+        {"id": job_id, "status": "leased", "worker_id": worker_id,
+         **({"lease_token": lease_token} if lease_token else {}), "lease_until": {"$gt": utcnow_iso()}},
         {"$set": {"heartbeat_at": utcnow_iso(), "lease_until": _after(LEASE_SECONDS)}},
     )
     return bool(result.modified_count)
@@ -85,7 +88,9 @@ async def heartbeat(job_id: str, worker_id: str) -> bool:
 
 async def complete(job: dict[str, Any], *, status: str, stage: str, diagnostics: list[str] | None = None) -> None:
     await db.paper_review_jobs.update_one(
-        {"id": job["id"], "status": "leased"},
+        {"id": job["id"], "status": "leased",
+         **{key: job[key] for key in ("worker_id", "lease_token") if key in job},
+         "lease_until": {"$gt": utcnow_iso()}},
         {"$set": {"status": status, "stage": stage, "finished_at": utcnow_iso(),
                   "lease_until": None, "diagnostics": diagnostics or []}},
     )
@@ -97,7 +102,9 @@ async def retry_or_needs_review(job: dict[str, Any], message: str) -> str:
         await complete(job, status="needs_review", stage="needs_review", diagnostics=[message])
         return "needs_review"
     await db.paper_review_jobs.update_one(
-        {"id": job["id"], "status": "leased"},
+        {"id": job["id"], "status": "leased",
+         **{key: job[key] for key in ("worker_id", "lease_token") if key in job},
+         "lease_until": {"$gt": utcnow_iso()}},
         {"$set": {"status": "queued", "stage": "retrying", "attempt": attempt,
                   "lease_until": None, "next_run_at": _after(2 ** attempt),
                   "diagnostics": [message]}},

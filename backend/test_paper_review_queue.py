@@ -14,6 +14,9 @@ class _Collection:
         self.inserted = []
         self.updates = []
 
+    async def insert_once(self, key, document):
+        return await self.insert_one(document)
+
     async def insert_one(self, document):
         self.inserted.append(document)
         return _Result()

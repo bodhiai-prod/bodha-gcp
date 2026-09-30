@@ -1771,7 +1771,7 @@ async def update_paper(
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    if (p.get("quality_review") or {}).get("status") == "running":
+    if (p.get("quality_review") or {}).get("status") in {"running", "queued"} and p.get("generation_status") != "cancelled":
         raise HTTPException(status_code=409, detail="Editing is paused while final paper checks are running")
     # Papers produced during the brief strict-validation rollout were stored
     # as failed even though their content is usable and the recovery pipeline
@@ -1900,7 +1900,14 @@ async def update_paper(
             set_fields["solution.is_stale"] = True
 
     if set_fields:
-        await db.papers.update_one({"id": paper_id}, {"$set": set_fields})
+        if p.get("completion_engine") == "v2":
+            from completion_store import save_teacher_edit, OwnershipLost
+            try:
+                await save_teacher_edit(p, set_fields)
+            except OwnershipLost as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        else:
+            await db.papers.update_one({"id": paper_id}, {"$set": set_fields})
     return await get_paper(paper_id, user)
 
 
@@ -1957,6 +1964,16 @@ def _current_paper_validation(paper: dict) -> tuple[dict, dict, dict | None]:
     `instruction_check` can never leave a correct paper stuck in review.
     """
     summary = paper_summary(paper)
+    completion = paper.get("completion") or {}
+    if completion:
+        misses = completion.get("failed_gates") or []
+        summary.update({"status": completion.get("status"), "mismatches": misses,
+                        "review_status": completion.get("status"),
+                        "actual_scored_part_count": completion.get("actual_scored_parts", summary["scored_part_count"]),
+                        "target_scored_part_count": completion.get("target_scored_parts", summary.get("target_scored_part_count")),
+                        "actual_printed_question_count": completion.get("actual_printed_questions", summary.get("question_count")),
+                        "target_printed_question_count": completion.get("target_printed_questions", summary.get("target_question_count"))})
+        return summary, {"honoured": bool(completion.get("ready")), "misses": misses}, None
     checks = verify(paper.get("sections") or [], paper.get("generation_requirements") or {})
     review_status = None
     if not (paper.get("generation_requirements") or {}).get("section_allocations"):
@@ -2010,45 +2027,10 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    repaired_sections, section_plan, repaired_recovery = _normalize_saved_paper_sections(p)
-    choice_counts_changed = normalize_internal_choice_counts(repaired_sections)
-    if repaired_recovery or choice_counts_changed or section_plan != (p.get("section_plan") or []):
-        repaired_fields = {"sections": repaired_sections, "section_plan": section_plan}
-        if choice_counts_changed:
-            repaired_check = verify(repaired_sections, p.get("generation_requirements") or {})
-            repaired_check["misses"] = list(dict.fromkeys([
-                *(repaired_check.get("misses") or []),
-                *allocation_misses(repaired_sections, p.get("generation_requirements") or {}),
-            ]))
-            repaired_check["honoured"] = not repaired_check["misses"]
-            repaired_fields["instruction_check"] = repaired_check
-        await db.papers.update_one(
-            {"id": paper_id}, {"$set": repaired_fields}
-        )
-        p["sections"] = repaired_sections
-        p["section_plan"] = section_plan
-        if choice_counts_changed:
-            p["instruction_check"] = repaired_fields["instruction_check"]
-    # Migrate the brief metadata-only recovery rollout on read.  It is safe to
-    # restart only papers whose compiled contract proves the structural defect;
-    # provider failures remain terminal failures.
-    legacy_recovery = p.get("generation_recovery") or {}
-    structural_misses = allocation_misses(p.get("sections") or [], p.get("generation_requirements") or {})
-    if (
-        structural_misses
-        and any("allocation identity" in miss.lower() for miss in structural_misses)
-        and legacy_recovery.get("status") == "queued"
-        and not legacy_recovery.get("reason")
-    ):
-        queued = {"status": "queued", "reason": "allocation_metadata", "attempt": 0,
-                  "max_attempts": 2, "started_at": None, "finished_at": None,
-                  "validation_summary": compact_validation_misses(structural_misses)}
-        await db.papers.update_one({"id": paper_id}, {"$set": {"generation_recovery": queued}})
-        p["generation_recovery"] = queued
-        context_excerpt, feedback_hints = await _paper_generation_inputs(p)
-        _spawn(recover_template_generation_background(
-            paper_id, p["owner_id"], context_excerpt=context_excerpt, feedback_hints=feedback_hints
-        ))
+    # Reads normalize presentation only; completion is exclusively queued by writes.
+    repaired_sections, section_plan, _ = _normalize_saved_paper_sections(p)
+    p["sections"], p["section_plan"] = repaired_sections, section_plan
+    normalize_internal_choice_counts(p["sections"])
     p["instructions"] = printable_instructions(
         p.get("instructions"),
         template_instructions=printable_template_instructions(p),
@@ -2079,7 +2061,7 @@ async def toggle_important(
     )
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
-    if (p.get("quality_review") or {}).get("status") == "running":
+    if (p.get("quality_review") or {}).get("status") in {"running", "queued"} and p.get("generation_status") != "cancelled":
         raise HTTPException(status_code=409, detail="Editing is paused while final paper checks are running")
     changed = False
     for s in p.get("sections", []):
@@ -2090,9 +2072,14 @@ async def toggle_important(
                 break
     if not changed:
         raise HTTPException(status_code=404, detail="Question not found")
-    await db.papers.update_one(
-        {"id": paper_id}, {"$set": {"sections": p["sections"]}}
-    )
+    if p.get("completion_engine") == "v2":
+        from completion_store import save_teacher_edit, OwnershipLost
+        try:
+            await save_teacher_edit(p, {"sections": p["sections"]})
+        except OwnershipLost as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    else:
+        await db.papers.update_one({"id": paper_id}, {"$set": {"sections": p["sections"]}})
     return {"ok": True, "sections": p["sections"]}
 
 
@@ -2161,6 +2148,11 @@ async def regenerate_question_endpoint(
             status_code=409, detail="Another question is being regenerated."
         )
 
+    if p.get("completion_engine") == "v2":
+        from completion_store import enqueue_continuation
+        context_excerpt, feedback_hints = await _paper_generation_inputs(p)
+        return await enqueue_continuation(p, {"context_excerpt": context_excerpt, "feedback_hints": feedback_hints,
+                                               "replace_question_id": question_id})
     regen = {
         "status": "generating",
         "question_id": question_id,
@@ -2204,6 +2196,10 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
+    if p.get("completion_engine") == "v2":
+        from completion_store import enqueue_continuation
+        context_excerpt, feedback_hints = await _paper_generation_inputs(p)
+        return await enqueue_continuation(p, {"context_excerpt": context_excerpt, "feedback_hints": feedback_hints})
     if p.get("generation_status") in {"queued", "pending", "generating", "reviewing"}:
         raise HTTPException(status_code=409, detail="Generation already in progress")
 
@@ -2266,10 +2262,13 @@ async def cancel_paper_generation(paper_id: str, user: dict = Depends(get_curren
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    if p.get("generation_status") not in {"queued", "pending", "generating", "reviewing"}:
+    if p.get("generation_status") not in {"queued", "pending", "generating", "reviewing"} and (p.get("completion") or {}).get("status") not in {"queued", "running"}:
         raise HTTPException(status_code=409, detail="Generation is no longer in progress")
-    await db.papers.update_one({"id": paper_id, "generation_status": {"$in": ["queued", "pending", "generating", "reviewing"]}}, {"$set": {
+    await db.papers.update_one({"id": paper_id, "generation_revision": p.get("generation_revision", 1)}, {"$set": {
         "generation_status": "cancelled",
+        "completion.status": "cancelled",
+        "completion.export_eligible": False,
+        "quality_review.status": "cancelled",
         "generation_error": None,
         "generation_progress.status": "cancelled",
         "generation_progress.phase": "cancelled",
@@ -2305,14 +2304,10 @@ async def paper_pdf(
         raise HTTPException(status_code=409, detail="Paper is still being generated")
     if p.get("generation_status") == "failed":
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
-    if (p.get("quality_review") or {}).get("status") not in (None, "passed"):
+    if ((p.get("completion") and not p["completion"].get("export_eligible"))
+        or (p.get("quality_review") or {}).get("status") not in (None, "passed")):
         raise HTTPException(status_code=409, detail="The paper draft is available, but final quality checks are still in progress")
     p["sections"], section_plan, repaired = _normalize_saved_paper_sections(p)
-    if repaired or section_plan != (p.get("section_plan") or []):
-        p["section_plan"] = section_plan
-        await db.papers.update_one(
-            {"id": paper_id}, {"$set": {"sections": p["sections"], "section_plan": section_plan}}
-        )
 
     def _diagram_loader(_qid: str, path: str):
         try:
@@ -2359,14 +2354,10 @@ async def paper_docx(
         raise HTTPException(status_code=409, detail="Paper is still being generated")
     if paper.get("generation_status") == "failed":
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
-    if (paper.get("quality_review") or {}).get("status") not in (None, "passed"):
+    if ((paper.get("completion") and not paper["completion"].get("export_eligible"))
+        or (paper.get("quality_review") or {}).get("status") not in (None, "passed")):
         raise HTTPException(status_code=409, detail="The paper draft is available, but final quality checks are still in progress")
     paper["sections"], section_plan, repaired = _normalize_saved_paper_sections(paper)
-    if repaired or section_plan != (paper.get("section_plan") or []):
-        paper["section_plan"] = section_plan
-        await db.papers.update_one(
-            {"id": paper_id}, {"$set": {"sections": paper["sections"], "section_plan": section_plan}}
-        )
 
     def asset_loader(path: str):
         try:
@@ -2637,70 +2628,9 @@ async def generate_missing_questions(
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    if (p.get("quality_review") or {}).get("status") == "running":
-        raise HTTPException(status_code=409, detail="Question repair is already running")
-
-    if p.get("generation_status") != "ready":
-        raise HTTPException(
-            status_code=400,
-            detail="Paper is not ready. Use 'Retry generation' instead.",
-        )
-    recovery = p.get("generation_recovery") or {}
-    if recovery.get("reason") == "allocation_metadata":
-        raise HTTPException(
-            status_code=409,
-            detail="Template recovery owns this paper. It will rebuild the complete template instead of adding an unplaced question.",
-        )
-    existing = count_questions(p.get("sections") or [])
-    if not existing:
-        raise HTTPException(
-            status_code=400,
-            detail="This paper has no questions to add to. "
-                   "Use 'Retry generation' instead.",
-        )
-    if _generation_is_live(p.get("topup") or {}):
-        raise HTTPException(
-            status_code=409, detail="Generation already in progress."
-        )
-
-    target = paper_target_count(p)
-    requested = req.count if req else None
-    if requested is None:
-        count = max(0, target - existing)
-    else:
-        try:
-            count = int(requested)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="count must be a number")
-        if count < 1:
-            raise HTTPException(status_code=400, detail="count must be at least 1")
-        count = min(count, TOPUP_MAX)
-
-    if count == 0:
-        # Nothing to do. Report it the way the solution endpoint does rather
-        # than erroring, so the UI can show an informational toast.
-        return {"status": "ready", "added": 0, "queued": 0}
-
-    topup = {
-        "status": "generating",
-        "started_at": utcnow_iso(),
-        "requested": count,
-        "added": 0,
-    }
-    await db.papers.update_one({"id": paper_id}, {"$set": {"topup": topup}})
-
+    from completion_store import enqueue_continuation
     context_excerpt, feedback_hints = await _paper_generation_inputs(p)
-    _spawn(
-        generate_missing_questions_background(
-            paper_id=paper_id,
-            owner_id=p["owner_id"],
-            count=count,
-            context_excerpt=context_excerpt,
-            feedback_hints=feedback_hints,
-        )
-    )
-    logger.info(f"Queued top-up of {count} question(s) for paper {paper_id}")
-    return {**topup, "queued": count}
+    return await enqueue_continuation(p, {"context_excerpt": context_excerpt, "feedback_hints": feedback_hints})
 
 
 @api_router.post("/papers/{paper_id}/retry-template-recovery")
@@ -2711,22 +2641,9 @@ async def retry_template_recovery(paper_id: str, user: dict = Depends(get_curren
         raise HTTPException(status_code=404, detail="Paper not found")
     if paper["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    recovery = paper.get("generation_recovery") or {}
-    if recovery.get("reason") != "allocation_metadata":
-        raise HTTPException(status_code=400, detail="This paper does not need template recovery.")
-    if recovery.get("status") in {"queued", "recovering"}:
-        raise HTTPException(status_code=409, detail="Template recovery is already in progress.")
+    from completion_store import enqueue_continuation
     context_excerpt, feedback_hints = await _paper_generation_inputs(paper)
-    queued = {
-        "status": "queued", "reason": "allocation_metadata", "attempt": 0,
-        "max_attempts": 2, "started_at": None, "finished_at": None,
-        "validation_summary": [],
-    }
-    await db.papers.update_one({"id": paper_id}, {"$set": {"generation_recovery": queued}})
-    _spawn(recover_template_generation_background(
-        paper_id, paper["owner_id"], context_excerpt=context_excerpt, feedback_hints=feedback_hints
-    ))
-    return queued
+    return await enqueue_continuation(paper, {"context_excerpt": context_excerpt, "feedback_hints": feedback_hints})
 
 
 @api_router.post("/papers/{paper_id}/repair-internal-choices")
@@ -2737,36 +2654,9 @@ async def repair_paper_internal_choices(paper_id: str, user: dict = Depends(get_
         raise HTTPException(status_code=404, detail="Paper not found")
     if paper["owner_id"] != user["id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
-    if (paper.get("quality_review") or {}).get("status") == "running":
-        raise HTTPException(status_code=409, detail="Question repair is already running")
-    if paper.get("generation_status") != "ready":
-        raise HTTPException(status_code=400, detail="Paper is not ready. Use 'Retry generation' instead.")
-    diagnostics = internal_choice_misses(
-        paper.get("sections") or [], paper.get("generation_requirements") or {}
-    )
-    if not diagnostics:
-        raise HTTPException(status_code=400, detail="This paper has no internal OR choices to repair.")
-    recovery = paper.get("generation_recovery") or {}
-    if recovery.get("status") in {"queued", "recovering"}:
-        raise HTTPException(status_code=409, detail="Another paper recovery is already in progress.")
-    if _generation_is_live(paper.get("topup") or {}) or _generation_is_live(
-        paper.get("regen") or {}, max_age=REGEN_LOCK_SECONDS
-    ):
-        raise HTTPException(status_code=409, detail="Question generation is already in progress.")
-
-    queued = {
-        "status": "queued", "reason": "internal_choices", "attempt": 0,
-        "max_attempts": 1, "started_at": utcnow_iso(), "finished_at": None,
-        "validation_summary": [], "diagnostics": diagnostics,
-    }
-    await db.papers.update_one({"id": paper_id}, {"$set": {"generation_recovery": queued}})
+    from completion_store import enqueue_continuation
     context_excerpt, feedback_hints = await _paper_generation_inputs(paper)
-    _spawn(repair_internal_choices_background(
-        paper_id, paper["owner_id"], context_excerpt=context_excerpt,
-        feedback_hints=feedback_hints,
-        solution_is_live=_generation_is_live(paper.get("solution") or {}),
-    ))
-    return queued
+    return await enqueue_continuation(paper, {"context_excerpt": context_excerpt, "feedback_hints": feedback_hints})
 
 
 @api_router.post("/papers/solutions/bulk-generate")

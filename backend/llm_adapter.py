@@ -35,7 +35,7 @@ import threading
 import time
 from typing import Any
 
-from review_budget import current as current_review_budget, reserve_provider_attempt
+from review_budget import current as current_review_budget, reserve_persisted_provider_attempt, reserve_thread_provider_retry
 
 import boto3
 from botocore.config import Config
@@ -679,7 +679,7 @@ async def chat_complete(
         for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
             try:
                 # Retries and fallback models are independently billable.
-                reserve_provider_attempt()
+                await reserve_persisted_provider_attempt()
                 budget = current_review_budget()
                 timeout = min(PER_CALL_TIMEOUT, budget.remaining_seconds()) if budget else PER_CALL_TIMEOUT
                 if timeout <= 0:
@@ -830,6 +830,8 @@ def _generate_image_hf(prompt: str) -> bytes | None:
 
     while True:
         attempt += 1
+        if attempt > 1:
+            reserve_thread_provider_retry()
         remaining = deadline - time.perf_counter()
         if remaining <= 0:
             raise TimeoutError(
@@ -967,6 +969,8 @@ def _generate_image_vertex(prompt: str) -> bytes | None:
     attempt = 0
     while True:
         attempt += 1
+        if attempt > 1:
+            reserve_thread_provider_retry()
         remaining = deadline - time.perf_counter()
         if remaining <= 0:
             raise TimeoutError(
@@ -1121,6 +1125,8 @@ def _generate_image_openrouter(prompt: str) -> bytes | None:
 
     while True:
         attempt += 1
+        if attempt > 1:
+            reserve_thread_provider_retry()
         remaining = deadline - time.perf_counter()
         if remaining <= 0:
             raise TimeoutError(
@@ -1405,9 +1411,11 @@ async def generate_diagram(spec: str | dict) -> bytes | None:
         # Held across the whole call, so the ceiling counts requests actually in
         # flight at the provider — waiting here is the point, not a cost.
         async with _diagram_semaphore():
+            await reserve_persisted_provider_attempt()
+            budget = current_review_budget()
             return await asyncio.wait_for(
                 asyncio.to_thread(_generate_image_sync, _diagram_prompt(spec)),
-                timeout=_diagram_timeout(),
+                timeout=min(_diagram_timeout(), budget.remaining_seconds()) if budget else _diagram_timeout(),
             )
     except Exception as e:  # noqa: BLE001
         label = spec.get("figure", "") if isinstance(spec, dict) else str(spec)
@@ -1445,12 +1453,17 @@ def _repair_json_string_escapes(text: str) -> str:
                 and index + 5 < len(text)
                 and all(c in "0123456789abcdefABCDEF" for c in text[index + 2:index + 6])
             )
-            if following in '"\\/bfnrt' or unicode_escape:
+            latex_command = re.match(r'\\(?:theta|tau|times|text|frac|beta|begin|nu|nabla|rho|right)\b', text[index:])
+            if (following in '"\\/bfnrt' or unicode_escape) and not latex_command:
                 out.append(char)
             else:
                 # Keep the visible character, but make its backslash literal.
                 out.append("\\\\")
-            index += 1
+            if following == "\\":
+                out.append(following)
+                index += 2
+            else:
+                index += 1
             continue
         if char in "\r\n":
             out.append("\\n")

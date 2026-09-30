@@ -15,14 +15,26 @@ MAX_CONCURRENCY = max(1, int(os.environ.get("PAPER_REVIEW_CONCURRENCY", "2")))
 DIAGRAM_JOB_CONCURRENCY = 1
 
 
-async def _keep_lease(job_id: str, worker_id: str) -> None:
+async def _keep_lease(job_id: str, worker_id: str, lease_token: str | None = None) -> None:
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
-        if not await heartbeat(job_id, worker_id):
+        if not await heartbeat(job_id, worker_id, lease_token):
             return
 
 
 async def process_job(job: dict, worker_id: str) -> None:
+    from firestore_compat import worker_write_lease
+    snapshots = await db.paper_review_jobs._matching_snapshots({"id": job["id"]})
+    if not snapshots:
+        return
+    token = worker_write_lease.set({"job": job, "reference": snapshots[0][0].reference})
+    try:
+        await _process_job(job, worker_id)
+    finally:
+        worker_write_lease.reset(token)
+
+
+async def _process_job(job: dict, worker_id: str) -> None:
     paper_id = job["paper_id"]
     paper = await db.papers.find_one({"id": paper_id}, {"_id": 0})
     if not paper or paper.get("generation_status") == "cancelled":
@@ -31,11 +43,32 @@ async def process_job(job: dict, worker_id: str) -> None:
     if int(paper.get("generation_revision") or 1) != int(job.get("revision") or 1):
         await complete(job, status="superseded", stage="superseded")
         return
+    if job.get("engine_version") == "v2":
+        from paper_completion import run_completion
+        from completion_store import OwnershipLost
+        lease = asyncio.create_task(_keep_lease(job["id"], worker_id, job.get("lease_token")))
+        try:
+            await run_completion(job)
+            current = await db.papers.find_one({"id": paper_id}, {"_id": 0})
+            ready = (current or {}).get("completion", {}).get("ready", False)
+            await complete(job, status="completed" if ready else "needs_review", stage="ready" if ready else "incomplete")
+        except OwnershipLost:
+            logger.info("Completion ownership lost for %s", paper_id)
+        except Exception as exc:
+            logger.exception("Completion failed for %s", paper_id)
+            await retry_or_needs_review(job, str(exc)[:500])
+        finally:
+            lease.cancel()
+            try:
+                await lease
+            except asyncio.CancelledError:
+                pass
+        return
     if job.get("kind") == "paper_diagram":
         if paper.get("generation_status") != "ready":
             await complete(job, status="cancelled", stage="not_ready")
             return
-        lease = asyncio.create_task(_keep_lease(job["id"], worker_id))
+        lease = asyncio.create_task(_keep_lease(job["id"], worker_id, job.get("lease_token")))
         try:
             await generate_diagrams_background(paper_id, paper.get("owner_id", ""))
             await complete(job, status="completed", stage="ready")
@@ -55,18 +88,22 @@ async def process_job(job: dict, worker_id: str) -> None:
         "quality_review.status": "running", "quality_review.stage": "generating",
         "quality_review.job_id": job["id"], "quality_review.started_at": utcnow_iso(),
     }})
-    lease = asyncio.create_task(_keep_lease(job["id"], worker_id))
+    lease = asyncio.create_task(_keep_lease(job["id"], worker_id, job.get("lease_token")))
     try:
         payload = dict(job["payload"])
         # Blueprint requirements can contain nested arrays, which Firestore
         # rejects in an arbitrary job payload.  They already live safely on
         # the paper document through firestore_compat's dedicated encoder.
         payload.setdefault("saved_requirements", paper.get("generation_requirements"))
-        await generate_paper_background(**payload)
+        if payload.get("competitive_request"):
+            from competitive_routes import _generate_competitive_paper, CompetitivePaperRequest
+            await _generate_competitive_paper(paper_id, CompetitivePaperRequest(**payload["competitive_request"]), paper["owner_id"])
+        else:
+            await generate_paper_background(**payload)
         current = await db.papers.find_one({"id": paper_id}, {"_id": 0, "generation_status": 1, "generation_error": 1, "diagrams_pending": 1, "quality_review": 1})
         review_meta = (current or {}).get("quality_review") or {}
         budget = review_meta.get("budget") or {}
-        await db.paper_review_jobs.update_one({"id": job["id"], "status": "leased"}, {"$set": {
+        await db.paper_review_jobs.update_one({"id": job["id"], "status": "leased", "worker_id": worker_id, "lease_token": job.get("lease_token")}, {"$set": {
             "provider_calls_used": int(budget.get("provider_calls_used") or 0),
             "provider_calls_limit": int(budget.get("provider_calls_limit") or 12),
             "failed_gates": list(review_meta.get("failed_gates") or []),
