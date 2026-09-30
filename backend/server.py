@@ -1797,6 +1797,11 @@ async def update_paper(
         set_fields["title"] = update.title
     if update.instructions is not None:
         set_fields["instructions"] = update.instructions
+        displayed = printable_instructions(p.get("instructions"),
+            template_instructions=printable_template_instructions(p),
+            instructions_edited=bool(p.get("instructions_edited")))
+        if update.instructions.strip() != displayed.strip():
+            set_fields["instructions_edited"] = True
     if update.duration_minutes is not None:
         set_fields["duration_minutes"] = int(update.duration_minutes)
     if update.total_marks is not None:
@@ -2037,6 +2042,7 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
     p["instructions"] = printable_instructions(
         p.get("instructions"),
         template_instructions=printable_template_instructions(p),
+        instructions_edited=bool(p.get("instructions_edited")),
         custom_instructions=p.get("custom_instructions") or "",
     )
     hydrate_section_instructions(p)

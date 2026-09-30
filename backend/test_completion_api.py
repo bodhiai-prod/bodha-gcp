@@ -62,3 +62,45 @@ def test_reading_paper_never_starts_or_persists_recovery():
         papers.update_one.assert_not_awaited()
         spawn.assert_not_called()
     asyncio.run(run())
+
+
+def test_paper_reads_upgrade_generated_summaries_but_preserve_explicit_edits():
+    async def run():
+        for edited in (False, True):
+            paper = paper_fixture()
+            paper['generation_requirements']['blueprint']['id'] = 'isc12-mathematics'
+            paper['generation_requirements']['blueprint']['student_instructions'] = 'Old summary.'
+            paper['instructions'] = 'Saved directions.'
+            paper['instructions_edited'] = edited
+            papers = type('P', (), {'find_one': AsyncMock(return_value=paper), 'update_one': AsyncMock()})()
+            class Textbooks:
+                def find(self, *args):
+                    return self
+                async def to_list(self, *args):
+                    return []
+            with patch.object(server, 'db', type('DB', (), {'papers': papers, 'textbooks': Textbooks()})()):
+                result = await server.get_paper('paper', {'id': 'teacher', 'role': 'teacher'})
+            if edited:
+                assert result['instructions'] == 'Saved directions.'
+            else:
+                assert '12. Mathematical tables' in result['instructions']
+                assert 'Old summary.' not in result['instructions']
+            papers.update_one.assert_not_awaited()
+    asyncio.run(run())
+
+
+def test_only_changed_teacher_instructions_are_marked_as_edited():
+    async def run():
+        for changed in (False, True):
+            paper = paper_fixture()
+            paper['generation_requirements']['blueprint']['id'] = 'isc12-mathematics'
+            paper['instructions'] = 'Generated summary.'
+            displayed = server.printable_template_instructions(paper)
+            papers = type('P', (), {'find_one': AsyncMock(return_value=paper), 'update_one': AsyncMock()})()
+            with patch.object(server, 'db', type('DB', (), {'papers': papers})()), \
+                 patch.object(server, 'get_paper', AsyncMock(return_value=paper)):
+                await server.update_paper('paper', server.PaperUpdate(
+                    instructions='Teacher directions.' if changed else displayed), {'id': 'teacher', 'role': 'teacher'})
+            fields = papers.update_one.call_args.args[1]['$set']
+            assert fields.get('instructions_edited', False) == changed
+    asyncio.run(run())

@@ -838,6 +838,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> 
     instructions = printable_instructions(
         paper.get("instructions"),
         template_instructions=printable_template_instructions(paper),
+        instructions_edited=bool(paper.get("instructions_edited")),
         custom_instructions=paper.get("custom_instructions") or "",
     )
     story.append(

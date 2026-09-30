@@ -300,6 +300,7 @@ async def run_completion(job, *, store=None):
             if publish:
                 fields.update({'sections': visible, 'question_count': len(questions(visible)),
                                'instructions': printable_instructions(paper.get('instructions', ''),
+                                   instructions_edited=bool(paper.get('instructions_edited')),
                                    template_instructions=printable_template_instructions({'generation_requirements': candidate['spec']}))})
         await store.save(copy.deepcopy(candidate), fields)
 

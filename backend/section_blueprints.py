@@ -5,6 +5,7 @@ Legacy counts refer to numbered question blocks.  Current official templates
 also declare scored *slots*: a slot is a printable subpart with its own topic
 allocation, while its parent question remains one printed question.
 """
+from board_instructions import candidate_content, detailed_template_prompt
 from collections import Counter
 from copy import deepcopy
 import hashlib
@@ -101,7 +102,7 @@ def _isc_printable_content(subject: str) -> dict:
             "8. Section D consists of three questions of five marks each.\n"
             "9. Internal choices have been provided in one question each in Sections B, C and D.\n"
             "10. The intended marks for questions are given in brackets [ ].\n"
-            "11. Draw neat and properly labelled diagrams wherever necessary."
+            "11. Draw diagrams in pencil wherever necessary, with clear labels."
         )
     if subject == "mathematics":
         sections = {
@@ -121,29 +122,7 @@ def _official_printable_content(row: dict) -> dict:
         return {}
     if row.get("family") == "isc12":
         return _isc_printable_content(str(row.get("subject_variant") or "").casefold())
-    if row.get("family") == "cbse10" and str(row.get("subject_variant", "")).startswith("Mathematics"):
-        instructions = "\n".join([
-            "1. This question paper contains 38 questions. All questions are compulsory.",
-            "2. The paper is divided into five sections: A, B, C, D and E.",
-            "3. Section A contains 18 multiple-choice questions and 2 assertion-reason questions of 1 mark each.",
-            "4. Section B contains 5 questions of 2 marks each. Section C contains 6 questions of 3 marks each. Section D contains 4 questions of 5 marks each.",
-            "5. Section E contains 3 case-study questions of 4 marks each, with subparts carrying 1, 1 and 2 marks.",
-            "6. There is no overall choice. Internal choices are provided in two questions each in Sections B, C and D and in the 2-mark subpart of each question in Section E. Attempt only one alternative wherever an internal choice is given.",
-            "7. Draw neat figures wherever required. Use of a calculator is not allowed.",
-        ])
-    else:
-        instructions = (
-            "Read the following instructions carefully.\n"
-            "Follow the directions given under each section, including how many questions to attempt.\n"
-            "Marks for each question or part are shown in brackets.\n"
-            "Where an internal choice is given, attempt only one alternative."
-        )
-    sections = {}
-    for section in row.get("sections") or []:
-        section_id = section.get("id")
-        title = section.get("title") or f"Section {section_id}"
-        sections[section_id] = f"{title}. Answer only the questions and choices specified for this section."
-    return {"instructions": instructions, "sections": sections}
+    return candidate_content(row) or {}
 
 
 class BlueprintGroup(BaseModel):
@@ -417,35 +396,34 @@ def catalog():
         row["student_instructions"] = printable.get("instructions", "")
         section_instructions = printable.get("sections", {})
         for section in row.get("sections") or []:
-            section["section_instructions"] = section.get("section_instructions") or section_instructions.get(section.get("id"), "")
+            section["section_instructions"] = section_instructions.get(section.get("id")) or section.get("section_instructions", "")
+        if not row.get("legacy"):
+            row["template"] = detailed_template_prompt(row)
     return rows
 
 
-def is_template_instruction_placeholder(value: str) -> bool:
-    return bool(re.search(
-        r"Read the following instructions carefully\. This is the .+? template for ",
-        value, re.I,
-    ))
-
-
 def printable_template_instructions(paper: dict) -> str:
-    """Read student instructions from the compiled blueprint, not model output."""
+    """Resolve maintained board directions, or a custom blueprint snapshot."""
     blueprint = (paper.get("generation_requirements") or {}).get("blueprint") or {}
+    row = next((row for row in catalog() if row.get("id") == blueprint.get("id")), None)
+    # Built-in candidate directions are maintained centrally. Older snapshots
+    # may contain placeholders or abbreviated instructions, so refresh prose
+    # without rewriting their persisted section/question allocation contract.
+    if row and not row.get("legacy"):
+        return row["student_instructions"]
     fallback = _PRINTABLE_TEMPLATE_CONTENT.get(blueprint.get("id"), {}).get("instructions", "")
-    saved = str(blueprint.get("student_instructions") or "").strip()
-    if not saved or is_template_instruction_placeholder(saved):
-        # Repair old snapshots without changing their question/marks contract.
-        row = next((row for row in catalog() if row.get("id") == blueprint.get("id")), None)
-        return str((row or {}).get("student_instructions") or fallback).strip()
-    return saved
+    return str(blueprint.get("student_instructions") or fallback).strip()
 
 
 def hydrate_section_instructions(paper: dict) -> None:
     """Attach known template section lead-ins to persisted or legacy sections."""
     blueprint = (paper.get("generation_requirements") or {}).get("blueprint") or {}
     fallback = _PRINTABLE_TEMPLATE_CONTENT.get(blueprint.get("id"), {}).get("sections", {})
+    row = next((row for row in catalog() if row.get("id") == blueprint.get("id")), None)
+    if row and not row.get("legacy"):
+        fallback = {section["id"]: section.get("section_instructions", "") for section in row["sections"]}
     by_id = {
-        str(s.get("id")): s.get("section_instructions") or fallback.get(s.get("id"), "")
+        str(s.get("id")): fallback.get(s.get("id")) or s.get("section_instructions", "")
         for s in blueprint.get("sections") or []
     }
     for section in paper.get("sections") or []:

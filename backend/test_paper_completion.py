@@ -34,10 +34,11 @@ class MemoryStore:
 
 
 class CompletionTests(unittest.IsolatedAsyncioTestCase):
-    async def trajectory(self, initial_count, instructions=None):
+    async def trajectory(self, initial_count, instructions=None, instructions_edited=True):
         paper = paper_fixture()
         if instructions is not None:
             paper["instructions"] = instructions
+            paper["instructions_edited"] = instructions_edited
             paper["generation_requirements"]["blueprint"]["student_instructions"] = "Blueprint fallback."
         store = MemoryStore(paper)
         async def generate(slots, candidate, paper, payload, ref):
@@ -79,6 +80,12 @@ class CompletionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(publications)
         self.assertTrue(all(fields['instructions'] == saved for fields in publications))
         self.assertEqual(store.paper['instructions'], saved)
+
+    async def test_model_summary_never_replaces_board_instructions_during_publication(self):
+        store = await self.trajectory(40, instructions="Answer all questions.", instructions_edited=False)
+        publications = [fields for fields in store.history if 'instructions' in fields]
+        self.assertTrue(publications)
+        self.assertTrue(all(fields['instructions'] == 'Blueprint fallback.' for fields in publications))
 
     async def test_40_to_32_to_41_with_or(self):
         await self.trajectory(40)

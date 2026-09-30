@@ -48,18 +48,14 @@ def hydrate_question_types(paper: dict) -> None:
             question["type"] = canonical_question_type(question.get("type"), "concept")
 
 
-def printable_instructions(raw: Any, *, template_instructions: Any = "", custom_instructions: str = "") -> str:
-    """Return saved student-facing instructions with a deterministic fallback.
+def printable_instructions(raw: Any, *, template_instructions: Any = "", custom_instructions: str = "", instructions_edited: bool = False) -> str:
+    """Board directions outrank model prose; explicit teacher edits outrank both.
 
-    A teacher's saved edit is authoritative.  ``custom_instructions`` remains
-    generation-only, but it must not cause a separately saved paper
-    instruction to disappear when the paper is loaded or exported.
+    Generation-only custom instructions never become printed directions.
+    Papers without a board blueprint retain their saved instructions.
     """
     saved = str(raw or "").strip()
-    from section_blueprints import is_template_instruction_placeholder
     template = str(template_instructions or "").strip()
-    if saved and not (template and is_template_instruction_placeholder(saved)):
+    if saved and instructions_edited:
         return saved
-    if template:
-        return template
-    return DEFAULT_INSTRUCTIONS
+    return template or saved or DEFAULT_INSTRUCTIONS

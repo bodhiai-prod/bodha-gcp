@@ -857,6 +857,7 @@ def render_paper_docx(
     instructions = printable_instructions(
         paper.get("instructions"),
         template_instructions=printable_template_instructions(paper),
+        instructions_edited=bool(paper.get("instructions_edited")),
         custom_instructions=paper.get("custom_instructions") or "",
     )
     if not include_solutions:

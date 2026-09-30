@@ -220,3 +220,4 @@ frontend/plugins/
 
 # Completion engine implementation and release gates
 !docs/paper-completion.md
+!docs/board-instructions.md

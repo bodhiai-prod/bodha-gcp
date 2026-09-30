@@ -4,7 +4,7 @@ from zipfile import ZipFile
 from PIL import Image
 
 from docx_utils import render_paper_docx, render_solution_docx
-from export_utils import DEFAULT_INSTRUCTIONS, canonical_question_type, format_mark, hydrate_question_types, printable_instructions
+from export_utils import canonical_question_type, format_mark, hydrate_question_types, printable_instructions
 
 
 def _paper():
@@ -220,7 +220,8 @@ def test_marks_instructions_and_cases_are_normalized():
     data = render_paper_docx(paper)
     with ZipFile(BytesIO(data)) as archive:
         document_xml = archive.read("word/document.xml").decode("utf-8")
-    assert DEFAULT_INSTRUCTIONS in document_xml
+    # A normal paper has no board directions; retain its saved instructions.
+    assert "Ensure proper LaTeX formatting." in document_xml
     assert "[5]" in document_xml
     assert "[5.0]" not in document_xml
     assert "Total Marks: 10.0" not in document_xml
@@ -263,7 +264,7 @@ def test_export_text_helpers():
         custom_instructions="Show working.",
     ) == "Show working. Ensure proper LaTeX formatting."
     assert printable_instructions("", template_instructions="Board instruction.") == "Board instruction."
-    assert printable_instructions("Teacher-edited instruction.", template_instructions="Board instruction.") == "Teacher-edited instruction."
+    assert printable_instructions("Teacher-edited instruction.", template_instructions="Board instruction.", instructions_edited=True) == "Teacher-edited instruction."
     assert canonical_question_type("problem") == "concept"
     assert canonical_question_type("numerical") == "application"
     legacy = {"sections": [{"questions": [{"type": "problem"}]}]}

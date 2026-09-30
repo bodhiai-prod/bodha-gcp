@@ -247,7 +247,7 @@ export default function PaperView() {
     try {
       const payload = {
         title: draft.title,
-        instructions: draft.instructions,
+        ...(draft.instructions !== paper.instructions ? { instructions: draft.instructions } : {}),
         duration_minutes: Number(draft.duration_minutes),
         total_marks: Number(draft.total_marks),
         sections: draft.sections.map((s) => ({
