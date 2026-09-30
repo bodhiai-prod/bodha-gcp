@@ -108,18 +108,37 @@ def compile_normal_plan(spec: dict, topics: list[dict], total_marks: int) -> dic
     if total <= 0:
         raise NormalContractError("A normal paper requires a positive question count.")
 
-    topic_rows = [row for row in topics or [] if str(row.get("name") or "").strip()]
-    if len(topic_rows) > total:
-        raise NormalContractError(
-            f"{len(topic_rows)} topics are selected for {total} questions. "
-            "Reduce the selected topics or increase the question count."
-        )
-    per_topic = _topic_allocation(topic_rows, total)
-    allocated_topics = [row for row, count in zip(topic_rows, per_topic) for _ in range(count)]
     type_names = _expanded_counts(spec.get("type_counts") or {"concept": total}, total, order=TYPE_ORDER)
     format_names = _expanded_counts(
         spec.get("format_counts") or {"short_answer": total}, total
     )
+    format_topic_allocations = spec.get("format_topic_allocations")
+    if format_topic_allocations is not None:
+        topics_by_format: dict[str, list[dict]] = {}
+        for row in format_topic_allocations:
+            topics_by_format.setdefault(str(row.get("format") or ""), []).extend(
+                [row] * int(row.get("count") or 0)
+            )
+        allocated_topics = []
+        used: Counter = Counter()
+        for fmt in format_names:
+            index = used[fmt]
+            candidates = topics_by_format.get(fmt) or []
+            if index >= len(candidates):
+                raise NormalContractError(f"Topic assignments for {fmt} do not match its question count.")
+            allocated_topics.append(candidates[index])
+            used[fmt] += 1
+        if any(used[fmt] != len(rows) for fmt, rows in topics_by_format.items()):
+            raise NormalContractError("Format-topic assignments include questions outside the resolved format mix.")
+    else:
+        topic_rows = [row for row in topics or [] if str(row.get("name") or "").strip()]
+        if len(topic_rows) > total:
+            raise NormalContractError(
+                f"{len(topic_rows)} topics are selected for {total} questions. "
+                "Reduce the selected topics or increase the question count."
+            )
+        per_topic = _topic_allocation(topic_rows, total)
+        allocated_topics = [row for row, count in zip(topic_rows, per_topic) for _ in range(count)]
     marks = _slot_marks(format_names, int(total_marks))
 
     requested_diagrams = spec.get("diagram_count")
@@ -153,8 +172,8 @@ def compile_normal_plan(spec: dict, topics: list[dict], total_marks: int) -> dic
                 spec.get("section_difficulty") or {}, qtype, section_title
             )
             or (spec.get("format_difficulty") or {}).get(format_names[index])
-            or (spec.get("topic_difficulty") or {}).get(topic_name)
             or topic.get("difficulty")
+            or (spec.get("topic_difficulty") or {}).get(topic_name)
             or spec.get("difficulty")
             or "medium"
         )
@@ -188,6 +207,10 @@ def compile_normal_plan(spec: dict, topics: list[dict], total_marks: int) -> dic
         "sections": sections,
         "slots": slots,
         "topic_counts": dict(Counter(slot["topic"] for slot in slots)),
+        "format_topic_counts": {
+            f"{fmt}\u0000{topic}": count
+            for (fmt, topic), count in Counter((slot["format"], slot["topic"]) for slot in slots).items()
+        },
     }
 
 

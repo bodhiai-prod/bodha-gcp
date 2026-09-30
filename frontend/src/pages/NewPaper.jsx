@@ -7,6 +7,7 @@ import { buildTopicPayload, topicKey } from "@/lib/topicDifficulty";
 import { apportionCounts } from "@/lib/questionCounts";
 import Header from "@/components/Header";
 import SectionBlueprintEditor from "@/components/SectionBlueprintEditor";
+import FormatTopicAllocator, { allocationStatus } from "@/components/FormatTopicAllocator";
 import ConfigurationSummary from "@/components/ConfigurationSummary";
 import SavedPaperConfigurations from "@/components/SavedPaperConfigurations";
 import { normalizeBucketAllocations, retainCompatibleAllocations } from "@/lib/sectionBlueprint";
@@ -69,11 +70,24 @@ export default function NewPaper() {
     DEFAULT_FORMATS.map((f) => ({ ...f, value: f.default, custom: false }))
   );
   const [newFormatLabel, setNewFormatLabel] = useState("");
+  const [formatTopicAllocations, setFormatTopicAllocations] = useState([]);
+  const [formatTopicStage, setFormatTopicStage] = useState("mix");
   const effectiveQuestionCount = formatMode === "counts"
     ? formats.reduce((sum, f) => sum + (exactFormatCounts[f.key] || 0), 0)
     : Number(questionCount);
   const formatQuestionCounts = formatMode === "counts" ? exactFormatCounts :
     apportionCounts(Object.fromEntries(formats.map((f) => [f.key, f.value])), effectiveQuestionCount);
+  const activeFormats = useMemo(() => formats
+    .map((format) => ({ ...format, count: Number(formatQuestionCounts[format.key] || 0) }))
+    .filter((format) => format.count > 0), [formats, formatQuestionCounts]);
+  const formatTopicStatus = useMemo(
+    () => allocationStatus(activeFormats, formatTopicAllocations),
+    [activeFormats, formatTopicAllocations]
+  );
+  const allocatedTopics = useMemo(() => Array.from(new Map(formatTopicAllocations.map((row) => [
+    `${row.textbook_id}:${row.topic_id}`,
+    { textbook_id: row.textbook_id, topic_id: row.topic_id, name: row.name, parent_topic: row.parent_topic || "", weight: 5 },
+  ])).values()), [formatTopicAllocations]);
 
   const application = useMemo(
     () => Math.max(0, 100 - info - concept),
@@ -105,14 +119,16 @@ export default function NewPaper() {
     diagram_count: diagramCount === "" ? null : Number(diagramCount),
     distribution: { information: Number(info), concept: Number(concept), application: Number(application) },
     format_distribution: formatMode === "percentages" ? Object.fromEntries(formats.filter((f) => Number(f.value) > 0).map((f) => [f.key, Number(f.value)])) : null,
+    format_counts: formatMode === "counts" ? Object.fromEntries(activeFormats.map((f) => [f.key, f.count])) : null,
+    format_topic_allocations: blueprint ? null : formatTopicAllocations,
     custom_instructions: customInstructions.trim() || null,
     section_blueprint: sectionBlueprint.trim() || null,
     blueprint_id: blueprint?.id || null,
     blueprint_version: blueprint?.version || null,
     section_topic_allocations: blueprint ? blueprintAllocations : null,
     textbook_ids: selectedTbIds,
-    topics: selectedTopics.map(({ key, ...topic }) => ({ ...topic, difficulty: topicDifficulties[key] || null })),
-  }), [difficulty, duration, totalMarks, effectiveQuestionCount, diagramCount, info, concept, application, formatMode, formats, customInstructions, sectionBlueprint, blueprint, blueprintAllocations, selectedTbIds, selectedTopics, topicDifficulties]);
+    topics: blueprint ? selectedTopics.map(({ key, ...topic }) => ({ ...topic, difficulty: topicDifficulties[key] || null })) : allocatedTopics,
+  }), [difficulty, duration, totalMarks, effectiveQuestionCount, diagramCount, info, concept, application, formatMode, formats, activeFormats, formatTopicAllocations, customInstructions, sectionBlueprint, blueprint, blueprintAllocations, selectedTbIds, selectedTopics, topicDifficulties, allocatedTopics]);
 
   const applySavedConfiguration = (config) => {
     const available = new Set(textbooks.map((book) => book.id));
@@ -125,7 +141,15 @@ export default function NewPaper() {
     setDiagramCount(config.diagram_count == null ? "" : config.diagram_count);
     setInfo(Number(config.distribution?.information ?? 40));
     setConcept(Number(config.distribution?.concept ?? 40));
-    if (config.format_distribution) setFormats(DEFAULT_FORMATS.map((format) => ({ ...format, value: Number(config.format_distribution[format.key] || 0), custom: false })));
+    const savedMix = config.format_distribution || config.format_counts;
+    if (savedMix) {
+      const defaults = Object.fromEntries(DEFAULT_FORMATS.map((format) => [format.key, format]));
+      setFormats(Object.entries(savedMix).map(([key, value]) => ({ ...(defaults[key] || { key, label: key.replaceAll("_", " "), default: 0 }), value: config.format_distribution ? Number(value) : 0, custom: !defaults[key] })));
+      if (config.format_counts) setExactFormatCounts(config.format_counts);
+      setFormatMode(config.format_counts ? "counts" : "percentages");
+    }
+    setFormatTopicAllocations(config.format_topic_allocations || []);
+    setFormatTopicStage(config.format_topic_allocations?.length ? "confirmed" : "mix");
     setCustomInstructions(config.custom_instructions || "");
     setSectionBlueprint(config.section_blueprint || "");
     setBlueprint(config.blueprint_id ? blueprintCatalog.find((item) => item.id === config.blueprint_id && (!config.blueprint_version || item.version === config.blueprint_version)) || null : null);
@@ -302,8 +326,8 @@ export default function NewPaper() {
     if (!title) return toast.error("Title required");
     if (sectionBlueprint.trim() && !blueprint) return toast.error("Analyze your blueprint before generating.");
     if (blueprint && (previewLoading || previewError || !preview?.valid || preview.requestKey !== requestKey)) return toast.error("Resolve the blueprint allocation errors before generating.");
-    if (!blueprint && selectedTopics.length === 0)
-      return toast.error("Select at least one topic");
+    if (!blueprint && !formatTopicStatus.complete)
+      return toast.error("Assign every question format to topics before generating");
     if (!promptOverride && (!Number.isInteger(effectiveQuestionCount) || effectiveQuestionCount < 1 || effectiveQuestionCount > 200))
       return toast.error("Choose between 1 and 200 questions");
     if (!promptOverride && effectiveQuestionCount > Number(totalMarks))
@@ -333,7 +357,7 @@ export default function NewPaper() {
         subject: first.subject || "",
         class_name: first.class_name || "",
         textbook_ids: selectedTbIds,
-        topics: buildTopicPayload(selectedTopics, topicDifficulties, difficulty),
+        topics: blueprint ? buildTopicPayload(selectedTopics, topicDifficulties, difficulty) : allocatedTopics,
         difficulty,
         duration_minutes: Number(duration),
         total_marks: Number(totalMarks),
@@ -343,6 +367,7 @@ export default function NewPaper() {
         diagram_count: diagramCount === "" ? null : Number(diagramCount),
         distribution: { information: info, concept, application },
         format_distribution: fmtPayload,
+        format_topic_allocations: blueprint ? null : formatTopicAllocations,
         custom_instructions: customInstructions.trim() || null,
         section_blueprint: sectionBlueprint.trim() || null,
         blueprint_id: blueprint?.id || null,
@@ -429,13 +454,14 @@ export default function NewPaper() {
   }, [activeTopicExtractionIds.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
   const requestKey = JSON.stringify({
     title, subject: tbDetails[selectedTbIds[0]]?.subject || "", class_name: tbDetails[selectedTbIds[0]]?.class_name || "",
-    textbook_ids: selectedTbIds, topics: buildTopicPayload(selectedTopics, topicDifficulties, difficulty),
+    textbook_ids: selectedTbIds, topics: blueprint ? buildTopicPayload(selectedTopics, topicDifficulties, difficulty) : allocatedTopics,
     difficulty, duration_minutes: Number(duration), total_marks: Number(totalMarks),
     total_questions: promptOverride ? null : effectiveQuestionCount,
     format_counts: !promptOverride && formatMode === "counts" ? exactFormatCounts : null,
     diagram_count: diagramCount === "" ? null : Number(diagramCount),
     distribution: { information: info, concept, application },
     format_distribution: !promptOverride && formatMode === "percentages" ? Object.fromEntries(formats.filter(f => f.value > 0).map(f => [f.key, f.value])) : null,
+    format_topic_allocations: blueprint ? null : formatTopicAllocations,
     custom_instructions: customInstructions.trim() || null, section_blueprint: sectionBlueprint.trim() || null,
     blueprint_id: blueprint?.id || null, blueprint_version: blueprint?.version || null,
     section_topic_allocations: blueprint ? blueprintAllocations : null,
@@ -455,12 +481,12 @@ export default function NewPaper() {
         return rows;
       }, {});
     }
-    return selectedTopics.reduce((rows, topic) => {
+    return formatTopicAllocations.reduce((rows, topic) => {
       const label = topic.parent_topic ? `${topic.parent_topic} › ${topic.name}` : topic.name;
-      rows[label] = (rows[label] || 0) + 1;
+      rows[label] = (rows[label] || 0) + topic.count;
       return rows;
     }, {});
-  }, [blueprintAllocations, blueprint, selectedTopics, tbDetails]);
+  }, [blueprintAllocations, blueprint, formatTopicAllocations, tbDetails]);
   const sectionTopicOverview = useMemo(() => {
     if (!blueprint) return [];
     return blueprint.sections.map(section => {
@@ -675,6 +701,7 @@ export default function NewPaper() {
 
             {step === 1 && <>
             <ExpandableCard id="format-mix" title="Question format mix" summary={promptOverride ? "Controlled by paper blueprint" : `${effectiveQuestionCount} questions · ${formats.filter(f => (formatQuestionCounts[f.key] || 0) > 0).length} active formats`} disabled={promptOverride}>
+              {formatTopicStage === "mix" ? <>
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                 <div className="overline">// QUESTION FORMAT MIX</div>
                 {promptOverride ? (
@@ -784,6 +811,13 @@ export default function NewPaper() {
                   <Plus size={14} weight="bold" /> Add
                 </button>
               </div>
+              {!promptOverride && <button type="button" className="qp-btn qp-btn-primary w-full mt-4" data-testid="format-topics-next"
+                disabled={!activeFormats.length || (formatMode === "percentages" && formatTotal !== 100)}
+                onClick={() => setFormatTopicStage("allocate")}>Next: assign topics<ArrowRight size={16} weight="bold" /></button>}
+              </> : <FormatTopicAllocator formats={activeFormats} allocations={formatTopicAllocations}
+                onChange={(next) => { setFormatTopicAllocations(next); setFormatTopicStage("allocate"); }} bookIds={selectedTbIds} details={tbDetails}
+                difficulty={difficulty} onExtract={extractTopicsFor} onBack={() => setFormatTopicStage("mix")}
+                onConfirm={() => { setFormatTopicStage("confirmed"); toast.success("Question formats and topics confirmed."); }} />}
             </ExpandableCard>
 
             <ExpandableCard id="blueprint" title="Paper blueprint" summary={sectionBlueprint.trim() ? "Custom blueprint applied" : "Optional · Choose a preset or define sections"}>
@@ -909,7 +943,7 @@ Make Q23 as hard as possible`}
               </div>
             </section>}
             <ConfigurationSummary preview={preview?.requestKey === requestKey ? preview : null} loading={previewLoading} error={previewError} />
-            {!blueprint && <ExpandableCard id="topics" title="Topic selection (no blueprint)" summary={`${selectedTopics.length} selected · Default: ${DIFFICULTY_LABELS[difficulty]}`} defaultOpen>
+            {false && !blueprint && <ExpandableCard id="topics" title="Topic selection (no blueprint)" summary={`${selectedTopics.length} selected · Default: ${DIFFICULTY_LABELS[difficulty]}`} defaultOpen>
 
               {selectedTbIds.length === 0 && (
                 <div className="text-sm text-neutral-500">
@@ -1126,7 +1160,7 @@ Make Q23 as hard as possible`}
               </div>
             </ExpandableCard>}
 
-            {step < 2 ? <button type="button" onClick={() => setStep(current => current + 1)} className="qp-btn qp-btn-primary w-full text-base py-4" data-testid="save-next-button">Save &amp; next<ArrowRight size={16} weight="bold" /></button> : <button type="submit" disabled={generating} className="qp-btn qp-btn-primary w-full text-base py-4" data-testid="generate-paper-button"><Sparkle size={18} weight="bold" />{generating ? "Generating..." : "Save and generate"}<ArrowRight size={16} weight="bold" /></button>}
+            {step < 2 ? <button type="button" disabled={step === 1 && !blueprint && (!formatTopicStatus.complete || formatTopicStage !== "confirmed")} onClick={() => setStep(current => current + 1)} className="qp-btn qp-btn-primary w-full text-base py-4" data-testid="save-next-button">Save &amp; next<ArrowRight size={16} weight="bold" /></button> : <button type="submit" disabled={generating} className="qp-btn qp-btn-primary w-full text-base py-4" data-testid="generate-paper-button"><Sparkle size={18} weight="bold" />{generating ? "Generating..." : "Save and generate"}<ArrowRight size={16} weight="bold" /></button>}
           </div>
         </form>
       </main>

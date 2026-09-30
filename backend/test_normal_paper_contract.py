@@ -98,6 +98,32 @@ class NormalPaperContractTests(unittest.TestCase):
         with self.assertRaisesRegex(NormalContractError, "2 topics are selected for 1 questions"):
             compile_normal_plan(spec, [{"name": "A"}, {"name": "B"}], 1)
 
+    def test_format_topic_allocations_own_the_exact_slot_pairing_and_difficulty(self):
+        spec = {
+            "total_questions": 4,
+            "type_counts": {"information": 2, "concept": 2},
+            "format_counts": {"mcq": 2, "long_answer": 2},
+            "format_topic_allocations": [
+                {"format": "mcq", "name": "Algebra", "textbook_id": "book", "topic_id": "a", "count": 2, "difficulty": "easy"},
+                {"format": "long_answer", "name": "Geometry", "textbook_id": "book", "topic_id": "g", "count": 2, "difficulty": "hard"},
+            ],
+        }
+        plan = compile_normal_plan(spec, [], 10)
+        self.assertEqual([(slot["format"], slot["topic"]) for slot in plan["slots"]], [
+            ("long_answer", "Geometry"), ("long_answer", "Geometry"),
+            ("mcq", "Algebra"), ("mcq", "Algebra"),
+        ])
+        self.assertEqual([slot["difficulty"] for slot in plan["slots"]], ["hard", "hard", "easy", "easy"])
+
+    def test_incomplete_format_topic_allocations_fail_before_generation(self):
+        spec = {
+            "total_questions": 2, "type_counts": {"concept": 2},
+            "format_counts": {"mcq": 2},
+            "format_topic_allocations": [{"format": "mcq", "name": "Algebra", "count": 1}],
+        }
+        with self.assertRaisesRegex(NormalContractError, "do not match"):
+            compile_normal_plan(spec, [], 2)
+
     def test_legacy_duplicate_sections_regroup_by_cognitive_type(self):
         legacy = [
             {"title": "Section B - Concept Based", "questions": [{"id": "one", "type": "concept"}]},

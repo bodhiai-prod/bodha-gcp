@@ -10,7 +10,7 @@ import os
 import uuid
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 from fastapi import (
     Depends,
@@ -357,6 +357,18 @@ def _clamp_weight(raw) -> int:
     return max(TOPIC_WEIGHT_MIN, min(TOPIC_WEIGHT_MAX, weight))
 
 
+class FormatTopicAllocation(BaseModel):
+    """Exact topic ownership for one ordinary-paper question format."""
+    model_config = ConfigDict(extra="forbid")
+    format: str = Field(min_length=1, max_length=100)
+    textbook_id: str = Field(min_length=1, max_length=200)
+    topic_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=500)
+    parent_topic: str = Field(default="", max_length=500)
+    count: int = Field(strict=True, ge=1, le=200)
+    difficulty: Optional[Literal["easy", "medium", "hard"]] = None
+
+
 class PaperRequest(BaseModel):
     title: str
     subject: str
@@ -379,6 +391,7 @@ class PaperRequest(BaseModel):
     # {"mcq": 20, "short_answer": 40, "long_answer": 30, "fill_blank": 10}.
     # Keys may be any string — built-in or teacher-defined custom labels.
     format_distribution: Optional[Dict[str, int]] = None
+    format_topic_allocations: Optional[List[FormatTopicAllocation]] = None
     # Optional free-form section blueprint that, when provided, overrides
     # the default Bloom-based 3-section split. Teachers can paste any
     # board-specific pattern (ICSE / CBSE / IGCSE / etc.) describing
@@ -496,6 +509,8 @@ class PaperConfigurationBase(BaseModel):
     diagram_count: Optional[int] = Field(default=None, ge=0, le=200)
     distribution: Dict[str, int] = Field(default_factory=dict)
     format_distribution: Optional[Dict[str, int]] = None
+    format_counts: Optional[Dict[str, int]] = None
+    format_topic_allocations: Optional[List[FormatTopicAllocation]] = None
     custom_instructions: Optional[str] = Field(default=None, max_length=5000)
     section_blueprint: Optional[str] = Field(default=None, max_length=20000)
     blueprint_id: Optional[str] = Field(default=None, max_length=200)
@@ -527,6 +542,8 @@ class PaperConfigurationUpdate(BaseModel):
     diagram_count: Optional[int] = Field(default=None, ge=0, le=200)
     distribution: Optional[Dict[str, int]] = None
     format_distribution: Optional[Dict[str, int]] = None
+    format_counts: Optional[Dict[str, int]] = None
+    format_topic_allocations: Optional[List[FormatTopicAllocation]] = None
     custom_instructions: Optional[str] = Field(default=None, max_length=5000)
     section_blueprint: Optional[str] = Field(default=None, max_length=20000)
     blueprint_id: Optional[str] = Field(default=None, max_length=200)
@@ -1453,6 +1470,41 @@ async def _configuration_books(req, user):
     return books
 
 
+def _canonical_format_topic_allocations(req: PaperRequest, books: list[dict]) -> tuple[list[dict], list[str]]:
+    """Validate client topic identities and collapse duplicate allocation rows."""
+    if req.format_topic_allocations is None:
+        return [], []
+    if req.section_blueprint or req.blueprint_id:
+        return [], ["Format-topic assignments are only available without a paper blueprint."]
+    catalog_by_id = {
+        (row["textbook_id"], row["topic_id"]): row
+        for book in books for row in topic_catalog(book)
+    }
+    merged: dict[tuple[str, str, str], dict] = {}
+    errors: list[str] = []
+    for allocation in req.format_topic_allocations:
+        row = allocation.model_dump()
+        topic = catalog_by_id.get((row["textbook_id"], row["topic_id"]))
+        if not topic:
+            errors.append("A format-topic assignment references an unavailable textbook topic.")
+            continue
+        key = (row["format"], row["textbook_id"], row["topic_id"])
+        if key in merged and merged[key].get("difficulty") != row.get("difficulty"):
+            errors.append(f"{topic['name']} has conflicting difficulty settings for {row['format']}.")
+            continue
+        canonical = {
+            "format": row["format"], "textbook_id": row["textbook_id"],
+            "topic_id": row["topic_id"], "name": topic["name"],
+            "parent_topic": topic.get("parent_topic", ""),
+            "count": row["count"], "difficulty": row.get("difficulty"),
+        }
+        if key in merged:
+            merged[key]["count"] += row["count"]
+        else:
+            merged[key] = canonical
+    return list(merged.values()), list(dict.fromkeys(errors))
+
+
 async def _resolve_configuration(req, user, books):
     from instruction_spec import parse_instructions
     from generation_requirements import compile_requirements
@@ -1468,6 +1520,8 @@ async def _resolve_configuration(req, user, books):
             if not any("could not be parsed" in str(w) for w in overrides.get("unparsed", [])):
                 await db.paper_instruction_cache.update_one({"id": cache_id}, {"$set": {"spec": overrides}}, upsert=True)
     errors, bp = [], None
+    format_topic_allocations, allocation_errors = _canonical_format_topic_allocations(req, books)
+    errors.extend(allocation_errors)
     if req.blueprint_id:
         bp = next((b for b in catalog() if b["id"] == req.blueprint_id), None)
         if bp is None:
@@ -1489,9 +1543,21 @@ async def _resolve_configuration(req, user, books):
         spec = compile_requirements(total_marks=req.total_marks, distribution=req.distribution,
             format_distribution=req.format_distribution, topics=[t for t in req.topics if isinstance(t, dict)],
             difficulty=req.difficulty, total_questions=req.total_questions, format_counts=req.format_counts,
+            format_topic_allocations=format_topic_allocations if req.format_topic_allocations is not None else None,
             diagram_count=req.diagram_count, instruction_spec=overrides, has_blueprint=bool(req.section_blueprint))
         if req.section_blueprint:
             errors.append("Analyze the custom blueprint to display its section summary.")
+        if req.format_topic_allocations is not None:
+            expected = {key: int(value) for key, value in (spec.get("format_counts") or {}).items() if int(value) > 0}
+            actual: dict[str, int] = {}
+            for allocation in format_topic_allocations:
+                actual[allocation["format"]] = actual.get(allocation["format"], 0) + allocation["count"]
+            for fmt, count in expected.items():
+                if actual.get(fmt, 0) != count:
+                    errors.append(f"Assign exactly {count} {fmt} question{'s' if count != 1 else ''} to topics (currently {actual.get(fmt, 0)}).")
+            for fmt, count in actual.items():
+                if fmt not in expected:
+                    errors.append(f"Remove {count} topic assignment{'s' if count != 1 else ''} for inactive format {fmt}.")
     rows = spec.get("section_allocations", [])
     levels = {level: sum(a["count"] for a in rows if a["difficulty"] == level) for level in ("easy", "medium", "hard")}
     if not bp:
@@ -1507,7 +1573,7 @@ async def _resolve_configuration(req, user, books):
             "overrides": {k: v for k, v in overrides.items() if v and k != "at"},
             "warnings": overrides.get("unparsed", []),
             "summary": {"textbooks": [b.get("original_filename", b["id"]) for b in books],
-                "mapped_topics": len({(a["textbook_id"], a["topic_id"]) for a in rows}) if bp else len(req.topics),
+                "mapped_topics": len({(a["textbook_id"], a["topic_id"]) for a in rows}) if bp else len({(a["textbook_id"], a["topic_id"]) for a in format_topic_allocations}) if req.format_topic_allocations is not None else len(req.topics),
                 "question_count": spec.get("total_questions"), "diagram_allocations": sum(a["diagrams"] for a in rows),
                 "difficulty": levels, "cognitive": spec.get("type_counts") or None,
                 "blueprint_label": bp.get("label") if bp else None,
@@ -1616,7 +1682,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
     await _hydrate_textbook_chunks(textbooks)
 
     resolved = None
-    if req.blueprint_id or req.section_topic_allocations is not None:
+    if req.blueprint_id or req.section_topic_allocations is not None or req.format_topic_allocations is not None:
         preview = await _resolve_configuration(req, user, textbooks)
         if not preview["valid"]:
             raise HTTPException(status_code=422, detail="; ".join(preview["errors"]))
@@ -1624,10 +1690,11 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         # Persist the canonical bucket form used for validation. This prevents
         # an old slot-based selection from resurfacing during regeneration or
         # when the paper is opened on a newer frontend.
-        req.section_topic_allocations = [Allocation.model_validate(row) for row in preview["canonical_allocations"]]
-        bp = resolved["blueprint"]
-        req.section_blueprint = bp["template"].replace("{SUBJECT}", req.subject.upper()).replace("{YEAR}", str(datetime.now().year))
-    context_excerpt = topic_context(textbooks, (resolved or {}).get("section_allocations") or [t for t in req.topics if isinstance(t, dict)])
+        if req.blueprint_id or req.section_topic_allocations is not None:
+            req.section_topic_allocations = [Allocation.model_validate(row) for row in preview["canonical_allocations"]]
+            bp = resolved["blueprint"]
+            req.section_blueprint = bp["template"].replace("{SUBJECT}", req.subject.upper()).replace("{YEAR}", str(datetime.now().year))
+    context_excerpt = topic_context(textbooks, (resolved or {}).get("section_allocations") or (resolved or {}).get("format_topic_allocations") or [t for t in req.topics if isinstance(t, dict)])
 
     feedback_hints = await _load_feedback_hints(
         user["id"], req.subject, req.class_name
@@ -1652,9 +1719,14 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
             )
     topics_weighted = [t for t in topics_weighted if t["name"]]
     if resolved:
-        unique = {(a["textbook_id"], a["topic_id"]): a for a in resolved["section_allocations"]}
-        topics_weighted = [{"name": a["name"], "weight": a["count"], "textbook_id": a["textbook_id"],
-                            "topic_id": a["topic_id"], "parent_topic": a["parent_topic"]} for a in unique.values()]
+        source_allocations = resolved.get("section_allocations") or resolved.get("format_topic_allocations") or []
+        unique = {}
+        for allocation in source_allocations:
+            key = (allocation["textbook_id"], allocation["topic_id"])
+            row = unique.setdefault(key, {**allocation, "count": 0})
+            row["count"] += allocation["count"]
+        topics_weighted = [{"name": a["name"], "weight": min(10, a["count"]), "textbook_id": a["textbook_id"],
+                            "topic_id": a["topic_id"], "parent_topic": a.get("parent_topic", "")} for a in unique.values()]
     if not topics_weighted:
         raise HTTPException(status_code=400, detail="At least one topic required")
     if not resolved and not (req.section_blueprint or "").strip():
@@ -1699,6 +1771,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "format_distribution": fmt_dist,
         "total_questions": req.total_questions,
         "format_counts": req.format_counts,
+        "format_topic_allocations": (resolved or {}).get("format_topic_allocations") or [],
         "diagram_count": req.diagram_count,
         "custom_instructions": custom_instructions,
         "section_blueprint": section_blueprint,
@@ -1751,6 +1824,7 @@ async def generate_paper(req: PaperRequest, user: dict = Depends(get_current_use
         "custom_instructions": custom_instructions, "section_blueprint": section_blueprint,
         "total_questions": req.total_questions, "format_counts": req.format_counts,
         "diagram_count": req.diagram_count,
+        **({"saved_requirements": resolved} if resolved else {}),
     })
 
     return paper_doc

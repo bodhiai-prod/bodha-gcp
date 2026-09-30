@@ -30,6 +30,7 @@ def apportion(values: dict, total: int) -> dict:
 
 def compile_requirements(*, total_marks, distribution, format_distribution,
                          topics, difficulty, total_questions=None, format_counts=None,
+                         format_topic_allocations=None,
                          diagram_count=None, instruction_spec=None, blueprint_spec=None,
                          has_blueprint=False):
     """Additional instructions override only the fields they actually specify.
@@ -75,6 +76,8 @@ def compile_requirements(*, total_marks, distribution, format_distribution,
             spec["format_counts"] = apportion(format_distribution or {}, total)
         spec["type_counts"] = apportion(distribution or {}, total)
         spec["total_marks"] = total_marks
+        if format_topic_allocations is not None:
+            spec["format_topic_allocations"] = deepcopy(format_topic_allocations)
     if "diagram_count" not in spec and diagram_count is not None:
         spec["diagram_count"] = diagram_count
     levels = {t["name"]: t.get("difficulty") or difficulty for t in topics}
@@ -127,6 +130,21 @@ def check_ui_requirements(sections, spec):
     misses = allocation_misses(sections, spec)
     actual_types = Counter(q.get("type", "") for q in questions)
     actual_topics = Counter(q.get("topic", "") for q in questions)
+    actual_format_topics = Counter(
+        (q.get("format", ""), q.get("textbook_id", ""), q.get("topic_id", ""))
+        for q in questions
+    )
+    expected_format_topics = Counter()
+    for allocation in spec.get("format_topic_allocations") or []:
+        identity = (allocation.get("format", ""), allocation.get("textbook_id", ""), allocation.get("topic_id", ""))
+        expected_format_topics[identity] += int(allocation.get("count") or 0)
+    names = {
+        (allocation.get("format", ""), allocation.get("textbook_id", ""), allocation.get("topic_id", "")): allocation.get("name", "")
+        for allocation in spec.get("format_topic_allocations") or []
+    }
+    for identity, expected in expected_format_topics.items():
+        if actual_format_topics[identity] != expected:
+            misses.append(f"asked for {expected} {identity[0]} questions on {names[identity]}, got {actual_format_topics[identity]}")
     for topic, count in spec.get("topic_counts", {}).items():
         if int(count or 0) <= 0:
             continue
