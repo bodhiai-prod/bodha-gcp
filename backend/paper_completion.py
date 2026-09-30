@@ -20,7 +20,7 @@ from section_blueprints import normalize_internal_choice_counts, internal_choice
 from question_repair import validate_question, alternative_issues
 from latex_repair import repair_text
 from question_dedupe import is_duplicate
-from export_utils import canonical_question_type
+from export_utils import canonical_question_type, printable_instructions
 
 ENGINE_VERSION = 'v2'
 MAX_ROUNDS = 2
@@ -299,8 +299,8 @@ async def run_completion(job, *, store=None):
                     'status': status, 'phase': candidate['phase'], 'updated_at': utcnow_iso()}})
             if publish:
                 fields.update({'sections': visible, 'question_count': len(questions(visible)),
-                               'instructions': printable_template_instructions({'generation_requirements': candidate['spec']})
-                                or paper.get('instructions', '')})
+                               'instructions': printable_instructions(paper.get('instructions', ''),
+                                   template_instructions=printable_template_instructions({'generation_requirements': candidate['spec']}))})
         await store.save(copy.deepcopy(candidate), fields)
 
     async def persist_attempt():

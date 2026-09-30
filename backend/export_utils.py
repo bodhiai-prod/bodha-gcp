@@ -56,9 +56,10 @@ def printable_instructions(raw: Any, *, template_instructions: Any = "", custom_
     instruction to disappear when the paper is loaded or exported.
     """
     saved = str(raw or "").strip()
-    if saved:
-        return saved
+    from section_blueprints import is_template_instruction_placeholder
     template = str(template_instructions or "").strip()
+    if saved and not (template and is_template_instruction_placeholder(saved)):
+        return saved
     if template:
         return template
     return DEFAULT_INSTRUCTIONS

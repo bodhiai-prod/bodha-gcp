@@ -21,6 +21,7 @@ import {
   ArrowClockwise,
   WarningCircle,
 } from "@phosphor-icons/react";
+import { instructionLines } from "@/lib/instructionLines";
 import MathText from "@/components/MathText";
 import MatchTheFollowing from "@/components/MatchTheFollowing";
 import QuestionDiagram from "@/components/QuestionDiagram";
@@ -64,12 +65,6 @@ const GENERATION_PHASE_LABELS = {
   cancelled: "Generation cancelled",
 };
 
-const instructionLines = (instructions = "") =>
-  instructions
-    .split(/\r?\n/)
-    .flatMap(line => line.split(/\s*(?=(?:\([ivxlcdm]+\)|\d+[.)]|[-•])\s)/i))
-    .map(line => line.trim())
-    .filter(Boolean);
 
 export default function PaperView() {
   const confirm = useConfirmation();
