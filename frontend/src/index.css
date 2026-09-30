@@ -472,7 +472,7 @@ pre.math-fallback {
 .section-navigation { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:14px 0; }
 .section-navigation button:disabled { cursor:not-allowed; opacity:.45; }
 .section-topic-group { border:1px solid #aaa; padding:10px; margin:14px 0; min-width:0; }
-.section-topic-group legend { padding:0 5px; font-size:11px; font-weight:700; }
+.section-topic-group legend { padding:0 5px; font-size:15px; font-weight:700; line-height:1.25; }
 .section-topic-group.is-complete { border-color:#15803d; }
 .section-assignment-counter { display:inline-flex; align-items:baseline; gap:2px; margin-left:4px; color:#b45309; font-size:14px; font-variant-numeric:tabular-nums; }
 .section-assignment-counter strong { font-size:20px; line-height:1; }
@@ -503,8 +503,7 @@ pre.math-fallback {
 .blueprint-subtopics { border-top:1px solid #ddd; padding:0 8px 8px 24px; background:#fff; }
 .blueprint-subtopics .section-topic-row { margin:8px 0 0; background:#fff; }
 /* Keep the chapter picker compact: roughly five collapsed chapters stay in view.
-   Expanded subtopics remain in the same scroll context, so moving to later
-   chapters never requires collapsing the current chapter first. */
+   Topic lists behave as an accordion, so one expanded list remains easy to manage. */
 .chapter-selection-scroll { height:430px; overflow-y:auto; overscroll-behavior:contain; padding-right:4px; scrollbar-gutter:stable; }
 .blueprint-chapter-scroll { margin-top:6px; }
 .blueprint-summary-facts>div { display:flex; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px solid #eee; font-size:11px; }

@@ -157,6 +157,25 @@ def test_docx_renders_limits_and_vector_accents_as_native_omml():
     assert document_xml.count("<m:acc>") >= 3
 
 
+def test_docx_uses_invisible_operands_instead_of_libreoffice_square_placeholders():
+    paper = _paper()
+    paper["sections"][0]["questions"][0]["question"] = (
+        r"Evaluate $\int$, $x^{}$, $y^$, $\frac{}{x}$, and $\sqrt{}$."
+    )
+
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    # A word joiner is deliberately invisible but prevents LibreOffice from
+    # rendering required, empty OMML arguments as square equation boxes.
+    assert "\u2060" in document_xml
+    assert document_xml.count("<m:nary>") == 1
+    assert "<m:sSup>" in document_xml
+    assert "<m:f>" in document_xml
+    assert "<m:rad>" in document_xml
+
+
 def test_docx_renders_template_section_instruction_before_question_number():
     paper = _paper()
     paper["generation_requirements"] = {"blueprint": {

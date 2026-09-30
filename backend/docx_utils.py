@@ -392,14 +392,22 @@ def _omml_run(text: str, *, upright: bool = False):
 
 def _omml_arg(nodes):
     container = OxmlElement("m:e")
-    for node in nodes:
+    # LibreOffice renders an empty OMML argument as a visible square
+    # placeholder.  Incomplete model output (for example ``x^{}`` or a
+    # trailing ``\\int``) should not turn into a box in the downloaded DOCX.
+    # A word joiner gives OOXML a real, zero-width math run, preserving the
+    # structure without adding visible spacing or a placeholder glyph.
+    for node in nodes or [("text", "\u2060")]:
         container.append(_omml_node(node))
     return container
 
 
 def _omml_container(tag, nodes):
     container = OxmlElement(tag)
-    for node in nodes:
+    # Numerators, denominators, scripts, and n-ary limits use this helper.
+    # They have the same LibreOffice empty-argument placeholder behaviour as
+    # ``m:e`` above, so keep every required OMML child non-empty.
+    for node in nodes or [("text", "\u2060")]:
         container.append(_omml_node(node))
     return container
 
