@@ -124,6 +124,21 @@ class NormalPaperContractTests(unittest.TestCase):
         with self.assertRaisesRegex(NormalContractError, "do not match"):
             compile_normal_plan(spec, [], 2)
 
+    def test_format_topic_diagram_minimum_is_required_and_respects_exact_total(self):
+        spec = {
+            "total_questions": 3, "type_counts": {"concept": 3},
+            "format_counts": {"mcq": 3}, "diagram_count": 2,
+            "format_topic_allocations": [
+                {"format": "mcq", "name": "Algebra", "textbook_id": "book", "topic_id": "a", "count": 2, "diagrams": True},
+                {"format": "mcq", "name": "Geometry", "textbook_id": "book", "topic_id": "g", "count": 1, "diagrams": False},
+            ],
+        }
+        plan = compile_normal_plan(spec, [], 6)
+        self.assertEqual(sum(slot["diagram_mode"] == "required" for slot in plan["slots"]), 2)
+        self.assertEqual(plan["slots"][0]["diagram_mode"], "required")
+        with self.assertRaisesRegex(NormalContractError, "at least 1 diagrams"):
+            compile_normal_plan({**spec, "diagram_count": 0}, [], 6)
+
     def test_legacy_duplicate_sections_regroup_by_cognitive_type(self):
         legacy = [
             {"title": "Section B - Concept Based", "questions": [{"id": "one", "type": "concept"}]},

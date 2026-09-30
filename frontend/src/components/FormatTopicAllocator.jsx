@@ -47,7 +47,7 @@ export default function FormatTopicAllocator({ formats, allocations, onChange, b
     const next = current ? allocations.map((row) => matchesRow(row) ? { ...row, ...patch } : row) : [
       ...allocations,
       { format: format.key, textbook_id: topic.textbook_id, topic_id: topic.topic_id, name: topic.name,
-        parent_topic: topic.parent_topic || "", count: 1, difficulty: null, ...patch },
+        parent_topic: topic.parent_topic || "", count: 1, difficulty: null, diagrams: false, ...patch },
     ];
     onChange(next);
   };
@@ -65,6 +65,7 @@ export default function FormatTopicAllocator({ formats, allocations, onChange, b
           <option value="">Default ({DIFFICULTY_LABELS[difficulty]})</option>
           {Object.entries(DIFFICULTY_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
         </select></label>
+        <label className="diagram-toggle"><input type="checkbox" checked={Boolean(row.diagrams)} onChange={(event) => updateRow(topic, { diagrams: event.target.checked })} />At least one diagram</label>
         <div className="question-stepper-field"><span>Questions</span><div className="question-stepper" role="group" aria-label={`Question count for ${topic.name} in ${format.label}`}>
           <button type="button" disabled={row.count <= 1} onClick={() => updateRow(topic, { count: row.count - 1 })}>−</button>
           <output>{row.count}</output>
@@ -77,7 +78,7 @@ export default function FormatTopicAllocator({ formats, allocations, onChange, b
   return <div data-testid="format-topic-allocator">
     <div className="flex items-start justify-between gap-3 mb-3">
       <div><div className="overline">// ASSIGN TOPICS BY FORMAT</div><strong className="block mt-1">{format.label}</strong></div>
-      <span className={`qp-badge ${assigned === format.count ? "qp-badge-success" : "qp-badge-red"}`}>{assigned}/{format.count} assigned</span>
+      <span className={`qp-badge ${assigned === format.count ? "qp-badge-success" : "qp-badge-red"}`}>{format.label}: {assigned}/{format.count} filled</span>
     </div>
     <div className="section-tabs mb-4" role="tablist" aria-label="Question formats">
       {formats.map((item, index) => <button type="button" role="tab" aria-selected={index === formatIndex} className={index === formatIndex ? "is-active" : ""} key={item.key} onClick={() => setFormatIndex(index)}><strong>{item.label}</strong><small>{status.actual[item.key] || 0}/{item.count}</small></button>)}

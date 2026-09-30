@@ -367,6 +367,7 @@ class FormatTopicAllocation(BaseModel):
     parent_topic: str = Field(default="", max_length=500)
     count: int = Field(strict=True, ge=1, le=200)
     difficulty: Optional[Literal["easy", "medium", "hard"]] = None
+    diagrams: bool = False
 
 
 class PaperRequest(BaseModel):
@@ -1497,9 +1498,11 @@ def _canonical_format_topic_allocations(req: PaperRequest, books: list[dict]) ->
             "topic_id": row["topic_id"], "name": topic["name"],
             "parent_topic": topic.get("parent_topic", ""),
             "count": row["count"], "difficulty": row.get("difficulty"),
+            "diagrams": row.get("diagrams", False),
         }
         if key in merged:
             merged[key]["count"] += row["count"]
+            merged[key]["diagrams"] = merged[key]["diagrams"] or row.get("diagrams", False)
         else:
             merged[key] = canonical
     return list(merged.values()), list(dict.fromkeys(errors))
@@ -1558,6 +1561,9 @@ async def _resolve_configuration(req, user, books):
             for fmt, count in actual.items():
                 if fmt not in expected:
                     errors.append(f"Remove {count} topic assignment{'s' if count != 1 else ''} for inactive format {fmt}.")
+            diagram_minimum = sum(bool(allocation.get("diagrams")) for allocation in format_topic_allocations)
+            if req.diagram_count is not None and req.diagram_count < diagram_minimum:
+                errors.append(f"The topic assignments require at least {diagram_minimum} diagrams; increase the supplied diagram count or clear a diagram requirement.")
     rows = spec.get("section_allocations", [])
     levels = {level: sum(a["count"] for a in rows if a["difficulty"] == level) for level in ("easy", "medium", "hard")}
     if not bp:

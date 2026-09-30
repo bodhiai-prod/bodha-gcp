@@ -84,6 +84,10 @@ export default function NewPaper() {
     () => allocationStatus(activeFormats, formatTopicAllocations),
     [activeFormats, formatTopicAllocations]
   );
+  const assignedFormatTopicCount = useMemo(
+    () => formatTopicAllocations.reduce((sum, row) => sum + Number(row.count || 0), 0),
+    [formatTopicAllocations]
+  );
   const allocatedTopics = useMemo(() => Array.from(new Map(formatTopicAllocations.map((row) => [
     `${row.textbook_id}:${row.topic_id}`,
     { textbook_id: row.textbook_id, topic_id: row.topic_id, name: row.name, parent_topic: row.parent_topic || "", weight: 5 },
@@ -700,7 +704,7 @@ export default function NewPaper() {
             </>}
 
             {step === 1 && <>
-            <ExpandableCard id="format-mix" title="Question format mix" summary={promptOverride ? "Controlled by paper blueprint" : `${effectiveQuestionCount} questions · ${formats.filter(f => (formatQuestionCounts[f.key] || 0) > 0).length} active formats`} disabled={promptOverride}>
+            <ExpandableCard id="format-mix" title="Question format mix" summary={promptOverride ? "Controlled by paper blueprint" : formatTopicStage === "mix" ? `${effectiveQuestionCount} questions · ${formats.filter(f => (formatQuestionCounts[f.key] || 0) > 0).length} active formats` : `${assignedFormatTopicCount}/${effectiveQuestionCount} topic slots filled · ${activeFormats.length} question types`} disabled={promptOverride}>
               {formatTopicStage === "mix" ? <>
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                 <div className="overline">// QUESTION FORMAT MIX</div>

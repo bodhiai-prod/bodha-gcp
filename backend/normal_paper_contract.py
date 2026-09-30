@@ -142,17 +142,28 @@ def compile_normal_plan(spec: dict, topics: list[dict], total_marks: int) -> dic
     marks = _slot_marks(format_names, int(total_marks))
 
     requested_diagrams = spec.get("diagram_count")
-    diagram_slots: set[int] = set()
+    required_diagram_slots = {
+        index for index, topic in enumerate(allocated_topics)
+        if topic.get("diagrams") and (
+            index == 0 or allocated_topics[index - 1] is not topic
+        )
+    }
+    diagram_slots: set[int] = set(required_diagram_slots)
     if requested_diagrams is not None:
+        if requested_diagrams < len(required_diagram_slots):
+            raise NormalContractError(
+                f"Topic assignments require at least {len(required_diagram_slots)} diagrams, "
+                f"but the paper requests {requested_diagrams}."
+            )
         candidates = sorted(
-            range(total),
+            (index for index in range(total) if index not in required_diagram_slots),
             key=lambda index: (
                 type_names[index] != "application",
                 -marks[index],
                 index,
             ),
         )
-        diagram_slots = set(candidates[:max(0, min(total, int(requested_diagrams)))])
+        diagram_slots.update(candidates[:max(0, min(total, int(requested_diagrams)) - len(diagram_slots))])
 
     slots: list[dict] = []
     for index in range(total):
@@ -192,7 +203,9 @@ def compile_normal_plan(spec: dict, topics: list[dict], total_marks: int) -> dic
             "marks": marks[index],
             "diagram_mode": (
                 "required" if index in diagram_slots else "forbidden"
-            ) if requested_diagrams is not None else "allowed",
+            ) if requested_diagrams is not None else (
+                "required" if index in required_diagram_slots else "allowed"
+            ),
         })
 
     sections = [

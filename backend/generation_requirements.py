@@ -145,6 +145,16 @@ def check_ui_requirements(sections, spec):
     for identity, expected in expected_format_topics.items():
         if actual_format_topics[identity] != expected:
             misses.append(f"asked for {expected} {identity[0]} questions on {names[identity]}, got {actual_format_topics[identity]}")
+    for allocation in spec.get("format_topic_allocations") or []:
+        if not allocation.get("diagrams"):
+            continue
+        matching = [q for q in questions if (
+            q.get("format", "") == allocation.get("format", "")
+            and q.get("textbook_id", "") == allocation.get("textbook_id", "")
+            and q.get("topic_id", "") == allocation.get("topic_id", "")
+        )]
+        if not any(q.get("needs_diagram") for q in matching):
+            misses.append(f"asked for at least one diagram in {allocation.get('format', '')} questions on {allocation.get('name', '')}")
     for topic, count in spec.get("topic_counts", {}).items():
         if int(count or 0) <= 0:
             continue
