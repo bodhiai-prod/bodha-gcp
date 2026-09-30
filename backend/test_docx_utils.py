@@ -119,6 +119,53 @@ def test_docx_renders_blackboard_bold_and_common_set_commands_without_raw_latex(
     assert '<m:supHide m:val="1"' in document_xml
 
 
+def test_docx_renders_calligraphic_symbols_and_implication_arrows_without_raw_latex():
+    paper = _paper()
+    paper["sections"][0]["questions"][0]["question"] = (
+        r"For $P(R)=\frac{\mathcal{E}^2R}{(R+r)^2}$, "
+        r"$R=r\implies P_{\max}=\frac{\mathcal{E}^2}{4r}$ and "
+        r"$R\iff R-r=0$."
+    )
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    assert "mathcal" not in document_xml
+    assert "implies" not in document_xml
+    assert "iff" not in document_xml
+    assert "ℰ" in document_xml
+    assert "⇒" in document_xml
+    assert "⇔" in document_xml
+
+
+def test_docx_math_edge_case_fixture_has_no_leaked_latex_commands():
+    """Cover the native-math commands commonly emitted in physics solutions."""
+    paper = _paper()
+    paper["sections"][0]["questions"][0]["question"] = (
+        r"$\hbar\omega=\mathcal{E}$; $R=r\implies P_{\max}=\frac{\mathcal{E}^2}{4r}$; "
+        r"$A\iff B$, $\sin\theta+\cos\theta$, $\limsup_{n\to\infty}a_n$, "
+        r"$\overline{AB}+\dot{x}+\ddot{y}+\widetilde{F}$, "
+        r"$\mathfrak{g}+\mathsf{v}+\mathtt{T}+\textsf{unit}$, "
+        r"$\hbar\ell\Re z\Im z\rightleftharpoons\aleph$, $\boxed{E=mc^2}$, "
+        r"$\langle x\rangle\not\in\lfloor 0,1\rfloor$, $\coprod_n A_n$, and $\nexists x\in\square$."
+    )
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    for leaked in (
+        "mathcal", "implies", "iff", "overline", "widetilde",
+        "mathfrak", "mathsf", "mathtt", "textsf", "hbar", "rightleftharpoons", "nexists",
+        "boxed", "langle", "rangle", "lfloor", "rfloor", "coprod",
+    ):
+        assert f"<m:t>{leaked}</m:t>" not in document_xml
+    for symbol in ("ℰ", "⇒", "⇔", "ℏ", "ℓ", "ℜ", "ℑ", "⇌", "∄", "□", "⟨", "⌊", "∐", "∉"):
+        assert symbol in document_xml
+    assert document_xml.count("<m:acc>") >= 2
+    assert "<m:groupChr>" in document_xml
+    assert document_xml.count('<m:sty m:val="p"') >= 3
+
+
 def test_docx_renders_physics_symbols_and_upright_si_units():
     paper = _paper()
     paper["sections"][0]["questions"][0]["question"] = (

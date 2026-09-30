@@ -49,10 +49,57 @@ _LATEX_SYMBOLS = {
     "ll": "≪", "gg": "≫", "approx": "≈", "equiv": "≡", "sim": "∼", "cong": "≅",
     "to": "→", "rightarrow": "→", "leftarrow": "←", "leftrightarrow": "↔",
     "Rightarrow": "⇒", "Leftarrow": "⇐", "Leftrightarrow": "⇔", "mapsto": "↦",
+    "implies": "⇒", "impliedby": "⇐", "iff": "⇔", "gets": "←",
+    "longrightarrow": "⟶", "longleftarrow": "⟵", "longleftrightarrow": "⟷",
     "in": "∈", "notin": "∉", "ni": "∋", "subset": "⊂", "subseteq": "⊆",
     "supset": "⊃", "supseteq": "⊇", "setminus": "∖", "cup": "∪", "cap": "∩",
     "emptyset": "∅", "varnothing": "∅", "partial": "∂", "nabla": "∇",
     "forall": "∀", "exists": "∃", "therefore": "∴", "because": "∵",
+    "nexists": "∄", "neg": "¬", "lnot": "¬", "land": "∧", "lor": "∨",
+    "rightleftharpoons": "⇌", "uparrow": "↑", "downarrow": "↓",
+    "cdots": "⋯", "ldots": "…", "dots": "…", "vdots": "⋮", "ddots": "⋱",
+    "star": "⋆", "bullet": "∙", "simeq": "≃", "prime": "′", "angle": "∠",
+    "measuredangle": "∡", "triangle": "△", "square": "□", "ell": "ℓ", "hbar": "ℏ",
+    "imath": "ı", "jmath": "ȷ", "aleph": "ℵ", "Re": "ℜ", "Im": "ℑ", "wp": "℘",
+    "surd": "√", "top": "⊤", "bot": "⊥", "vdash": "⊢", "dashv": "⊣", "models": "⊨",
+    "ldotp": ".", "cdotp": "·",
+    "langle": "⟨", "rangle": "⟩", "lvert": "|", "rvert": "|", "vert": "|",
+    "lVert": "‖", "rVert": "‖", "Vert": "‖", "lfloor": "⌊", "rfloor": "⌋",
+    "lceil": "⌈", "rceil": "⌉", "coprod": "∐", "not": "¬",
+}
+
+# Function names are not variables.  Keeping them upright avoids both a raw
+# command leak and the misleading italic output LibreOffice gives to an
+# ordinary OMML text run.
+_UPRIGHT_OPERATORS = frozenset({
+    "sin", "cos", "tan", "cot", "sec", "csc", "arcsin", "arccos", "arctan",
+    "sinh", "cosh", "tanh", "coth", "log", "ln", "lg", "exp", "det", "dim",
+    "ker", "deg", "gcd", "hom", "arg", "Pr", "limsup", "liminf", "inf", "sup",
+    "max", "min",
+})
+
+_PASS_THROUGH_STYLE_COMMANDS = frozenset({
+    "text", "textrm", "mathrm", "mathnormal", "operatorname", "mathbf", "mathit",
+    "mathfrak", "mathsf", "mathtt", "textbf", "textit", "textsf", "texttt",
+})
+
+# These commands change decoration rather than the underlying expression.  A
+# native text fallback is preferable to exposing the command name in a DOCX;
+# the underlying result remains editable and mathematically readable.
+_CONTENT_WRAPPERS = frozenset({"boxed", "overbrace", "underbrace"})
+
+_ACCENT_COMMANDS = {
+    "vec": ("⃗", False), "hat": ("̂", False), "widehat": ("̂", False),
+    "bar": ("¯", False), "tilde": ("̃", False), "widetilde": ("˜", True),
+    "dot": ("̇", False), "ddot": ("̈", False), "mathring": ("̊", False),
+    "acute": ("́", False), "grave": ("̀", False), "breve": ("̆", False),
+    "check": ("̌", False), "overline": ("¯", True), "underline": ("_", False),
+    "overrightarrow": ("→", True), "overleftarrow": ("←", True),
+}
+
+_NEGATED_RELATIONS = {
+    "in": "∉", "ni": "∌", "subset": "⊄", "subseteq": "⊈",
+    "supset": "⊅", "supseteq": "⊉",
 }
 
 # Unicode has dedicated double-struck glyphs for the alphabet and digits.  It
@@ -63,6 +110,14 @@ _MATHBB_CHARS = {
     **dict(zip("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "𝔸𝔹ℂ𝔻𝔼𝔽𝔾ℍ𝕀𝕁𝕂𝕃𝕄ℕ𝕆ℙℚℝ𝕊𝕋𝕌𝕍𝕎𝕏𝕐ℤ")),
     **dict(zip("abcdefghijklmnopqrstuvwxyz", "𝕒𝕓𝕔𝕕𝕖𝕗𝕘𝕙𝕚𝕛𝕜𝕝𝕞𝕟𝕠𝕡𝕢𝕣𝕤𝕥𝕦𝕧𝕨𝕩𝕪𝕫")),
     **dict(zip("0123456789", "𝟘𝟙𝟚𝟛𝟜𝟝𝟞𝟟𝟠𝟡")),
+}
+
+# Script letters are the portable representation of ``\\mathcal`` in native
+# OMML.  As with ``\\mathbb`` above, using the Unicode mathematical alphabet
+# avoids depending on a renderer-specific equation font setting.
+_MATHCAL_CHARS = {
+    **dict(zip("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "𝒜ℬ𝒞𝒟ℰℱ𝒢ℋℐ𝒥𝒦ℒℳ𝒩𝒪𝒫𝒬ℛ𝒮𝒯𝒰𝒱𝒲𝒳𝒴𝒵")),
+    **dict(zip("abcdefghijklmnopqrstuvwxyz", "𝒶𝒷𝒸𝒹ℯ𝒻𝓰𝒽𝒾𝒿𝓀𝓁𝓂𝓃ℴ𝓅𝓆𝓇𝓈𝓉𝓊𝓋𝓌𝓍𝓎𝓏")),
 }
 
 
@@ -82,6 +137,24 @@ def _mathbb_nodes(nodes):
         else:
             # Blackboard-bold is normally used for simple set names.  Preserve
             # less usual structures instead of degrading a valid equation.
+            styled.append(node)
+    return styled
+
+
+def _mathcal_nodes(nodes):
+    """Apply LaTeX's calligraphic styling without leaking ``mathcal``."""
+    styled = []
+    for node in nodes:
+        kind = node[0]
+        if kind == "text":
+            styled.append(("text", "".join(_MATHCAL_CHARS.get(char, char) for char in node[1])))
+        elif kind == "frac":
+            styled.append((kind, _mathcal_nodes(node[1]), _mathcal_nodes(node[2])))
+        elif kind == "sqrt":
+            styled.append((kind, _mathcal_nodes(node[1])))
+        elif kind in {"sup", "sub"}:
+            styled.append((kind, _mathcal_nodes([node[1]])[0], _mathcal_nodes(node[2])))
+        else:
             styled.append(node)
     return styled
 
@@ -216,15 +289,18 @@ def _consume_nary_base(source: str, index: int):
                 end = close + 1 if close >= 0 else end
             radicand, index = _latex_group(source, end)
             nodes = [("sqrt", _latex_to_ast(radicand))]
-        elif command in {"text", "textrm", "mathrm", "mathnormal", "operatorname"}:
+        elif command in _PASS_THROUGH_STYLE_COMMANDS:
             content, index = _latex_group(source, end)
             nodes = _roman_nodes(_latex_to_ast(content))
-        elif command in {"mathbf", "mathit"}:
-            content, index = _latex_group(source, end)
-            nodes = _latex_to_ast(content)
         elif command == "mathbb":
             content, index = _latex_group(source, end)
             nodes = _mathbb_nodes(_latex_to_ast(content))
+        elif command == "mathcal":
+            content, index = _latex_group(source, end)
+            nodes = _mathcal_nodes(_latex_to_ast(content))
+        elif command in _CONTENT_WRAPPERS:
+            content, index = _latex_group(source, end)
+            nodes = _latex_to_ast(content)
         elif command in {
             "left", "right", "displaystyle", "textstyle", "scriptstyle",
             "scriptscriptstyle", "limits", "nolimits", "quad", "qquad",
@@ -283,6 +359,27 @@ def _latex_to_ast(source: str):
                 nodes.append(("text", source[end]))
                 cursor = end + 1
                 continue
+            if command == "not":
+                # Generated content commonly spells a negated relation as
+                # ``\\not\\in`` instead of the equivalent ``\\notin``.
+                # Emit one native relation symbol rather than two adjacent
+                # glyphs (¬∈), which looks like a rendering leak in Word.
+                if end < len(source) and source[end] == "\\":
+                    relation_end = end + 1
+                    while relation_end < len(source) and source[relation_end].isalpha():
+                        relation_end += 1
+                    relation = source[end + 1:relation_end]
+                    if relation in _NEGATED_RELATIONS:
+                        nodes.append(("text", _NEGATED_RELATIONS[relation]))
+                        cursor = relation_end
+                        continue
+                if end < len(source) and source[end] == "=":
+                    nodes.append(("text", "≠"))
+                    cursor = end + 1
+                    continue
+                nodes.append(("text", "¬"))
+                cursor = end
+                continue
             if command in {"frac", "dfrac", "tfrac"}:
                 numerator, cursor = _latex_group(source, end)
                 denominator, cursor = _latex_group(source, cursor)
@@ -325,25 +422,26 @@ def _latex_to_ast(source: str):
                 radicand, cursor = _latex_group(source, end)
                 nodes.append(("sqrt", _latex_to_ast(radicand)))
                 continue
-            if command in {"vec", "hat", "widehat", "overrightarrow", "overleftarrow"}:
+            if command in _ACCENT_COMMANDS:
                 content, cursor = _latex_group(source, end)
-                accent = {
-                    "vec": "⃗", "hat": "̂", "widehat": "̂",
-                    "overrightarrow": "→", "overleftarrow": "←",
-                }[command]
-                nodes.append(("accent", accent, _latex_to_ast(content), command.startswith("over")))
+                accent, stretch = _ACCENT_COMMANDS[command]
+                nodes.append(("accent", accent, _latex_to_ast(content), stretch))
                 continue
-            if command in {"text", "textrm", "mathrm", "mathnormal", "operatorname"}:
+            if command in _PASS_THROUGH_STYLE_COMMANDS:
                 content, cursor = _latex_group(source, end)
                 nodes.extend(_roman_nodes(_latex_to_ast(content)))
-                continue
-            if command in {"mathbf", "mathit"}:
-                content, cursor = _latex_group(source, end)
-                nodes.extend(_latex_to_ast(content))
                 continue
             if command == "mathbb":
                 content, cursor = _latex_group(source, end)
                 nodes.extend(_mathbb_nodes(_latex_to_ast(content)))
+                continue
+            if command == "mathcal":
+                content, cursor = _latex_group(source, end)
+                nodes.extend(_mathcal_nodes(_latex_to_ast(content)))
+                continue
+            if command in _CONTENT_WRAPPERS:
+                content, cursor = _latex_group(source, end)
+                nodes.extend(_latex_to_ast(content))
                 continue
             if command in {
                 "left", "right", "displaystyle", "textstyle", "scriptstyle",
@@ -352,6 +450,10 @@ def _latex_to_ast(source: str):
                 cursor = end
                 continue
             if command in {",", ";", ":", "!", " "}:
+                cursor = end
+                continue
+            if command in _UPRIGHT_OPERATORS:
+                nodes.append(("roman", command))
                 cursor = end
                 continue
             nodes.append(("text", _LATEX_SYMBOLS.get(command, command)))
