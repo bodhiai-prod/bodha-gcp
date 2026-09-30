@@ -40,6 +40,19 @@ class NormalPaperContractTests(unittest.TestCase):
             ["Section A - Information Based", "Section B - Concept Based", "Section C - Application Based"],
         )
 
+    def test_section_letters_are_contiguous_when_a_cognitive_type_is_absent(self):
+        spec = {
+            "total_questions": 4,
+            "type_counts": {"information": 0, "concept": 2, "application": 2},
+            "format_counts": {"short_answer": 4},
+            "section_difficulty": {"Section A": "easy", "Section B": "hard"},
+        }
+        plan = compile_normal_plan(spec, [{"name": "Biology", "weight": 5}], 8)
+        self.assertEqual([section["title"] for section in plan["sections"]], [
+            "Section A - Concept Based", "Section B - Application Based",
+        ])
+        self.assertEqual([slot["difficulty"] for slot in plan["slots"]], ["easy", "easy", "hard", "hard"])
+
     def test_provider_metadata_and_sections_have_no_authority(self):
         _spec, _topics, plan = fixture()
         payload = {"sections": [{"title": "Section B - Invented", "questions": [
@@ -147,7 +160,7 @@ class NormalPaperContractTests(unittest.TestCase):
         ]
         sections, changed = normalize_normal_sections(legacy)
         self.assertTrue(changed)
-        self.assertEqual([section["title"] for section in sections], ["Section B - Concept Based", "Section C - Application Based"])
+        self.assertEqual([section["title"] for section in sections], ["Section A - Concept Based", "Section B - Application Based"])
         self.assertEqual([question["id"] for question in sections[0]["questions"]], ["one", "two"])
 
     def test_prompt_is_flat_and_slot_keyed(self):

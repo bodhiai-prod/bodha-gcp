@@ -16,9 +16,9 @@ from export_utils import canonical_question_type
 NORMAL_CONTRACT_VERSION = 1
 TYPE_ORDER = ("information", "concept", "application")
 SECTION_META = {
-    "information": ("information", "Section A - Information Based"),
-    "concept": ("concept", "Section B - Concept Based"),
-    "application": ("application", "Section C - Application Based"),
+    "information": ("information", "Information Based"),
+    "concept": ("concept", "Concept Based"),
+    "application": ("application", "Application Based"),
 }
 FORMAT_WEIGHT = {
     "mcq": 1,
@@ -90,11 +90,14 @@ def _topic_allocation(rows: list[dict], total: int) -> list[int]:
 
 def _section_difficulty(mapping: dict, qtype: str, title: str) -> str | None:
     aliases = {
-        "information": {"information", "information based", "section a"},
-        "concept": {"concept", "concept based", "section b"},
-        "application": {"application", "application based", "section c"},
+        "information": {"information", "information based"},
+        "concept": {"concept", "concept based"},
+        "application": {"application", "application based"},
     }[qtype]
     aliases.add(title.lower())
+    section_match = title.lower().split("-")[0].strip()
+    if section_match:
+        aliases.add(section_match)
     for raw, level in (mapping or {}).items():
         key = " ".join(str(raw).lower().replace("-", " ").split())
         if key in aliases or any(key.startswith(alias + " ") for alias in aliases):
@@ -109,6 +112,14 @@ def compile_normal_plan(spec: dict, topics: list[dict], total_marks: int) -> dic
         raise NormalContractError("A normal paper requires a positive question count.")
 
     type_names = _expanded_counts(spec.get("type_counts") or {"concept": total}, total, order=TYPE_ORDER)
+    active_types = [qtype for qtype in TYPE_ORDER if qtype in type_names]
+    section_meta = {
+        qtype: (
+            SECTION_META[qtype][0],
+            f"Section {chr(65 + index)} - {SECTION_META[qtype][1]}",
+        )
+        for index, qtype in enumerate(active_types)
+    }
     format_names = _expanded_counts(
         spec.get("format_counts") or {"short_answer": total}, total
     )
@@ -172,7 +183,7 @@ def compile_normal_plan(spec: dict, topics: list[dict], total_marks: int) -> dic
             raise NormalContractError(f"Unsupported cognitive type: {type_names[index]}")
         topic = allocated_topics[index]
         topic_name = str(topic["name"]).strip()
-        section_id, section_title = SECTION_META[qtype]
+        section_id, section_title = section_meta[qtype]
         override = next(
             (row for row in spec.get("question_overrides") or [] if int(row.get("n") or 0) == index + 1),
             None,
@@ -210,9 +221,8 @@ def compile_normal_plan(spec: dict, topics: list[dict], total_marks: int) -> dic
 
     sections = [
         {"id": section_id, "title": title, "order": order}
-        for order, qtype in enumerate(TYPE_ORDER, start=1)
-        for section_id, title in [SECTION_META[qtype]]
-        if any(slot["type"] == qtype for slot in slots)
+        for order, qtype in enumerate(active_types, start=1)
+        for section_id, title in [section_meta[qtype]]
     ]
     return {
         "contract_version": NORMAL_CONTRACT_VERSION,
@@ -389,9 +399,12 @@ def normalize_normal_sections(sections: list, plan: dict | None = None) -> tuple
     grouped = {qtype: [] for qtype in TYPE_ORDER}
     for question in questions:
         grouped[canonical_question_type(question.get("type"))].append(question)
+    active_types = [qtype for qtype in TYPE_ORDER if grouped[qtype]]
     normalized = [
-        {"section_id": SECTION_META[qtype][0], "title": SECTION_META[qtype][1], "questions": grouped[qtype]}
-        for qtype in TYPE_ORDER if grouped[qtype]
+        {"section_id": SECTION_META[qtype][0],
+         "title": f"Section {chr(65 + index)} - {SECTION_META[qtype][1]}",
+         "questions": grouped[qtype]}
+        for index, qtype in enumerate(active_types)
     ]
     return normalized, normalized != (sections or [])
 
