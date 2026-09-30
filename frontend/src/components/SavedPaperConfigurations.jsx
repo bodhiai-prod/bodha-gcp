@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Check, FloppyDisk, PencilSimple, Trash, X } from "@phosphor-icons/react";
+import { CaretDown, Check, FloppyDisk, PencilSimple, Trash, X } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { useConfirmation } from "@/context/ConfirmationContext";
@@ -101,31 +101,48 @@ export default function SavedPaperConfigurations({ currentConfiguration, onApply
       {loading && <p className="text-xs text-neutral-500 mt-5">Loading saved configurations…</p>}
       {!loading && configurations.length === 0 && <p className="text-xs text-neutral-500 mt-5">No saved configurations yet.</p>}
       {configurations.length > 0 && (
-        <div className="mt-5 grid gap-2">
-          {configurations.map((config) => (
-            <div key={config.id} className={`border-2 p-3 ${selected?.id === config.id ? "border-[#002FA7] bg-blue-50" : "border-neutral-200 bg-white"}`}>
+        <div className="mt-5">
+          <label className="block text-xs font-bold uppercase tracking-wide" htmlFor="saved-configuration-select">
+            Choose a saved configuration
+          </label>
+          <div className="relative mt-2 max-w-xl">
+            <select
+              id="saved-configuration-select"
+              className="qp-input w-full appearance-none pr-10"
+              value={selected?.id || ""}
+              onChange={(event) => setSelected(configurations.find((config) => config.id === event.target.value) || null)}
+              data-testid="saved-configuration-select"
+            >
+              <option value="">Select a configuration</option>
+              {configurations.map((config) => (
+                <option key={config.id} value={config.id}>{config.name} — {describe(config)}</option>
+              ))}
+            </select>
+            <CaretDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" size={16} aria-hidden="true" />
+          </div>
+
+          {selected && (
+            <div className="mt-3 border-2 border-[#002FA7] bg-blue-50 p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <button type="button" className="min-w-0 text-left" onClick={() => setSelected(config)} data-testid={`saved-configuration-${config.id}`}>
-                  <strong className="block truncate text-sm">{config.name}</strong>
-                  <span className="text-xs text-neutral-500">{describe(config)}</span>
-                </button>
+                <div className="min-w-0">
+                  <strong className="block truncate text-sm">{selected.name}</strong>
+                  <span className="text-xs text-neutral-500">{describe(selected)}</span>
+                </div>
                 <div className="flex gap-1">
-                  <button type="button" className="p-2 hover:bg-neutral-100" onClick={() => beginEdit(config)} aria-label={`Edit ${config.name}`}><PencilSimple size={16} /></button>
-                  <button type="button" className="p-2 hover:bg-red-50 hover:text-red-700" onClick={() => remove(config)} aria-label={`Delete ${config.name}`}><Trash size={16} /></button>
+                  <button type="button" className="p-2 hover:bg-neutral-100" onClick={() => beginEdit(selected)} aria-label={`Edit ${selected.name}`}><PencilSimple size={16} /></button>
+                  <button type="button" className="p-2 hover:bg-red-50 hover:text-red-700" onClick={() => remove(selected)} aria-label={`Delete ${selected.name}`}><Trash size={16} /></button>
                 </div>
               </div>
-              {selected?.id === config.id && (
-                <div className="mt-3 border-t border-neutral-200 pt-3">
-                  <p className="text-xs text-neutral-600">
-                    Applying this template restores its sources and generation settings. Unavailable textbooks or topics will be flagged for review; title and branding stay unchanged.
-                  </p>
-                  <button type="button" className="qp-btn qp-btn-primary mt-3" onClick={() => { onApply(config); setSelected(null); }}>
-                    <Check size={16} weight="bold" /> Confirm and apply
-                  </button>
-                </div>
-              )}
+              <div className="mt-3 border-t border-neutral-200 pt-3">
+                <p className="text-xs text-neutral-600">
+                  Applying this template restores its sources and generation settings. Unavailable textbooks or topics will be flagged for review; title and branding stay unchanged.
+                </p>
+                <button type="button" className="qp-btn qp-btn-primary mt-3" onClick={() => { onApply(selected); setSelected(null); }}>
+                  <Check size={16} weight="bold" /> Confirm and apply
+                </button>
+              </div>
             </div>
-          ))}
+          )}
         </div>
       )}
     </section>
