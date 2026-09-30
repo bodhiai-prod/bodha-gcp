@@ -60,6 +60,11 @@ class CompletionStore:
                 or (job.get('lease_until') or '') <= utcnow_iso()):
                 raise OwnershipLost('Completion lease expired, cancelled, or superseded')
             # Read both ownership documents before writing either projection.
+            from question_revision import invalidate_changed_solution
+            if 'sections' in fields:
+                solution = invalidate_changed_solution(paper, fields['sections'])
+                if solution is not None:
+                    paper['solution'] = solution
             paper.update(fields)
             txn.set(self.checkpoint_ref, {
                 'paper_id': self.job['paper_id'], 'revision': self.job['revision'],
@@ -136,6 +141,8 @@ async def save_teacher_edit(paper, fields):
             hidden = [{**section, 'questions': [q for q in section['questions'] if q.get('slot_id') not in visible_ids]}
                       for section in candidate['sections']]
             candidate['sections'] = adopt_existing([*copy.deepcopy(fields['sections']), *hidden], candidate['plan'])
+            placed_ids = {q.get('id') for q in questions(candidate['sections'])}
+            candidate['unplaced'] = [copy.deepcopy(q) for q in questions(fields['sections']) if q.get('id') not in placed_ids]
             candidate['preserve_publication'] = False
             candidate['phase'] = 'edited'
             candidate['budget'] = {}
@@ -149,7 +156,8 @@ async def save_teacher_edit(paper, fields):
             result = evaluate({**candidate, 'sections': current.get('sections') or []}, current)
             result.pop('visible', None)
             result.update({'status': 'ready' if result['ready'] else 'incomplete', 'export_eligible': result['ready'],
-                           'revision': revision + 1, 'action_label': 'Finish remaining questions' if 0 < result['unresolved_count'] <= 2 else 'Retry completion'})
+                           'revision': revision + 1, 'action_label': 'Review question placement' if candidate.get('unplaced') else 'Finish remaining items',
+                           'recovery_reason': 'ambiguous_placement' if candidate.get('unplaced') else 'automatic_recovery'})
             current['completion'] = result
             current['generation_status'] = 'ready' if result['ready'] else 'needs_review'
         txn.set(reference, _encode_generation_requirements(current))

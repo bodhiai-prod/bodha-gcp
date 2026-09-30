@@ -422,3 +422,16 @@ async def complete_sections(
     return await complete_questions(
         questions, ref=ref, strict_mcq=strict_mcq, context=context, flags=flags
     )
+
+
+def alternative_issues(question):
+    """Validate every independently printed branch, including empty last branches."""
+    from section_blueprints import _OR_SEPARATOR_RE, _BREAK_TAG_RE
+    text = _BREAK_TAG_RE.sub('\n', str(question.get('question') or ''))
+    parts = [part.strip() for part in _OR_SEPARATOR_RE.split(text)]
+    if len(parts) < 2:
+        return []
+    issues = [issue for part in parts for issue in validate_question({**question, 'question': part})]
+    if len({part.casefold() for part in parts}) != len(parts):
+        issues.append('duplicate_alternatives')
+    return sorted(set(issues))

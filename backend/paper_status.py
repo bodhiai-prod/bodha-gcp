@@ -81,3 +81,30 @@ def library_status_for_paper(paper, needs_review=False):
         return _status("needs_review", "Needs review")
 
     return _status("ready", "Ready")
+
+
+def presentation_for_paper(paper):
+    """Optional stable vocabulary shared by detail and library consumers."""
+    completion = paper.get('completion') or {}
+    progress = paper.get('generation_progress') or {}
+    phase = completion.get('phase') or progress.get('phase') or 'preparing'
+    ready = bool(completion.get('ready') and completion.get('export_eligible')) if completion else library_status_for_paper(paper)['key'] == 'ready'
+    stage = ('Ready' if ready else 'Checking and completing' if phase in
+             ('validating', 'finalizing', 'repairing', 'alternatives', 'figures', 'incomplete', 'edited')
+             or (paper.get('quality_review') or {}).get('status') in ('running', 'needs_review')
+             else 'Drafting' if phase == 'generating' else 'Preparing')
+    if not ready and 'presentation_stage' in completion:
+        stage = ('Preparing', 'Drafting', 'Checking and completing')[min(2, completion['presentation_stage'])]
+    ambiguous = completion.get('recovery_reason') == 'ambiguous_placement'
+    return {'stage': stage, 'ready': ready,
+            'drafted_parts': completion.get('actual_scored_parts', progress.get('completed', 0)),
+            'target_parts': completion.get('target_scored_parts', progress.get('total', 0)),
+            'printed_questions': completion.get('actual_printed_questions'),
+            'target_printed_questions': completion.get('target_printed_questions'),
+            'pending_alternatives': completion.get('pending_alternatives', 0),
+            'attemptable_marks': (paper.get('generation_requirements') or {}).get('attemptable_marks', paper.get('total_marks')),
+            'printed_marks': (paper.get('generation_requirements') or {}).get('total_marks', paper.get('total_marks')),
+            'action': 'review_placement' if ambiguous else 'complete',
+            'action_label': 'Review question placement' if ambiguous else 'Finish remaining items',
+            'message': ('Review the saved questions and assign their intended positions.' if ambiguous else
+                        'Accepted questions remain available. Complete the remaining items to unlock downloads.' if not ready else 'Your paper is ready.')}

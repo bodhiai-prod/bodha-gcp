@@ -53,7 +53,7 @@ def test_or_helper_retains_first_accepted_repair_when_second_fails():
             q['question'] += '\nOR\nDescribe another transformer operating principle.'
             return {'question': q, 'old_text': 'old', 'diagram_pending': False}
         checkpoint = AsyncMock()
-        with patch.object(workers, 'regenerate_question', regenerate):
+        with patch.object(workers, 'is_duplicate', AsyncMock(return_value=(False, None))), patch.object(workers, 'regenerate_question', regenerate):
             result = await workers.repair_internal_choices({'sections': sections, 'generation_requirements': spec}, on_accept=checkpoint)
         assert len(result['repairs']) == 1
         assert result['remaining']

@@ -331,8 +331,14 @@ class FirestoreCollection:
                 unsupported = set(update) - {"$set", "$inc"}
                 if unsupported:
                     raise ValueError(f"Unsupported Firestore compatibility update: {sorted(unsupported)}")
+                previous_sections = current.get('sections')
                 for path, value in update.get("$set", {}).items():
                     _set(current, path, value)
+                if self._name == 'papers' and 'sections' in update.get('$set', {}):
+                    from question_revision import invalidate_changed_solution
+                    solution = invalidate_changed_solution({**current, 'sections': previous_sections}, current['sections'])
+                    if solution is not None:
+                        current['solution'] = solution
                 for path, value in update.get("$inc", {}).items():
                     _set(current, path, (_get(current, path, 0) or 0) + value)
                 txn.set(snapshot.reference, _encode_generation_requirements(current))

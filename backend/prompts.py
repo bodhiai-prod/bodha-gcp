@@ -478,9 +478,15 @@ def render_spec(spec: dict, *, total_marks: int = 0) -> str:
 
     total = spec.get("total_questions") or 0
     if total:
-        lines.append(f"- Produce EXACTLY {total} questions in total.")
+        if spec.get('section_allocations'):
+            lines.append(f"- Produce EXACTLY {total} scored part objects, grouped by the supplied parent identities into {spec.get('printed_question_count', total)} printed questions. OR branches are inside those objects, never extra objects.")
+        else:
+            lines.append(f"- Produce EXACTLY {total} questions in total.")
     if spec.get("total_marks"):
-        lines.append(f"- The questions in this response must total EXACTLY {spec['total_marks']} marks.")
+        if spec.get('section_allocations'):
+            lines.append(f"- Printed scored slots total EXACTLY {spec['total_marks']} marks; students attempt {spec.get('attemptable_marks', spec['total_marks'])} marks under the section-choice rules. Count a slot's marks once, even when it contains OR alternatives. Generate every optional section.")
+        else:
+            lines.append(f"- The questions in this response must total EXACTLY {spec['total_marks']} marks.")
 
     counts = spec.get("format_counts") or {}
     if counts:
@@ -732,7 +738,7 @@ def qgen_prompt(
             "internal-choice rules, "
             "and per-question formats EXACTLY as described below. Use the section "
             "TITLES verbatim as the LLM 'sections[].title' values. If the blueprint "
-            "specifies internal choice (e.g. 'attempt any 4 of 6'), generate ALL the "
+            "specifies section-level selection (e.g. 'attempt any 4 of 6'), generate ALL the "
             "alternatives shown (e.g. 6 questions for a 4-of-6 section) and reflect the "
             "rule in the section's title (e.g. 'Section B (40 Marks) — Attempt any "
             "FOUR of the following SIX questions').\n\n"
@@ -998,6 +1004,7 @@ def normal_slots_prompt(
         '"needs_diagram":false,"diagram_spec":{"figure":"...","labels":[],'
         '"given_values":[],"unknowns":[],"why_required":"..."}}]}\n\n'
         "RULES:\n"
+        "- Section-level choices never substitute for within-question OR alternatives. Generate all supplied slots, including optional sections. Count marks once per slot, not per OR branch.\n"
         "- Return exactly one object for each supplied slot_id and no other slot_id.\n"
         "- When internal_choice_count is supplied, include exactly that many standalone OR lines "
         "inside the question string, joining complete student-facing alternatives with the same "

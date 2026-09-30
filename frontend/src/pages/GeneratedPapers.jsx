@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
@@ -20,10 +20,15 @@ export default function GeneratedPapers() {
   const [q, setQ] = useState("");
   const [subjectFilter, setSubjectFilter] = useState("");
 
+  const requestSequence = useRef(0);
+  const loadPapers = () => {
+    const sequence = ++requestSequence.current;
+    return api.get("/papers").then(r => {
+      if (sequence === requestSequence.current) setPapers(r.data);
+    });
+  };
   useEffect(() => {
-    api
-      .get("/papers")
-      .then((r) => setPapers(r.data))
+    loadPapers()
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -31,7 +36,7 @@ export default function GeneratedPapers() {
   useEffect(() => {
     if (!papers.some((paper) => paper.library_status?.active)) return undefined;
     const interval = window.setInterval(() => {
-      api.get("/papers").then((r) => setPapers(r.data)).catch(() => {});
+      loadPapers().catch(() => {});
     }, 3000);
     return () => window.clearInterval(interval);
   }, [papers]);
@@ -64,6 +69,7 @@ export default function GeneratedPapers() {
     }
     try {
       await api.delete(`/papers/${paper.id}`);
+      ++requestSequence.current;
       setPapers((current) => current.filter((item) => item.id !== paper.id));
       toast.success("Paper deleted");
     } catch (err) {

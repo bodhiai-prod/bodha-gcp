@@ -496,6 +496,8 @@ def normalize_template_sections(sections: list, spec: dict) -> tuple[list, list[
                 unknown.append(question)
                 misses.append(f"Question {index}: missing or unknown section allocation identity.")
                 continue
+            from slot_identity import restore_missing_identity
+            restore_missing_identity(question, {**row, **({'topic': row['name']} if 'name' in row else {})})
             # Allocation placement is authoritative; a model-supplied section
             # id or title cannot override it.
             question["section_id"] = row["section_id"]
@@ -963,6 +965,17 @@ def allocation_prompt(spec):
     if not spec.get("section_allocations"):
         return ""
     bp = spec["blueprint"]
+    rows = deepcopy(spec['section_allocations'])
+    for section in bp['sections']:
+        for group in section.get('groups') or []:
+            if group.get('internal_choices') is None:
+                continue
+            eligible = [row for row in rows if row['section_id'] == section['id'] and row['group_id'] == group['id']]
+            # Exact slot allocations can carry explicit per-slot OR requests.
+            # Legacy count rows retain the group-level quota.
+            if all(row.get('slot_id') and int(row.get('count') or 1) == 1 for row in eligible):
+                for index, row in enumerate(eligible):
+                    row['internal_choice_count'] = int(index < int(group['internal_choices']))
     return ("\nSECTION ALLOCATION CONTRACT: The following rows replace all global topic weights and "
             "topic difficulty defaults. Use exactly the section titles in the blueprint below. "
             "Each returned object is one scored printable slot. The renderer groups slots under their server-owned parent question; "
@@ -973,11 +986,14 @@ def allocation_prompt(spec):
             "diagrams=true requires at least one necessary supplied diagram in the row; false forbids "
             "supplied diagrams. diagram_minimum_satisfied=true makes diagrams optional for that top-up row. Follow existing diagram_spec requirements. Explicit Additional Instructions "
             "and per-question overrides take precedence over conflicting row fields. "
+            "Section-level selection (including optional Sections B/C) does not satisfy a group's internal OR quota. "
+            "Generate ALL optional sections and ALL scored slots. Where a row supplies internal_choice_count, "
+            "write exactly that many standalone OR separators in that slot. Count the slot's marks only once. "
             "For each group's internal_choices quota, write both complete alternatives inside "
             "the question text, separated by a standalone OR line. Each alternative must have "
             "the same assigned topic, marks and difficulty. A metadata count is not an alternative. "
             "Return internal_choice_count (integer, number of OR blocks) on every question.\n" +
-            json.dumps({"sections": bp["sections"], "allocations": spec["section_allocations"]}, ensure_ascii=False) + "\n")
+            json.dumps({"sections": bp["sections"], "allocations": rows}, ensure_ascii=False) + "\n")
 
 
 def allocation_misses(sections, spec):

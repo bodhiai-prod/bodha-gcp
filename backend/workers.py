@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio as _asyncio
 import copy
+import json
 import os
 import re
 import uuid
@@ -354,7 +355,9 @@ async def generate_diagrams_for_paper(paper_id: str, owner_id: str, sections: li
         if isinstance(img_bytes, Exception) or not img_bytes:
             continue
         try:
-            path = f"{APP_NAME}/diagrams/{owner_id}/{paper_id}/{q['id']}.png"
+            import hashlib
+            version = hashlib.sha256(img_bytes).hexdigest()
+            path = f"{APP_NAME}/diagrams/{owner_id}/{paper_id}/{q['id']}/{version}.png"
             saved = put_object(path, img_bytes, "image/png")
             q["diagram_path"] = saved["path"]
         except Exception as e:  # noqa: BLE001
@@ -2191,12 +2194,22 @@ REGEN_HISTORY_MAX = 5
 # The model is never asked for any of these -- they are copied from the question
 # being replaced, which is the only way to be sure section_blueprints'
 # allocation checks still pass: the old question already satisfied them.
-PRESERVED_SLOT_FIELDS = (
-    "id", "slot_id", "section_id", "topic", "type", "format", "difficulty", "marks", "important",
-    "allocation_id", "textbook_id", "topic_id", "group_id",
-    "parent_id", "parent_label", "part_label", "parent_lead_in", "display_number",
-    "internal_choice_count",
-)
+from slot_identity import SLOT_IDENTITY_FIELDS, TEACHER_FIELDS
+PRESERVED_SLOT_FIELDS = SLOT_IDENTITY_FIELDS + TEACHER_FIELDS
+TARGETED_OR_ENABLED = os.environ.get("TARGETED_OR_ENABLED", "false").lower() in ("true", "1", "yes")
+
+
+def _independent_or_branches(question):
+    from section_blueprints import _OR_SEPARATOR_RE
+    from question_repair import validate_question
+    text = question.get('question') or ''
+    if (question.get('format') not in ('short_answer', 'long_answer')
+        or any(question.get(key) for key in ('parent_lead_in', 'part_label', 'passage', 'shared_passage', 'needs_diagram', 'diagram_spec', 'diagram_path'))
+        or re.search(r'(?im)\b(?:passage|above|below|following|figure|diagram)\b|^\s*\([a-ivx]+\)', text)):
+        return None
+    branches = [part.strip() for part in _OR_SEPARATOR_RE.split(text)]
+    return branches if all(not validate_question({**question, 'question': part}) for part in branches) else None
+
 # What the model IS asked for -- the stem and the things that follow from it.
 _CANDIDATE_FIELDS = (
     "question", "options", "correct_option", "needs_diagram", "diagram_spec",
@@ -2263,6 +2276,10 @@ def internal_choice_repair_targets(sections: list, spec: dict, *, allow_partial:
             remaining -= reduced
         if remaining:
             raise RegenerationFailed("Could not select question slots to remove the extra internal OR choices.")
+    from question_repair import alternative_issues
+    targeted = {t['question_id'] for t in targets}
+    targets.extend({'question_id': qid, 'required_internal_choice_count': derived_internal_choice_count(q)}
+                   for qid, q in by_id.items() if qid not in targeted and alternative_issues(q))
     return targets
 
 
@@ -2290,6 +2307,11 @@ async def repair_internal_choices(
                     required_internal_choice_count=target["required_internal_choice_count"],
                 )
                 async with lock:
+                    if target not in internal_choice_repair_targets(working['sections'], spec, allow_partial=True):
+                        return
+                    others = [q for s in working['sections'] for q in s.get('questions', []) if q.get('id') != target['question_id']]
+                    if (await is_duplicate(result['question'], others, use_llm=False))[0]:
+                        return
                     for section in working["sections"]:
                         for index, question in enumerate(section.get("questions") or []):
                             if question.get("id") == target["question_id"]:
@@ -2400,6 +2422,8 @@ async def regenerate_question(
     prior: list = list(old.get("regen_history") or [])
     rejected_now: list = []
 
+    branches = _independent_or_branches(old) if TARGETED_OR_ENABLED and required_internal_choice_count is not None and not paper.get('is_competitive') else None
+    branch_only = bool(branches and required_internal_choice_count > len(branches) - 1)
     candidate = None
     attempts = 0
     for attempt in range(1, REGEN_MAX_ATTEMPTS + 1):
@@ -2415,8 +2439,18 @@ async def regenerate_question(
             rejected=prior + ([old_text] if old_text else []) + rejected_now,
             attempt=attempt,
         )
-        raw = await chat_complete(system_message=REGEN_SYSTEM, user_text=prompt)
-        fresh = _extract_candidate(parse_json_response(raw))
+        if branch_only:
+            prompt += ('\nWrite ONLY the missing independent alternative branches, separated by standalone OR lines. '
+                       'Each branch must independently match the topic, marks and difficulty. Do not repeat or rewrite these accepted branches: '
+                       + json.dumps(branches) + '\nMissing branches: ' + str(required_internal_choice_count - len(branches) + 1))
+        try:
+            raw = await chat_complete(system_message=REGEN_SYSTEM, user_text=prompt)
+            fresh = _extract_candidate(parse_json_response(raw))
+        except Exception as exc:
+            logger.warning("Regeneration provider attempt %s failed for %s: %s", attempt, paper_id, exc)
+            continue
+        if branch_only:
+            fresh['question'] = '\nOR\n'.join([*branches, str(fresh.get('question') or '')])
 
         # Build the replacement from the slot outward: the slot's values first
         # (so the normaliser's MCQ branch sees the right format, and so the id,
@@ -2474,6 +2508,27 @@ async def regenerate_question(
     await repair_sections([{"questions": [candidate]}], ref=paper_id)
     normalize_internal_choice_counts([{"questions": [candidate]}])
 
+    from section_blueprints import _OR_SEPARATOR_RE
+    from question_repair import validate_question
+    parts = _OR_SEPARATOR_RE.split(candidate.get('question') or '')
+    if (any(validate_question({**candidate, 'question': part.strip()}) for part in parts)
+        or len({part.strip().casefold() for part in parts}) != len(parts)
+        or (required_internal_choice_count is not None and derived_internal_choice_count(candidate) != required_internal_choice_count)):
+        raise RegenerationFailed("Replacement alternatives did not pass validation.")
+
+    if branch_only:
+        checked = await _request_paper_json(
+            system_message='Review independent exam alternatives. Return strict JSON.',
+            user_text='Check EVERY alternative for completeness, correctness, assigned topic, marks and difficulty; reject duplicates. '
+                      'Return {"valid": true} only if all checks pass.\n' + json.dumps({'slot': slot, 'branches': parts}),
+            ref=f'{paper_id}:or-review', attempts=1)
+        if checked.get('valid') is not True:
+            raise RegenerationFailed('The missing alternatives did not pass content review.')
+        # Normalizers and repair providers may not rewrite accepted branches.
+        if parts[:len(branches)] != branches:
+            if [part.strip() for part in parts[:len(branches)]] != branches:
+                raise RegenerationFailed('An accepted alternative was changed during repair.')
+
     # The slot's figure budget, and nothing more. On a blueprint paper
     # allocation_misses complains BOTH ways -- a row that requires a diagram and
     # a row that forbids one -- so matching whatever the old question had is the
@@ -2486,11 +2541,18 @@ async def regenerate_question(
     )
     diagram_pending = bool(candidate.get("needs_diagram"))
     candidate["diagram_status"] = "pending" if diagram_pending else "none"
+    if required_internal_choice_count is not None and diagram_pending:
+        # An automatic replacement cannot evict a published figure before its
+        # own immutable image is available and the whole candidate is usable.
+        await generate_diagrams_for_paper(paper_id, paper.get('owner_id', ''), [{'questions': [candidate]}])
+        if not candidate.get('diagram_path'):
+            raise RegenerationFailed('The replacement figure could not be completed.')
+        candidate['diagram_status'] = 'ready'
+        diagram_pending = False
     # Dropping diagram_path (above) is what makes the picture update at all:
     # generate_diagrams_for_paper skips any question that already has one, and
     # on the front end QuestionDiagram only refetches because losing the path
-    # unmounts the <img>. The S3 key is the question id, so the new render
-    # overwrites the old file rather than orphaning it.
+    # unmounts the <img>. Content-addressed assets retain earlier previews.
 
     candidate["regen_history"] = _regen_history(prior, [old_text] + rejected_now)
     section["questions"][index] = candidate
@@ -2990,13 +3052,16 @@ async def generate_solution_background(
             re-opens only the answers this job wrote itself.
             """
             current = await db.papers.find_one(
-                {"id": paper_id}, {"_id": 0, "solution": 1}
+                {"id": paper_id}, {"_id": 0, "solution": 1, "sections": 1}
             )
-            sol = (current or {}).get("solution") or {}
+            from question_revision import sources
+            original_sources = sources(p.get('sections'))
+            current_sources = sources((current or {}).get('sections'))
+            sol = copy.deepcopy((current or {}).get("solution") or {})
             for sec in sol.get("sections", []):
                 for ans in sec.get("answers", []):
                     qid = ans.get("question_id")
-                    if qid not in answers:
+                    if qid not in answers or original_sources.get(qid) != current_sources.get(qid):
                         continue
                     if fill_only and ans.get("answer") and not (
                         force and qid in owned
@@ -3011,7 +3076,7 @@ async def generate_solution_background(
             )
             sol["status"] = "generating"
             await db.papers.update_one(
-                {"id": paper_id}, {"$set": {"solution": sol}}
+                {"id": paper_id, "sections": (current or {}).get("sections", []), "solution": (current or {}).get("solution")}, {"$set": {"solution": sol}}
             )
 
         if payload:
@@ -3045,9 +3110,9 @@ async def generate_solution_background(
 
         # Mark complete (or partial)
         current = await db.papers.find_one(
-            {"id": paper_id}, {"_id": 0, "solution": 1}
+            {"id": paper_id}, {"_id": 0, "solution": 1, "sections": 1}
         )
-        sol = (current or {}).get("solution") or {}
+        sol = copy.deepcopy((current or {}).get("solution") or {})
         completed = sol.get("completed", 0)
         total = sol.get("total", 0)
         sol["status"] = "ready" if total and completed == total else "partial"
@@ -3056,7 +3121,7 @@ async def generate_solution_background(
             sol["latex_check"] = latex_stats
         sol.pop("error", None)
         await db.papers.update_one(
-            {"id": paper_id}, {"$set": {"solution": sol}}
+            {"id": paper_id, "sections": (current or {}).get("sections", []), "solution": (current or {}).get("solution")}, {"$set": {"solution": sol}}
         )
         logger.info(
             f"Solution background job finished for {paper_id}: {completed}/{total}"

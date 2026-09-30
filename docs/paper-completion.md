@@ -81,8 +81,6 @@ these tests do not establish subject correctness or real-provider reliability.
 - Independently review correctness. All 30 must finish automatically with their
   full contract; repeated recovery of more than six slots blocks release.
 - Measure p95 **fully ready** latency below 120 seconds, not time to preview.
-- Resolve the frontend production-build dependency error (`firebase/auth` does not
-  export `onAuthStateChanged` in this installed environment).
 - The broad suite exposes two DOCX instruction expectation failures in unchanged
   export behavior: template instructions replacing saved instructions, and filtering
   saved “Ensure proper LaTeX formatting.” text. They remain outside this change.
@@ -98,3 +96,53 @@ AWS reference modification, or mass migration was performed.
 Latest local full-suite result: **158 passed, 2 failed, 10 emulator tests skipped** (16 subtests passed). The two failures are the DOCX instruction cases listed above. Changed JSX passes standalone Babel compilation; `git diff --check` passes. The emulator suite is run separately.
 
 Final separate emulator run: **10 passed**. Original investigation baseline: **45 passed** (all four previously observed failures resolved). Final focused coordinator/API/budget regression run: **19 passed**.
+
+
+## Reliability update (2026-09-30)
+
+ISC Mathematics prompt inspection found ambiguous use of “questions” for both
+41 scored parts and 22 printed parent questions, and of “internal choice” for
+section selection and within-question OR alternatives. Both prompt paths now
+separate these concepts, explicitly explain 95 printed versus 80 attemptable
+marks, and carry per-slot OR counts where exact allocation identities exist.
+The ISC contract still requires ten OR alternatives. CBSE quotas are unchanged.
+This is a code-level finding, not proof of real-provider causation.
+
+Slot identity preservation is shared across normalization and regeneration,
+including parent_topic. Recovery restores missing metadata only from exact
+slots or unique allocation matches, retains conflicting labels for validation,
+and checkpoints ambiguous questions while continuing independent work.
+Accepted replacements are checked against the current OR targets and questions.
+Diagram keys include a SHA-256 content identifier; old images remain available.
+Question publication invalidates affected answers atomically, and solution workers
+compare source content and conditionally publish against the current snapshot.
+
+`TARGETED_OR_ENABLED=false` is the default. Enabling it permits missing-branch
+requests only for independent non-MCQ text without compound-part, passage or
+figure dependencies. Whole-slot repair remains the fallback for other cases.
+Teacher-requested replacements retain full regeneration. Canary this flag only
+after representative paid staging runs and independent content review. Rollback
+is disabling the flag; no stored-content migration is required. Deploy compatible
+backend changes before frontend consumers of the optional presentation field.
+
+The UI uses Preparing, Drafting, Checking and completing, and Ready; completion
+checkpoints retain the stage across repair rounds and continuations. Counts
+separate drafted parts, pending alternatives and printed questions. Raw provider
+errors and validation dictionaries are not status messages. Polling rejects older
+requests and revisions, and ambiguous placement offers review/edit.
+
+Current local verification uses declared backend dependencies and mocked providers.
+The production frontend build and polling/status tests pass. Two DOCX instruction
+expectation failures were reproduced on an untouched HEAD checkout; export behavior
+was not changed. Local emulator tools were unavailable in this session, so the ten
+persistence integration tests remain skipped here (the earlier run above is historical).
+No paid provider runs, deployment, production rewriting or migration was performed.
+
+Final verification for this update: **179 backend tests passed, 2 pre-existing
+DOCX tests failed, 10 local-emulator tests skipped** (16 subtests passed).
+**35 frontend tests passed** across 11 suites; the optimized production build
+compiled successfully. `git diff --check` passed. New tests include the actual
+regeneration metadata transformation, unique/ambiguous identity restoration,
+ISC prompt arithmetic, malformed OR recovery, duplicate concurrent proposals,
+transient provider failure, immutable image keys, rejected figure replacements,
+source-aware solution workers, retained ambiguous content, and stale UI polling.

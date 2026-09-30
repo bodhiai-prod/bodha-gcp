@@ -38,6 +38,7 @@ async def _missing_base_slot_probe():
         return {'question': {**q, 'question': q['question'] + '\nOR\nExplain a second algebraic operation thoroughly.'}}
     with patch.object(engine, 'generate_batch', AsyncMock(return_value=[])), \
          patch.object(engine, 'check_topics', AsyncMock(return_value=set())), \
+         patch.object(engine, 'is_duplicate', AsyncMock(return_value=(False, None))), \
          patch('workers.regenerate_question', AsyncMock(side_effect=repair)) as regenerate, \
          patch('workers.generate_diagrams_for_paper', AsyncMock()):
         await engine.run_completion({'id': 'job', 'revision': 1, 'payload': {}}, store=store)
@@ -77,7 +78,8 @@ def test_legacy_or_repair_does_not_abort_for_an_absent_group():
             q = next(q for q in engine.questions(working['sections']) if q['id'] == qid)
             return {'question': {**q, 'question': q['question'] + '\nOR\nDescribe a different algebraic operation.'},
                     'old_text': q['question'], 'diagram_pending': False}
-        with patch('workers.regenerate_question', AsyncMock(side_effect=repair)):
+        with patch('workers.is_duplicate', AsyncMock(return_value=(False, None))), \
+             patch('workers.regenerate_question', AsyncMock(side_effect=repair)):
             result = await workers.repair_internal_choices({**paper, 'sections': candidate['sections']})
         assert len(result['repairs']) == 2
         assert len(result['remaining']) == 1
@@ -107,6 +109,7 @@ def test_legacy_topup_repairs_alternatives_on_restored_slots():
              patch.object(workers, 'complete_sections', AsyncMock(return_value={})), \
              patch.object(workers, 'repair_sections', AsyncMock(return_value={})), \
              patch.object(workers, 'dedupe_sections', AsyncMock(return_value={})), \
+             patch.object(workers, 'is_duplicate', AsyncMock(return_value=(False, None))), \
              patch.object(workers, '_auto_topup_if_short', AsyncMock()), \
              patch.object(workers, 'regenerate_question', regenerate):
             await workers.generate_paper_background(paper_id='test', owner_id='teacher', subject='Physics', klass='12',

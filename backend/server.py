@@ -34,7 +34,7 @@ from activity import record_activity
 from instruction_spec import verify
 from latex_repair import repair_text
 from question_repair import validate_question
-from paper_status import library_status_for_paper
+from paper_status import library_status_for_paper, presentation_for_paper
 from llm_adapter import chat_complete, parse_json_response
 from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_errors,
                                 compile_allocations, paper_summary, BlueprintStructure,
@@ -2012,6 +2012,9 @@ async def list_papers(user: dict = Depends(get_current_user)):
         paper["library_status"] = library_status_for_paper(
             paper, needs_review=bool(summary["mismatches"])
         )
+        paper["presentation"] = presentation_for_paper(paper)
+        if paper["library_status"].get("active"):
+            paper["library_status"]["label"] = paper["presentation"]["stage"]
         # Sections are required only to calculate the current status; preserve
         # the list endpoint's compact response shape.
         paper.pop("sections", None)
@@ -2049,6 +2052,7 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
     p["summary"], p["instruction_check"], review_status = _current_paper_validation(p)
     if review_status is not None:
         p["review_status"] = review_status
+    p["presentation"] = presentation_for_paper(p)
     return p
 
 

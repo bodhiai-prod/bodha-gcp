@@ -31,11 +31,8 @@ FORMAT_WEIGHT = {
 PROVIDER_CONTENT_FIELDS = (
     "question", "options", "correct_option", "diagram_spec",
 )
-SLOT_STRUCTURE_FIELDS = {
-    "slot_id", "section_id", "section_title", "topic", "topic_id",
-    "textbook_id", "parent_topic", "type", "format", "difficulty",
-    "marks", "diagram_mode", "order",
-}
+from slot_identity import SLOT_IDENTITY_FIELDS
+SLOT_STRUCTURE_FIELDS = set(SLOT_IDENTITY_FIELDS) - {'id'}
 
 
 class NormalContractError(ValueError):

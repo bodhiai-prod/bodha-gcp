@@ -17,7 +17,7 @@ from generation_requirements import compile_requirements
 from instruction_spec import parse_instructions, verify
 from normal_paper_contract import compile_normal_plan, materialize_normal_sections, merge_normal_sections, validate_normal_plan
 from section_blueprints import normalize_internal_choice_counts, internal_choice_misses, allocation_misses, printable_template_instructions
-from question_repair import validate_question
+from question_repair import validate_question, alternative_issues
 from latex_repair import repair_text
 from question_dedupe import is_duplicate
 from export_utils import canonical_question_type
@@ -77,22 +77,25 @@ def compile_plan(spec, paper):
 def adopt_existing(sections, plan):
     """Use exact saved identities; never infer placement from provider headings."""
     saved = copy.deepcopy(sections)
-    used = set()
+    expected_ids = {s['slot_id'] for s in plan['slots']}
+    used = {q.get('slot_id') for q in questions(saved) if q.get('slot_id') in expected_ids}
     for q in questions(saved):
         if not q.get('slot_id'):
             matches = [s for s in plan['slots'] if s.get('allocation_id') == q.get('allocation_id')
                        and q.get('allocation_id') and s['slot_id'] not in used]
-            if not q.get('allocation_id'):
-                matches = [s for s in plan['slots'] if s['slot_id'] not in used
-                           and all(q.get(k) == s.get(k) for k in ('topic', 'format', 'marks'))]
-            if matches:
+            if len(matches) == 1:
                 q['slot_id'] = matches[0]['slot_id']
         used.add(q.get('slot_id'))
     merged = merge_normal_sections(plan, saved)
-    originals = {q.get('slot_id'): q for q in questions(saved)}
+    originals = {}
+    for q in questions(saved):
+        originals.setdefault(q.get('slot_id'), q)
     for section in merged:
         for i, q in enumerate(section['questions']):
-            section['questions'][i] = {**q, **originals[q['slot_id']]}
+            original = originals[q['slot_id']]
+            # Restore absent metadata only; conflicting saved content stays visible
+            # to validation rather than being relabelled as compliant.
+            section['questions'][i] = {**q, **{k: v for k, v in original.items() if v is not None}}
     return merged
 
 
@@ -116,7 +119,9 @@ def batches(slots, limit=20):
 
 
 def content_issues(q):
-    issues = validate_question(q)
+    from section_blueprints import _OR_SEPARATOR_RE
+    first_branch = _OR_SEPARATOR_RE.split(q.get('question') or '')[0].strip()
+    issues = validate_question({**q, 'question': first_branch})
     for text in [q.get('question') or '', *(q.get('options') or [])]:
         _, found = repair_text(str(text))
         issues.extend(found)
@@ -126,23 +131,26 @@ def content_issues(q):
 def evaluate(candidate, paper):
     from workers import internal_choice_repair_targets
     sections, plan, spec = candidate['sections'], candidate['plan'], candidate['spec']
-    present = {q['slot_id']: q for q in questions(sections)}
+    expected = {s['slot_id']: s for s in plan['slots']}
+    present = {q.get('slot_id'): q for q in questions(sections) if q.get('slot_id') in expected}
     unresolved = {s['slot_id'] for s in plan['slots'] if s['slot_id'] not in present}
-    unresolved.update(q['slot_id'] for q in questions(sections) if content_issues(q))
+    unresolved.update(q['slot_id'] for q in questions(sections) if q.get('slot_id') in expected and content_issues(q))
     choices = internal_choice_misses(sections, spec)
     pending_choices = set()
     try:
-        by_id = {q['id']: q['slot_id'] for q in questions(sections)}
+        by_id = {q['id']: q['slot_id'] for q in questions(sections) if q.get('slot_id') in expected}
         pending_choices = {by_id[t['question_id']] for t in internal_choice_repair_targets(sections, spec, allow_partial=True)}
     except Exception:
         # Missing base slots also account for their absent alternatives. For
         # groups with too few eligible slots, conservatively mark eligible ones.
         for miss in choices:
             ids = set(miss.get('eligible_question_ids') or [])
-            pending_choices.update(q['slot_id'] for q in questions(sections) if q['id'] in ids)
+            pending_choices.update(q['slot_id'] for q in questions(sections) if q['id'] in ids and q.get('slot_id') in expected)
     unresolved.update(pending_choices)
     for q in questions(sections):
-        slot = next(s for s in plan['slots'] if s['slot_id'] == q['slot_id'])
+        slot = expected.get(q.get('slot_id'))
+        if not slot:
+            continue
         if (slot.get('diagram_mode') == 'required' or q.get('needs_diagram')) and not q.get('diagram_path'):
             unresolved.add(q['slot_id'])
     structural = validate_normal_plan(sections, plan)
@@ -150,7 +158,7 @@ def evaluate(candidate, paper):
     gates = list(verify(sections, spec).get('misses') or [])
     gates.extend(allocation_misses(sections, spec))
     gates.extend(str(issue) for issue in structural)
-    if candidate.get('unplaced'):
+    if candidate.get('unplaced') or any(q.get('slot_id') not in expected for q in questions(sections)):
         gates.append('Saved questions need explicit slot placement before completion can continue.')
     if choices:
         gates.append('Required internal OR alternatives are incomplete.')
@@ -164,13 +172,16 @@ def evaluate(candidate, paper):
         section['questions'] = [q for q in section['questions'] if not content_issues(q)]
         for q in section['questions']:
             q.pop('completion_pending', None)
-            if q['slot_id'] in pending_choices:
+            if q.get('slot_id') in pending_choices:
                 q['completion_pending'] = 'Internal OR alternative pending'
+            elif q.get('needs_diagram') and not q.get('diagram_path'):
+                q['completion_pending'] = 'Figure pending'
     # Alternatives and figures affect completion, not whether a safe stem can be read.
     viewable_count = len(questions(visible))
     preview = bool(total and viewable_count / total >= .85)
     return {'ready': ready, 'preview_available': preview, 'viewable_scored_parts': viewable_count, 'valid_scored_parts': valid,
             'actual_scored_parts': len(present), 'target_scored_parts': total,
+            'pending_alternatives': sum(max(0, int(m['expected']) - int(m['actual'])) for m in choices) + sum(bool(alternative_issues(q)) for q in questions(sections)),
             'unresolved_count': len(unresolved), 'unresolved_slot_ids': sorted(unresolved),
             'failed_gates': list(dict.fromkeys(gates)), 'visible': visible}
 
@@ -209,7 +220,7 @@ async def check_topics(sections, paper, payload, ref):
     if not questions(sections):
         return set()
     data = await _request_paper_json(system_message='Review exam questions. Return strict JSON.',
-        user_text='Identify questions outside their assigned topic, with an incorrect MCQ answer, or without enough information to answer. '
+        user_text='Review EVERY OR branch independently. Identify questions outside their assigned topic, marks or difficulty, with duplicate alternatives, an incorrect MCQ answer, or without enough information to answer. '
         'Return {"invalid_slot_ids": [...], "checked_slot_ids": [...]} listing EVERY reviewed slot in checked_slot_ids. '
         'Do not flag a valid question merely because wording differs from the textbook.\n'
         + json.dumps(questions(sections), ensure_ascii=False)
@@ -257,8 +268,11 @@ async def run_completion(job, *, store=None):
             visible = result.pop('visible')
             candidate['unresolved_issues'] = result['failed_gates']
             result['status'] = 'ready' if result['ready'] else ('incomplete' if finished else 'running')
-            result['action_label'] = ('Finish remaining questions' if 0 < result['unresolved_count'] <= 2
-                                      else 'Retry completion')
+            result['recovery_reason'] = 'ambiguous_placement' if candidate.get('unplaced') else 'automatic_recovery'
+            result['action_label'] = 'Review question placement' if candidate.get('unplaced') else 'Finish remaining items'
+            stage_index = 0 if candidate['phase'] in ('resolve', 'queued') else 1 if candidate['phase'] == 'generating' and candidate['round'] == 0 else 2
+            candidate['presentation_stage'] = max(candidate.get('presentation_stage', 0), stage_index)
+            result['presentation_stage'] = candidate['presentation_stage']
             result['phase'] = candidate['phase']
             result['revision'] = job['revision']
             parents = {(q['section_id'], q.get('parent_id') or q['slot_id']) for q in questions(candidate['sections'])}
@@ -270,7 +284,7 @@ async def run_completion(job, *, store=None):
             result['repair_count'] = candidate['repair_count']
             # A previous completed revision remains visible during repair.
             previous_ready = candidate.get('preserve_publication')
-            publish = result['ready'] or (result['preview_available'] and not previous_ready)
+            publish = not candidate.get('unplaced') and (result['ready'] or (result['preview_available'] and not previous_ready))
             status = 'ready' if result['ready'] or (publish and not finished) else ('needs_review' if finished else 'generating')
             if previous_ready and not result['ready']:
                 status = 'ready'
@@ -322,7 +336,7 @@ async def run_completion(job, *, store=None):
                 if unplaced:
                     candidate['unplaced'] = copy.deepcopy(unplaced)
                     await checkpoint()
-                    raise ValueError('Saved questions could not be assigned safely to the required slots; existing content has been retained.')
+                    candidate['last_error'] = 'Saved questions need review to identify their placement.'
             await checkpoint()
         replacement = payload.get('replace_question_id')
         if replacement and not candidate.get('replacement_requested'):
@@ -343,17 +357,19 @@ async def run_completion(job, *, store=None):
             candidate['anchors'] = await _retrieve_anchors(exam, [t['name'] for t in paper.get('topics') or []])
             await checkpoint()
         semaphore = asyncio.Semaphore(3)
-        if candidate.get('unplaced'):
-            raise ValueError('Saved questions need explicit slot placement; no accepted content was replaced.')
         while candidate['round'] <= MAX_ROUNDS:
             round_index = candidate['round']
             candidate['phase'] = 'generating' if round_index == 0 else 'repairing'
+            candidate['sections'] = adopt_existing(candidate['sections'], candidate['plan'])
+            structural_issues = validate_normal_plan(candidate['sections'], candidate['plan'])
+            replacement_slots = {issue['slot_id'] for issue in structural_issues if issue.get('slot_id') and issue['code'] in ('slot_metadata', 'slot_identity', 'slot_diagram')}
+            candidate['repair_issues'] = structural_issues
             for section in candidate['sections']:
                 bad = [q for q in section['questions'] if content_issues(q)]
                 candidate['rejected'].extend({'question': q, 'issues': content_issues(q)} for q in bad)
                 section['questions'] = [q for q in section['questions'] if not content_issues(q)]
             accepted = {q['slot_id'] for q in questions(candidate['sections']) if not content_issues(q)}
-            missing = [s for s in candidate['plan']['slots'] if s['slot_id'] not in accepted]
+            missing = [s for s in candidate['plan']['slots'] if s['slot_id'] not in accepted or s['slot_id'] in replacement_slots]
 
             async def fill(index, slots):
                 async with semaphore:
@@ -365,19 +381,34 @@ async def run_completion(job, *, store=None):
                             candidate.setdefault('pending_batches', {})[key] = generated
                             await checkpoint()
                         invalid_topics = await check_topics(generated, paper, payload, f"{paper['id']}:scope:{round_index}:{index}")
+                        replacements_with_figures = [q for q in questions(generated)
+                            if q['slot_id'] in replacement_slots and q.get('needs_diagram')
+                            and q['slot_id'] not in invalid_topics and not content_issues(q)]
+                        if replacements_with_figures:
+                            await generate_diagrams_for_paper(paper['id'], paper['owner_id'], [{'questions': replacements_with_figures}])
                         async with lock:
                             for section in generated:
                                 for q in section.get('questions') or []:
-                                    if q['slot_id'] in {old['slot_id'] for old in questions(candidate['sections'])}:
+                                    if q['slot_id'] in {old['slot_id'] for old in questions(candidate['sections'])} and q['slot_id'] not in replacement_slots:
                                         continue
                                     issues = content_issues(q)
+                                    if q['slot_id'] in replacement_slots and q.get('needs_diagram') and not q.get('diagram_path'):
+                                        issues.append('replacement_figure_pending')
                                     if q['slot_id'] in invalid_topics:
                                         issues.append('topic_or_answer')
-                                    if (await is_duplicate(q, questions(candidate['sections']), use_llm=False))[0]:
+                                    others = [old for old in questions(candidate['sections']) if old['slot_id'] != q['slot_id']]
+                                    if (await is_duplicate(q, others, use_llm=False))[0]:
                                         issues.append('duplicate')
                                     if issues:
                                         candidate['rejected'].append({'question': q, 'issues': issues, 'round': round_index})
                                         continue
+                                    if q['slot_id'] in replacement_slots:
+                                        for old_section in candidate['sections']:
+                                            for old in old_section['questions']:
+                                                if old['slot_id'] == q['slot_id']:
+                                                    q.update({key: copy.deepcopy(old[key]) for key in ('id', 'important', 'regen_history') if key in old})
+                                            old_section['questions'] = [old for old in old_section['questions'] if old['slot_id'] != q['slot_id']]
+                                        replacement_slots.discard(q['slot_id'])
                                     candidate['sections'] = adopt_existing(
                                         [*candidate['sections'], {**section, 'questions': [q]}], candidate['plan'])
                                     if round_index:
@@ -396,7 +427,7 @@ async def run_completion(job, *, store=None):
                 ids = set(key.split(','))
                 await fill(f'resume-{index}', [s for s in candidate['plan']['slots'] if s['slot_id'] in ids])
             accepted = {q['slot_id'] for q in questions(candidate['sections'])}
-            missing = [s for s in candidate['plan']['slots'] if s['slot_id'] not in accepted]
+            missing = [s for s in candidate['plan']['slots'] if s['slot_id'] not in accepted or s['slot_id'] in replacement_slots]
             await asyncio.gather(*(fill(i, batch) for i, batch in enumerate(batches(missing))))
             if round_index == 0 and candidate['first_pass_valid_count'] is None:
                 candidate['first_pass_valid_count'] = len(questions(candidate['sections']))
@@ -417,12 +448,18 @@ async def run_completion(job, *, store=None):
                                 required_internal_choice_count=target['required_internal_choice_count'])
                             invalid = await check_topics([{'questions': [result['question']]}], paper, payload,
                                                          f"{paper['id']}:alternative-scope:{target['question_id']}")
-                            if invalid or content_issues(result['question']):
+                            if invalid or content_issues(result['question']) or alternative_issues(result['question']):
                                 async with lock:
                                     candidate['rejected'].append({'question': result['question'], 'issues': ['invalid_alternative']})
                                     await checkpoint()
                                 return
                             async with lock:
+                                current_targets = internal_choice_repair_targets(candidate['sections'], candidate['spec'], allow_partial=True)
+                                if target not in current_targets:
+                                    return
+                                others = [q for q in questions(candidate['sections']) if q['id'] != target['question_id']]
+                                if (await is_duplicate(result['question'], others, use_llm=False))[0]:
+                                    return
                                 for section in candidate['sections']:
                                     for i, q in enumerate(section['questions']):
                                         if q['id'] == target['question_id']:
@@ -440,7 +477,12 @@ async def run_completion(job, *, store=None):
             figure_sections = [{**section, 'questions': [q for q in section['questions']
                                 if (q['slot_id'] in required or q.get('needs_diagram')) and not q.get('diagram_path')]}
                                for section in candidate['sections']]
-            await generate_diagrams_for_paper(paper['id'], paper['owner_id'], figure_sections)
+            try:
+                await generate_diagrams_for_paper(paper['id'], paper['owner_id'], figure_sections)
+            except OwnershipLost:
+                raise
+            except Exception as exc:
+                candidate['last_error'] = str(exc)[:500]
             candidate['round'] += 1
             await checkpoint()
             if evaluate(candidate, paper)['ready'] or budget.remaining_seconds() <= 0 or budget.calls_used >= CALL_LIMIT:

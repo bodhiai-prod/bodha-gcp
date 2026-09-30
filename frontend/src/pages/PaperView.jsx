@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
@@ -50,12 +50,16 @@ const typeBadge = (t) => {
 const TYPE_OPTIONS = ["information", "concept", "application"];
 const DIFF_OPTIONS = ["easy", "medium", "hard"];
 const GENERATION_PHASE_LABELS = {
-  queued: "Waiting to generate",
-  preparing: "Preparing questions",
-  generating: "Generating questions",
-  validating: "Checking final quality",
-  finalizing: "Finishing repairs",
-  ready: "Paper ready",
+  queued: "Preparing",
+  resolve: "Preparing",
+  repairing: "Checking and completing",
+  alternatives: "Checking and completing",
+  figures: "Checking and completing",
+  preparing: "Preparing",
+  generating: "Drafting",
+  validating: "Checking and completing",
+  finalizing: "Checking and completing",
+  ready: "Ready",
   failed: "Generation failed",
   cancelled: "Generation cancelled",
 };
@@ -88,9 +92,15 @@ export default function PaperView() {
   const [brandingPresets, setBrandingPresets] = useState([]);
   const [selectedBrandingId, setSelectedBrandingId] = useState("");
 
+  const loadSequence = useRef(0);
   const load = async () => {
+    const sequence = ++loadSequence.current;
     const { data } = await api.get(`/papers/${id}`);
-    setPaper(data);
+    if (sequence !== loadSequence.current) return;
+    setPaper(current => {
+      if (current?.id === data.id && (current.generation_revision || 0) > (data.generation_revision || 0)) return current;
+      return data;
+    });
   };
 
   useEffect(() => {
@@ -166,6 +176,7 @@ export default function PaperView() {
     setCancellingGeneration(true);
     try {
       const { data } = await api.post(`/papers/${id}/cancel-generation`);
+      ++loadSequence.current;
       setPaper(current => ({ ...current, ...data }));
       await load();
       toast.success("Paper generation cancelled");
@@ -251,6 +262,7 @@ export default function PaperView() {
         })),
       };
       const { data } = await api.patch(`/papers/${id}`, payload);
+      ++loadSequence.current;
       setPaper(data);
       setDraft(null);
       setEditing(false);
@@ -316,6 +328,7 @@ export default function PaperView() {
       const { data } = await api.patch(
         `/papers/${id}/question/${qid}/toggle-important`
       );
+      ++loadSequence.current;
       setPaper({ ...paper, sections: data.sections });
     } catch {
       toast.error("Failed");
@@ -391,6 +404,7 @@ export default function PaperView() {
       const { data } = await api.post(`/papers/${id}/branding/apply`, {
         branding_id: selectedBrandingId,
       });
+      ++loadSequence.current;
       setPaper(data);
       setSelectedBrandingId("");
       toast.success("Current branding applied to this paper");
@@ -405,6 +419,7 @@ export default function PaperView() {
     setBrandingApplying(true);
     try {
       const { data } = await api.delete(`/papers/${id}/branding`);
+      ++loadSequence.current;
       setPaper(data);
       toast.success("Branding removed from this paper");
     } catch (err) {
@@ -430,9 +445,8 @@ export default function PaperView() {
   if (!hasSavedQuestions && ["queued", "pending", "generating", "reviewing"].includes(paper.generation_status)) {
     const generatedCount = (paper.sections || []).reduce((total, section) => total + (section.questions || []).length, 0) || paper.generation_progress?.completed || 0;
     const configuredCount = paper.generation_progress?.total || paper.target_question_count || paper.generation_requirements?.total_questions || paper.total_questions || 0;
-    const progressPercent = configuredCount > 0 ? Math.min(100, Math.round(generatedCount / configuredCount * 100)) : 0;
     const generationPhase = paper.generation_progress?.phase || "preparing";
-    const phaseLabel = GENERATION_PHASE_LABELS[generationPhase] || "Generating questions";
+    const phaseLabel = paper.presentation?.stage || GENERATION_PHASE_LABELS[generationPhase] || "Drafting";
     const batch = paper.generation_progress?.batch || 0;
     const batchTotal = paper.generation_progress?.batch_total || 0;
     return (
@@ -465,18 +479,7 @@ export default function PaperView() {
             </p>
             <div className="generation-progress" aria-live="polite">
               <div className="generation-progress-heading"><span>{phaseLabel}</span><strong>{configuredCount > 0 ? `${generatedCount} / ${configuredCount}` : `${generatedCount} generated`}</strong></div>
-              <div
-                className="generation-progress-track"
-                role="progressbar"
-                aria-label="Paper generation progress"
-                aria-valuemin={0}
-                aria-valuemax={configuredCount || undefined}
-                aria-valuenow={configuredCount > 0 ? generatedCount : undefined}
-                aria-valuetext={configuredCount > 0 ? `${phaseLabel}: ${generatedCount} of ${configuredCount} questions generated` : phaseLabel}
-              >
-                <div className="generation-progress-fill" style={{ width: `${progressPercent}%` }} />
-              </div>
-              <span className="generation-progress-percent">{configuredCount > 0 ? `${progressPercent}% complete` : "Preparing question count…"}{batchTotal > 1 ? ` · Batch ${batch} of ${batchTotal}` : ""}</span>
+              <span>{configuredCount > 0 ? `${generatedCount} of ${configuredCount} scored parts drafted` : "Preparing question count…"}{batchTotal > 1 ? ` · Batch ${batch} of ${batchTotal}` : ""}</span>
             </div>
             <button type="button" onClick={cancelGeneration} disabled={cancellingGeneration} className="qp-btn qp-btn-secondary mt-6" data-testid="cancel-paper-generation">
               <X size={16} weight="bold" /> {cancellingGeneration ? "Cancelling…" : "Cancel generation"}
@@ -492,8 +495,7 @@ export default function PaperView() {
   }
 
   if (paper.generation_status === "needs_review" && !hasSavedQuestions) {
-    const message = paper.quality_review?.message || "The paper needs another quality-review attempt before it can be published.";
-    return <div className="min-h-screen bg-[#FAFAFA]"><Header /><main className="max-w-3xl mx-auto p-6 md:p-12"><Link to="/" className="qp-btn-ghost inline-flex items-center gap-2 mb-8"><ArrowLeft size={16} weight="bold" /> Dashboard</Link><div className="border border-amber-200 bg-amber-50 rounded-2xl p-10 text-center"><WarningCircle size={36} className="mx-auto text-amber-700 mb-4" /><h1 className="text-2xl font-semibold text-amber-900 mb-2">Generation could not complete</h1><p className="text-amber-800">{message}</p><button type="button" onClick={regenerateAll} className="qp-btn qp-btn-primary mt-6"><ArrowClockwise size={16} weight="bold" /> {paper.completion?.action_label || "Retry completion"}</button></div></main></div>;
+    return <div className="min-h-screen bg-[#FAFAFA]"><Header /><main className="max-w-3xl mx-auto p-6 md:p-12"><Link to="/" className="qp-btn-ghost inline-flex items-center gap-2 mb-8"><ArrowLeft size={16} weight="bold" /> Dashboard</Link><div className="border border-amber-200 bg-amber-50 rounded-2xl p-10 text-center"><WarningCircle size={36} className="mx-auto text-amber-700 mb-4" /><h1 className="text-2xl font-semibold text-amber-900 mb-2">Generation could not complete</h1><p className="text-amber-800">{paper.presentation?.message || "Generation needs another completion attempt. Saved progress is retained."}</p><button type="button" onClick={() => generateMissing(null)} className="qp-btn qp-btn-primary mt-6"><ArrowClockwise size={16} weight="bold" /> Finish remaining items</button></div></main></div>;
   }
 
   if (paper.generation_status === "failed" && !hasSavedQuestions) {
@@ -502,7 +504,7 @@ export default function PaperView() {
       "The AI could not complete this paper. This is often a temporary LLM provider issue.";
     const errMsg = /could not parse json|incomplete (response|output)|malformed json/i.test(savedError)
       ? "The AI provider returned an incomplete response after automatic recovery. Please retry generation."
-      : savedError;
+      : "Generation stopped before the paper passed its checks. Saved progress can be completed in another attempt.";
     const looksTransient = /502|503|504|gateway|timeout|connection|overloaded/i.test(
       errMsg
     );
@@ -607,22 +609,22 @@ export default function PaperView() {
       <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="paper-view-page">
         {completionLive && (
           <div className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4" data-testid="paper-quality-running-banner">
-            <div className="font-bold uppercase tracking-wider text-sm">Near-complete preview; completion is continuing</div>
+            <div className="font-bold uppercase tracking-wider text-sm">Checking and completing</div>
             <p className="text-sm text-neutral-700 mt-1">
               We are completing the remaining questions and alternatives. Downloads unlock when the full paper is ready.
-              {paper.completion && ` ${paper.completion.valid_scored_parts}/${paper.completion.target_scored_parts} scored parts complete.`}
+              {paper.completion && ` ${paper.completion.actual_scored_parts || 0}/${paper.completion.target_scored_parts || 0} parts drafted; ${paper.completion.pending_alternatives || 0} alternatives pending. ${paper.completion.actual_printed_questions || 0}/${paper.completion.target_printed_questions || 0} printed questions.`}
               {paper.quality_review?.withheld_count > 0 ? ` ${paper.quality_review.withheld_count} question${paper.quality_review.withheld_count === 1 ? " is" : "s are"} temporarily withheld.` : ""}
             </p>
             <button type="button" onClick={cancelGeneration} className="qp-btn qp-btn-secondary mt-2">Cancel completion</button>
           </div>
         )}
-        {paper.quality_review?.status === "needs_review" && (
+        {!isPartial && !completionLive && !templateRecovery && !choiceRecovery && paper.quality_review?.status === "needs_review" && (
           <div className="no-print mb-6 border-2 border-amber-300 bg-amber-50 p-4" data-testid="paper-quality-review-banner">
             <div className="font-bold uppercase tracking-wider text-sm text-amber-900">Completion needs another attempt</div>
-            <p className="text-sm text-amber-800 mt-1">{paper.quality_review?.message || "The safe questions remain available while the affected content is reviewed."}</p>
+            <p className="text-sm text-amber-800 mt-1">{paper.presentation?.message || "The safe questions remain available while the affected content is reviewed."}</p>
           </div>
         )}
-        {templateRecovery && (
+        {!completionLive && templateRecovery && (
           <div className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4" data-testid="template-recovery-banner">
             <div className="font-bold uppercase tracking-wider text-sm">
               {recoveryLive ? "Template recovery in progress" : "Template recovery needs review"}
@@ -635,7 +637,7 @@ export default function PaperView() {
             {!recoveryLive && <button onClick={retryTemplateRecovery} className="qp-btn qp-btn-primary text-xs mt-3" data-testid="retry-template-recovery-button">Retry template recovery</button>}
           </div>
         )}
-        {choiceRecovery && (
+        {!completionLive && !templateRecovery && choiceRecovery && (
           <div className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4" data-testid="internal-choice-recovery-banner">
             <div className="font-bold uppercase tracking-wider text-sm">
               {choiceRepairLive ? "Repairing internal OR choices" : "Internal OR choices need repair"}
@@ -645,15 +647,6 @@ export default function PaperView() {
                 ? "Rewriting only the affected question blocks with the required student-facing alternatives. Your other questions remain unchanged."
                 : "Automatic repair could not restore the required internal OR choices. You can safely retry the targeted repair or edit the paper yourself."}
             </p>
-            {(choiceRecovery.diagnostics || []).length > 0 && (
-              <ul className="mt-2 list-disc pl-5 text-xs text-neutral-700">
-                {choiceRecovery.diagnostics.map((issue) => (
-                  <li key={`${issue.section_id}-${issue.group_id}`}>
-                    Section {issue.section_id} / {issue.group_id}: expected {issue.expected}, found {issue.actual} internal OR choices.
-                  </li>
-                ))}
-              </ul>
-            )}
             {!choiceRepairLive && (
               <div className="mt-3 flex flex-wrap gap-2">
                 <button onClick={repairInternalChoices} disabled={!choiceRepairAllowed} className="qp-btn qp-btn-primary text-xs" data-testid="repair-internal-choices-button">
@@ -666,7 +659,7 @@ export default function PaperView() {
             )}
           </div>
         )}
-        {topup?.status === "generating" && (
+        {!completionLive && !templateRecovery && !choiceRecovery && topup?.status === "generating" && (
           <div
             className="no-print mb-6 border-2 border-black bg-blue-50 p-4 flex items-center gap-3"
             data-testid="topup-generating-banner"
@@ -684,7 +677,7 @@ export default function PaperView() {
           </div>
         )}
 
-        {topup?.status === "failed" && (
+        {!isPartial && !completionLive && !templateRecovery && !choiceRecovery && topup?.status === "failed" && (
           <div
             className="no-print mb-6 border-2 border-[#E63946] bg-red-50 p-4"
             data-testid="topup-failed-banner"
@@ -695,7 +688,7 @@ export default function PaperView() {
             <p className="text-sm text-red-800 mt-1 break-words">
               {/could not parse json|incomplete (response|output)|malformed json/i.test(topup.error || "")
                 ? "The AI provider returned an incomplete response after automatic recovery."
-                : (topup.error || "The AI provider did not respond.")}
+                : "Completion stopped before all items passed their checks. Please retry."}
             </p>
             <p className="text-xs text-red-700 mt-2">
               Nothing was lost — every question below is still here. Try again
@@ -704,7 +697,7 @@ export default function PaperView() {
           </div>
         )}
 
-        {paper.regen?.status === "failed" && (
+        {!isPartial && !completionLive && !templateRecovery && !choiceRecovery && !topup && paper.regen?.status === "failed" && (
           <div
             className="no-print mb-6 border-2 border-[#E63946] bg-red-50 p-4"
             data-testid="regen-failed-banner"
@@ -713,7 +706,7 @@ export default function PaperView() {
               Could not regenerate that question
             </div>
             <p className="text-sm text-red-800 mt-1 font-mono break-words">
-              {paper.regen.error || "The AI provider did not respond."}
+              {"The replacement did not pass its checks. The previous question has been retained."}
             </p>
             <p className="text-xs text-red-700 mt-2">
               Nothing was lost — the original question is still on the paper. Try
@@ -722,7 +715,7 @@ export default function PaperView() {
           </div>
         )}
 
-        {isPartial && !completionLive && !templateRecovery && topup?.status !== "generating" && (
+        {isPartial && !completionLive && !templateRecovery && !choiceRecovery && topup?.status !== "generating" && (
           <div
             className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4 flex items-start gap-3"
             data-testid="partial-banner"
@@ -737,13 +730,13 @@ export default function PaperView() {
               <div className="font-bold uppercase tracking-wider text-sm">
                 {missingCount > 0
                   ? `${missingCount} question${missingCount === 1 ? "" : "s"} missing`
-                  : "Questions or alternatives pending"}
+                  : paper.presentation?.action === "review_placement" ? "Review question placement" : "Questions or alternatives pending"}
               </div>
               <div className="text-sm text-neutral-700 mt-1 font-mono">
                 {target > 0
                   ? `${have} of ${target} generated. `
                   : "The AI's response was cut off before this paper was finished. "}
-                Complete missing questions and OR alternatives while keeping unaffected questions.
+                {paper.presentation?.message || "Complete missing questions and OR alternatives while keeping unaffected questions."}
               </div>
               {!completionPending && !paper.completion && <label className="flex items-center gap-2 mt-3 text-xs font-bold uppercase tracking-wider">
                 How many to add
@@ -761,14 +754,14 @@ export default function PaperView() {
             </div>
             <div className="flex flex-col gap-2 shrink-0">
               <button
-                onClick={() => generateMissing(completionPending || paper.completion ? null : topupValue)}
+                onClick={() => paper.presentation?.action === "review_placement" ? enterEdit() : generateMissing(completionPending || paper.completion ? null : topupValue)}
                 disabled={busy}
                 className="qp-btn qp-btn-primary text-xs"
                 data-testid="generate-missing-questions-button"
               >
                 {queuing
                   ? "Starting..."
-                  : "Generate pending"}
+                  : paper.presentation?.action_label || "Finish remaining items"}
               </button>
               <button
                 onClick={async () => {
@@ -790,28 +783,14 @@ export default function PaperView() {
             </div>
           </div>
         )}
-        {paper.instruction_check?.honoured === false && !busy && !templateRecovery && !choiceRecovery && (
+        {!isPartial && paper.quality_review?.status !== "needs_review" && paper.instruction_check?.honoured === false && !busy && !templateRecovery && !choiceRecovery && (
           <div className="no-print mb-6 border border-amber-300 bg-amber-50 p-4"
             data-testid="paper-requirements-check">
             <p className="font-bold text-sm">Some requested settings need review</p>
             <p className="mt-2 text-sm">
-              {paper.review_status?.summary || paper.instruction_check.misses?.[0] || "The generated paper needs review."}
+              {"Review the requested topics, marks and alternatives before downloading."}
             </p>
-            {(paper.review_status?.issues || []).length > 0 && (
-              <details className="mt-2 text-xs text-neutral-700">
-                <summary className="cursor-pointer font-bold">Technical details</summary>
-                <ul className="list-disc pl-5 mt-2">
-                  {(paper.review_status.issues || []).slice(0, 10).map((issue, index) => (
-                    <li key={`${issue.code || "issue"}-${index}`}>
-                      {issue.message || `${issue.code || "validation issue"}${issue.count ? ` (${issue.count})` : ""}`}
-                    </li>
-                  ))}
-                  {paper.review_status.issues.length > 10 && (
-                    <li>{paper.review_status.issues.length - 10} additional diagnostics were grouped.</li>
-                  )}
-                </ul>
-              </details>
-            )}
+
           </div>
         )}
         {/* Toolbar */}
