@@ -1,4 +1,5 @@
 from io import BytesIO
+import re
 from zipfile import ZipFile
 
 from PIL import Image
@@ -36,8 +37,8 @@ def _paper():
     }
 
 
-def _png_bytes():
-    image = Image.new("RGB", (32, 24), "white")
+def _png_bytes(width=32, height=24):
+    image = Image.new("RGB", (width, height), "white")
     output = BytesIO()
     image.save(output, format="PNG")
     return output.getvalue()
@@ -244,10 +245,31 @@ def test_docx_embeds_available_diagrams():
         document_xml = archive.read("word/document.xml").decode("utf-8")
 
     assert len(media_files) == 1
-    assert 'wp:extent cx="3886200" cy="2914650"' in document_xml
+    assert 'wp:extent cx="2377440" cy="1783080"' in document_xml
     with ZipFile(BytesIO(data)) as archive:
         image = Image.open(BytesIO(archive.read(media_files[0])))
         assert image.mode == "L"
+
+
+def test_docx_diagrams_fit_compact_bounds_without_frames_or_distortion():
+    max_extent = int(2.6 * 914400)
+    for width, height in ((100, 100), (400, 100), (100, 400)):
+        data = render_paper_docx(
+            _paper(), diagram_loader=lambda *_: _png_bytes(width, height)
+        )
+        with ZipFile(BytesIO(data)) as archive:
+            document_xml = archive.read("word/document.xml").decode("utf-8")
+
+        match = re.search(r'<wp:extent cx="(\d+)" cy="(\d+)"', document_xml)
+        assert match
+        rendered_width, rendered_height = map(int, match.groups())
+        assert rendered_width <= max_extent
+        assert rendered_height <= max_extent
+        assert rendered_width * height == rendered_height * width
+
+        diagram_start = document_xml.rfind("<w:p>", 0, match.start())
+        diagram_end = document_xml.find("</w:p>", match.end())
+        assert "<w:pBdr>" not in document_xml[diagram_start:diagram_end]
 
 
 def test_docx_ignores_invalid_header_image():
@@ -270,6 +292,9 @@ def test_docx_keeps_placeholder_for_pending_diagram():
         document_xml = archive.read("word/document.xml").decode("utf-8")
 
     assert "Diagram unavailable" in document_xml
+    placeholder_start = document_xml.rfind("<w:p>", 0, document_xml.index("Diagram unavailable"))
+    placeholder_end = document_xml.find("</w:p>", document_xml.index("Diagram unavailable"))
+    assert "<w:pBdr>" not in document_xml[placeholder_start:placeholder_end]
 
 
 def test_marks_instructions_and_cases_are_normalized():

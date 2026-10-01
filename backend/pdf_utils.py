@@ -42,6 +42,9 @@ from section_blueprints import (hydrate_section_instructions, normalize_internal
 
 logger = logging.getLogger(__name__)
 
+# Match the compact diagram bounds used by the editable DOCX export.
+DIAGRAM_MAX_SIZE_MM = 66.0
+
 # --- OCR (Google Cloud Vision) configuration --------------------------------
 VISION_OCR_ENABLED = os.environ.get("VISION_OCR_ENABLED", "true").lower() in (
     "1", "true", "yes",
@@ -283,7 +286,11 @@ def _math_img_tag(png_path: str) -> str:
         return f'<img src="{png_path}" valign="middle" height="11"/>'
 
 
-def _make_diagram_image(img_bytes: bytes, max_width_mm: float = 100, max_height_mm: float = 90):
+def _make_diagram_image(
+    img_bytes: bytes,
+    max_width_mm: float = DIAGRAM_MAX_SIZE_MM,
+    max_height_mm: float = DIAGRAM_MAX_SIZE_MM,
+):
     """Build a ReportLab Image that fits within max_width_mm × max_height_mm
     while preserving the source image's aspect ratio."""
     try:
@@ -909,7 +916,7 @@ def render_paper_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> 
                 try:
                     img_bytes = diagram_loader(q.get("id"), q["diagram_path"])
                     if img_bytes:
-                        img = _make_diagram_image(img_bytes, max_width_mm=100, max_height_mm=90)
+                        img = _make_diagram_image(img_bytes)
                         if img is not None:
                             img.hAlign = "LEFT"
                             story.append(Spacer(1, 2 * mm))
@@ -1081,7 +1088,7 @@ def render_solution_pdf(paper: dict, diagram_loader=None, branding_loader=None) 
                 try:
                     img_bytes = diagram_loader(q.get("id"), q["diagram_path"])
                     if img_bytes:
-                        img = _make_diagram_image(img_bytes, max_width_mm=90, max_height_mm=80)
+                        img = _make_diagram_image(img_bytes)
                         if img is not None:
                             img.hAlign = "LEFT"
                             story.append(img)

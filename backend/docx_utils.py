@@ -25,6 +25,9 @@ _DOCX_POOL = ThreadPoolExecutor(
     max_workers=DOCX_POOL_MAX_WORKERS, thread_name_prefix="docx"
 )
 
+# Keep diagrams compact while preserving their original proportions.
+DIAGRAM_MAX_SIZE_INCHES = 2.6
+
 _MATH_RE = re.compile(
     r"(?P<block>\$\$(?P<block_dollar>[\s\S]*?)\$\$|\\\[(?P<block_bracket>[\s\S]*?)\\\])"
     r"|(?P<inline>\$(?P<inline_dollar>[^$\n]+?)\$|\\\((?P<inline_paren>[^()\n]+?)\\\))"
@@ -837,14 +840,13 @@ def _add_diagram(container, image_bytes: Optional[bytes], available: bool) -> No
             paragraph.paragraph_format.space_before = Pt(2)
             paragraph.paragraph_format.space_after = Pt(6)
             _set_keep(paragraph, keep_together=True)
-            _set_cell_or_paragraph_border(paragraph, "000000")
             image_bytes = _grayscale_image_bytes(image_bytes)
             with Image.open(io.BytesIO(image_bytes)) as image:
                 width_px, height_px = image.size
             # Keep figures compact enough to sit naturally with the question
             # while retaining their source aspect ratio and legibility.
-            max_width = Inches(4.25)
-            max_height = Inches(3.75)
+            max_width = Inches(DIAGRAM_MAX_SIZE_INCHES)
+            max_height = Inches(DIAGRAM_MAX_SIZE_INCHES)
             width = max_width
             height = width * height_px / max(width_px, 1)
             if height > max_height:
@@ -860,7 +862,6 @@ def _add_diagram(container, image_bytes: Optional[bytes], available: bool) -> No
     placeholder.paragraph_format.left_indent = Inches(0.25)
     placeholder.paragraph_format.space_after = Pt(6)
     _set_keep(placeholder, keep_together=True)
-    _set_cell_or_paragraph_border(placeholder, "000000")
     placeholder.add_run("[Diagram unavailable]").italic = True
 
 
