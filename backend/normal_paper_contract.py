@@ -277,6 +277,8 @@ def stamp_slot_content(candidate: dict, slot: dict, *, preserve_runtime: bool = 
         for key, value in slot.items()
         if key not in {"order", "section_title", "diagram_mode"}
     })
+    if not slot.get("case_study"):
+        question.pop("shared_stimulus", None)
     mode = slot.get("diagram_mode")
     question["needs_diagram"] = (
         True if mode == "required" else False if mode == "forbidden"

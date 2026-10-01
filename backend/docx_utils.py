@@ -1027,6 +1027,7 @@ def render_paper_docx(
                     parent_stimulus = document.add_paragraph()
                     parent_stimulus.paragraph_format.left_indent = Inches(0.12)
                     parent_stimulus.paragraph_format.space_after = Pt(3)
+                    parent_stimulus.add_run(f"Q{question_number}. ").bold = True
                     parent_stimulus.add_run(question["shared_stimulus"])
                 if question.get("parent_lead_in"):
                     parent_lead = document.add_paragraph()
@@ -1057,7 +1058,7 @@ def render_paper_docx(
             question_paragraph.paragraph_format.space_before = Pt(5)
             question_paragraph.paragraph_format.space_after = Pt(3)
             _set_keep(question_paragraph, keep_together=True)
-            prefix = (f"Q{question_number}. {question.get('part_label', '')} " if first_part
+            prefix = ((f"{question.get('part_label', '')} " if question.get("shared_stimulus") else f"Q{question_number}. {question.get('part_label', '')} ") if first_part
                       else (f"{question.get('part_label', '')} " if parent_id else f"Q{question_number}. "))
             question_paragraph.add_run(prefix).bold = True
             marks_paragraph = marks_cell.paragraphs[0]

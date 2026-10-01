@@ -104,6 +104,17 @@ def _screen_viewable_sections(
         if group.get("internal_choices") is not None
     }
     pending_choice_allocations = set()
+    invalid_case_parents = set()
+    case_questions = {}
+    for section in screened:
+        for question in section.get("questions") or []:
+            row = allocation_rows.get((question or {}).get("allocation_id"))
+            if row and row.get("case_study") and row.get("parent_id"):
+                case_questions.setdefault((row.get("section_id"), row.get("parent_id")), []).append(question)
+    for parent, questions in case_questions.items():
+        valid_stimuli = [question for question in questions if len(str(question.get("shared_stimulus") or "").split()) >= 20]
+        if len(valid_stimuli) != 1:
+            invalid_case_parents.add(parent)
     if required_choice_groups:
         choice_counts = {key: 0 for key in required_choice_groups}
         choice_ids = {key: set() for key in required_choice_groups}
@@ -154,6 +165,9 @@ def _screen_viewable_sections(
                 continue
 
             row = allocation_rows.get(question.get("allocation_id"))
+            if row and (row.get("section_id"), row.get("parent_id")) in invalid_case_parents:
+                issues.append(f"Question {qid} is withheld until its shared case stimulus is repaired.")
+                continue
             if question.get("allocation_id") in pending_choice_allocations:
                 issues.append(f"Question {qid} has pending required internal choices.")
                 question["completion_pending"] = "Internal OR alternative pending"

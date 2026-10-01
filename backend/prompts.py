@@ -918,6 +918,7 @@ def qgen_prompt(
         '        { "question": "...", "topic": "Topic name", "type": "information",\n'
         '          "format": "mcq|short_answer|long_answer|fill_blank|true_false|custom_label|\\"\\"",\n'
         f'          "difficulty": "easy|medium|hard", "marks": 1, {allocation_identity_fields}"needs_diagram": false,\n'
+        '          "shared_stimulus": "only on the first scored part of a case-study parent",\n'
         '          "diagram_spec": { "figure": "...", "labels": [], "given_values": [],\n'
         '                            "unknowns": [], "why_required": "..." },\n'
         '          "options": ["A","B","C","D"], "correct_option": 0 }\n'
@@ -932,6 +933,8 @@ def qgen_prompt(
         "- Set 'topic' field on every question to the matching topic name from the list above.\n"
         "- Set 'format' field on every question (use one of the provided format labels, or empty string if none specified).\n"
         + ("- For a SECTION ALLOCATION CONTRACT, section_id and allocation_id/textbook_id/topic_id/group_id/slot_id are mandatory exact identifiers on every returned object.\n" if spec.get("section_allocations") else "")
+        + ("- For every case-study parent in the allocation contract, return exactly one substantive shared_stimulus on its first scored slot. It must be a coherent passage, experiment, dataset, graph description, clinical situation, or application used by every sibling subpart. Do not put separate mini-passages in individual subparts, and do not write unrelated standalone questions under one case.\n" if spec.get("section_allocations") else "")
+        + ("- Omit shared_stimulus from every non-case question and from all later subparts of a case parent.\n" if spec.get("section_allocations") else "")
         + "- Put any section-wide directions, lead-ins, or rules in that section's 'section_instructions' field. Never turn a section instruction into Q1. Every entry in 'questions' must be an assessable numbered question with its own student task.\n"
         "- For format='mcq', 'options' MUST be an array of EXACTLY 4 plain strings, and 'correct_option' MUST be one of 0,1,2,3 pointing to the correct entry. Omit these fields for non-MCQ questions.\n"
         + ("" if has_blueprint or topup_count else

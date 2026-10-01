@@ -876,10 +876,14 @@ def render_paper_pdf(paper: dict, diagram_loader=None, branding_loader=None) -> 
                     q_counter += 1
                 printed_parent = parent_id
                 if q.get("shared_stimulus"):
-                    story.append(Paragraph(_math_to_paragraph_html(q["shared_stimulus"]), q_style))
+                    story.append(Paragraph(
+                        f"<b>Q{q_counter}.</b> {_math_to_paragraph_html(q['shared_stimulus'])}",
+                        q_style,
+                    ))
                 if q.get("parent_lead_in"):
                     story.append(Paragraph(_math_to_paragraph_html(q["parent_lead_in"]), q_style))
-                prefix = f"<b>Q{q_counter}.</b> {q.get('part_label', '')}".strip()
+                prefix = (f"<b>{q.get('part_label', '')}</b>" if q.get("shared_stimulus")
+                          else f"<b>Q{q_counter}.</b> {q.get('part_label', '')}").strip()
             elif parent_id:
                 prefix = f"<b>{q.get('part_label', '')}</b>".strip()
             else:

@@ -42,6 +42,16 @@ def compile_plan(spec, paper):
     sections = [{'id': s['id'], 'title': s.get('title') or s['id'], 'order': i}
                 for i, s in enumerate(spec['blueprint']['sections'])]
     slots = []
+    blueprint_slot_order = {
+        slot.get('id'): index
+        for index, slot in enumerate(
+            slot
+            for section in spec['blueprint']['sections']
+            for group in section.get('groups') or []
+            for slot in group.get('slots') or []
+        )
+        if slot.get('id')
+    }
     saved_questions = questions(paper.get('sections') or [])
     for row in spec['section_allocations']:
         for i in range(int(row.get('count') or 1)):
@@ -56,6 +66,16 @@ def compile_plan(spec, paper):
             slots.append({**row, 'slot_id': sid, 'id': sid, 'topic': row['name'],
                           'type': qtype, 'order': len(slots),
                           'diagram_mode': 'required' if row.get('diagrams') else 'forbidden'})
+    # Topic allocation rows are stored in the order teachers assign them, not
+    # necessarily in printable question order. Compound parents must remain
+    # contiguous or the renderer will print the same question number twice.
+    section_order = {section['id']: index for index, section in enumerate(spec['blueprint']['sections'])}
+    slots.sort(key=lambda slot: (
+        section_order.get(slot.get('section_id'), 10_000),
+        blueprint_slot_order.get(slot.get('slot_id'), 10_000),
+    ))
+    for index, slot in enumerate(slots):
+        slot['order'] = index
     # Make each group's OR quota explicit in the first content request. The
     # provider cannot infer group quotas from isolated normal-paper slots.
     for section in spec['blueprint']['sections']:
@@ -231,6 +251,7 @@ async def check_topics(sections, paper, payload, ref):
         return set()
     data = await _request_paper_json(system_message='Review exam questions. Return strict JSON.',
         user_text='Review EVERY OR branch independently. Identify questions outside their assigned topic, marks or difficulty, with duplicate alternatives, an incorrect MCQ answer, or without enough information to answer. '
+        'For a case-study parent, also verify that every sibling subpart depends on its one shared_stimulus and that the stimulus and subparts form one coherent case. If not, mark every slot in that parent invalid. '
         'Return {"invalid_slot_ids": [...], "checked_slot_ids": [...]} listing EVERY reviewed slot in checked_slot_ids. '
         'Do not flag a valid question merely because wording differs from the textbook.\n'
         + json.dumps(questions(sections), ensure_ascii=False)
@@ -373,7 +394,7 @@ async def run_completion(job, *, store=None):
             candidate['phase'] = 'generating' if round_index == 0 else 'repairing'
             candidate['sections'] = adopt_existing(candidate['sections'], candidate['plan'])
             structural_issues = validate_normal_plan(candidate['sections'], candidate['plan'])
-            replacement_slots = {issue['slot_id'] for issue in structural_issues if issue.get('slot_id') and issue['code'] in ('slot_metadata', 'slot_identity', 'slot_diagram')}
+            replacement_slots = {issue['slot_id'] for issue in structural_issues if issue.get('slot_id') and issue['code'] in ('slot_metadata', 'slot_identity', 'slot_diagram', 'missing_case_stimulus')}
             candidate['repair_issues'] = structural_issues
             for section in candidate['sections']:
                 bad = [q for q in section['questions'] if content_issues(q)]

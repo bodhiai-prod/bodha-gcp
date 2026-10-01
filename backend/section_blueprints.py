@@ -506,6 +506,16 @@ def normalize_template_sections(sections: list, spec: dict) -> tuple[list, list[
         return sections, []
     by_allocation = {row.get("allocation_id"): row for row in rows}
     by_section = {section["section_id"]: section for section in skeleton}
+    slot_order = {
+        slot.get("id"): index
+        for index, slot in enumerate(
+            slot
+            for section in ((spec.get("blueprint") or {}).get("sections") or [])
+            for group in section.get("groups") or []
+            for slot in group_slots(group)
+        )
+        if slot.get("id")
+    }
     unknown, misses, index = [], [], 0
     for source in sections or []:
         for question in source.get("questions") or []:
@@ -518,6 +528,8 @@ def normalize_template_sections(sections: list, spec: dict) -> tuple[list, list[
                 continue
             from slot_identity import restore_missing_identity
             restore_missing_identity(question, {**row, **({'topic': row['name']} if 'name' in row else {})})
+            if not row.get("case_study"):
+                question.pop("shared_stimulus", None)
             # Allocation placement is authoritative; a model-supplied section
             # id or title cannot override it.
             question["section_id"] = row["section_id"]
@@ -525,6 +537,8 @@ def normalize_template_sections(sections: list, spec: dict) -> tuple[list, list[
                 if row.get(key) not in (None, ""):
                     question[key] = row[key]
             by_section[row["section_id"]]["questions"].append(question)
+    for section in skeleton:
+        section["questions"].sort(key=lambda question: slot_order.get(question.get("slot_id"), 10_000))
     normalized = [section for section in skeleton if section["questions"]]
     if unknown:
         normalized.append({
@@ -1059,6 +1073,16 @@ def allocation_misses(sections, spec):
                 misses.append(f"{label}: requires at least one supplied diagram.")
             if not row.get("diagrams") and diagrams:
                 misses.append(f"{label}: supplied diagrams are disabled.")
+    case_parents = {}
+    for row in rows:
+        if row.get("case_study") and row.get("parent_id"):
+            case_parents.setdefault((row["section_id"], row["parent_id"]), []).extend(found.get(row["allocation_id"], []))
+    for (section_id, parent_id), questions in case_parents.items():
+        stimuli = [str(question.get("shared_stimulus") or "").strip() for question in questions]
+        if sum(len(stimulus.split()) >= 20 for stimulus in stimuli) != 1:
+            misses.append(
+                f"Section {section_id} / {parent_id}: case study requires exactly one substantive shared stimulus used by all subparts."
+            )
     for miss in internal_choice_misses(sections, spec):
         actual = f"{miss['actual']} rendered"
         if miss["unspecified"]:

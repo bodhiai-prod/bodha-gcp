@@ -11,7 +11,8 @@ from question_revision import invalidate_changed_solution, sources
 from test_paper_completion import MemoryStore, paper_fixture
 from test_question_regenerate import make_paper, reply
 from section_blueprints import (catalog, Allocation, allocation_buckets, compile_allocations,
-                                topic_catalog, allocation_prompt)
+                                topic_catalog, allocation_prompt, normalize_template_sections,
+                                allocation_misses)
 from prompts import render_spec
 
 
@@ -138,6 +139,88 @@ def test_official_isc_prompt_counts_and_or_quotas():
     payload = json.loads(allocation_text[allocation_text.index('{'):])
     assert sum(row.get('internal_choice_count', 0) for row in payload['allocations']) == 10
     assert 'optional Sections B/C' in allocation_text
+
+
+def test_compound_case_slots_use_canonical_print_order_even_when_allocations_are_shuffled():
+    slots = [
+        {'id': 'q29-1', 'parent_id': 'q29', 'parent_label': 'Question 29', 'part_label': '(1)', 'marks': 1, 'format': 'short_answer'},
+        {'id': 'q29-2', 'parent_id': 'q29', 'parent_label': 'Question 29', 'part_label': '(2)', 'marks': 1, 'format': 'short_answer'},
+        {'id': 'q30-1', 'parent_id': 'q30', 'parent_label': 'Question 30', 'part_label': '(1)', 'marks': 1, 'format': 'short_answer'},
+    ]
+    blueprint = {'id': 'ordered', 'total_marks': 3, 'sections': [{'id': 'D', 'title': 'Section D', 'groups': [
+        {'id': 'case', 'count': 2, 'marks': 1, 'format': 'short_answer', 'slots': slots}
+    ]}]}
+    rows = []
+    for index, slot_id in enumerate(('q30-1', 'q29-1', 'q29-2')):
+        slot = next(slot for slot in slots if slot['id'] == slot_id)
+        rows.append({'allocation_id': f'a{index}', 'section_id': 'D', 'group_id': 'case', 'slot_id': slot_id,
+                     'parent_id': slot['parent_id'], 'parent_label': slot['parent_label'], 'part_label': slot['part_label'],
+                     'textbook_id': 'book', 'topic_id': f't{index}', 'name': f'Topic {index}',
+                     'difficulty': 'medium', 'marks': 1, 'format': 'short_answer', 'count': 1})
+    spec = {'blueprint': blueprint, 'section_allocations': rows}
+    generated = [{'section_id': 'D', 'title': 'Section D', 'questions': [
+        {'allocation_id': row['allocation_id'], 'slot_id': row['slot_id'], 'question': row['name'],
+         'textbook_id': 'book', 'topic_id': row['topic_id'], 'group_id': 'case', 'topic': row['name'],
+         'difficulty': 'medium', 'marks': 1, 'format': 'short_answer'}
+        for row in rows
+    ]}]
+    normalized, misses = normalize_template_sections(generated, spec)
+    assert not misses
+    assert [question['slot_id'] for question in normalized[0]['questions']] == ['q29-1', 'q29-2', 'q30-1']
+    plan = engine.compile_plan(spec, {'sections': []})
+    assert [slot['slot_id'] for slot in plan['slots']] == ['q29-1', 'q29-2', 'q30-1']
+
+
+def test_missing_case_stimulus_is_reviewable_not_a_compile_time_blocker():
+    book = {'id': 'book', 'topics': [{'name': 'Electrostatics', 'subtopics': []}, {'name': 'Magnetism', 'subtopics': []}]}
+    blueprint = next(row for row in catalog() if row['id'] == 'cbse12-physics')
+    case = next(group for section in blueprint['sections'] if section['id'] == 'D' for group in section['groups'] if group['id'] == 'q29')
+    topics = topic_catalog(book)
+    rows = [Allocation(section_id='D', group_id='q29', slot_id=slot['id'], textbook_id='book',
+                       topic_id=topics[index % 2]['topic_id'], count=1) for index, slot in enumerate(case['slots'])]
+    # Fill all other official slots so compilation can assess the complete template.
+    for section in blueprint['sections']:
+        for group in section['groups']:
+            if section['id'] == 'D' and group['id'] == 'q29':
+                continue
+            for bucket in allocation_buckets(group):
+                rows.append(Allocation(section_id=section['id'], group_id=group['id'], bucket_id=bucket['id'],
+                                       textbook_id='book', topic_id=topics[0]['topic_id'], count=len(bucket['slots'])))
+    spec, errors = compile_allocations(blueprint, rows, [book], 'medium', 70)
+    assert not any('case-study parts must use one textbook chapter' in error for error in errors)
+    assert not errors
+    case_rows = [row for row in spec['section_allocations'] if row['section_id'] == 'D' and row['parent_id'] == 'q29']
+    sections = [{'section_id': 'D', 'title': 'Section D', 'questions': [
+        {'allocation_id': row['allocation_id'], 'slot_id': row['slot_id'], 'section_id': 'D',
+         'textbook_id': row['textbook_id'], 'topic_id': row['topic_id'], 'group_id': row['group_id'],
+         'topic': row['name'], 'difficulty': row['difficulty'], 'marks': row['marks'], 'format': row['format'],
+         'question': 'Apply the assigned concept to the case.'}
+        for row in case_rows
+    ]}]
+    assert any('requires exactly one substantive shared stimulus' in miss for miss in allocation_misses(sections, spec))
+
+
+def test_preview_withholds_entire_case_parent_when_shared_stimulus_is_missing():
+    rows = [
+        {'allocation_id': f'a{index}', 'section_id': 'D', 'group_id': 'case', 'slot_id': f'q29-{index}',
+         'parent_id': 'q29', 'case_study': True, 'textbook_id': 'book', 'topic_id': 'topic',
+         'name': 'Electrostatics', 'difficulty': 'medium', 'marks': 1, 'format': 'short_answer', 'count': 1}
+        for index in range(1, 5)
+    ]
+    spec = {'section_allocations': rows, 'blueprint': {'sections': [
+        {'id': 'D', 'groups': [{'id': 'case', 'internal_choices': None}]}
+    ]}}
+    sections = [{'section_id': 'D', 'title': 'Section D', 'questions': [
+        {'id': f'q{index}', 'allocation_id': row['allocation_id'], 'slot_id': row['slot_id'],
+         'section_id': 'D', 'parent_id': 'q29', 'textbook_id': 'book', 'topic_id': 'topic',
+         'group_id': 'case', 'topic': 'Electrostatics', 'difficulty': 'medium', 'marks': 1,
+         'format': 'short_answer', 'type': 'concept', 'question': 'Apply the supplied case information.',
+         'needs_diagram': False}
+        for index, row in enumerate(rows, start=1)
+    ]}]
+    visible, issues = workers._screen_viewable_sections(sections, spec=spec)
+    assert visible == []
+    assert len([issue for issue in issues if 'shared case stimulus' in issue]) == 4
 
 
 def test_transient_provider_failure_does_not_end_completion_budget():
