@@ -2587,12 +2587,21 @@ async def paper_diagram(
         raise HTTPException(status_code=404, detail="Paper not found")
     if p["owner_id"] != user_id and role != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Keep asset lookup on the same view of the paper as GET /papers/{id}.
+    # Ordinary papers are reconstructed from their immutable normal-slot plan
+    # on read.  Looking only at the raw stored sections can therefore miss a
+    # diagram which the rendered paper has just exposed (most visibly when the
+    # UI addresses the question by ``normal-007`` rather than its runtime id).
+    sections, _section_plan, _repaired = _normalize_saved_paper_sections(p)
     path = None
-    for s in p.get("sections", []):
+    for s in sections:
         for q in s.get("questions", []):
-            if q.get("id") == question_id:
+            if question_id in {q.get("id"), q.get("slot_id")}:
                 path = q.get("diagram_path")
                 break
+        if path:
+            break
     if not path:
         raise HTTPException(status_code=404, detail="Diagram not found")
     data, ct = get_object(path)

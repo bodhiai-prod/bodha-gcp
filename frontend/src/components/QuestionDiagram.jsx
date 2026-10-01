@@ -6,24 +6,45 @@ import { Image as ImageIcon } from "@phosphor-icons/react";
 // Fetches the diagram as a blob URL so the auth token can be sent via header.
 const DiagramImage = ({ paperId, questionId }) => {
   const [src, setSrc] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let revoked = false;
     let currentUrl = null;
+    setSrc(null);
+    setFailed(false);
     getFirebaseToken().then((token) => fetch(`${API}/papers/${paperId}/diagrams/${questionId}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     }))
-      .then((r) => (r.ok ? r.blob() : null))
+      .then((r) => {
+        if (!r.ok) throw new Error(`Diagram request failed (${r.status})`);
+        return r.blob();
+      })
       .then((blob) => {
-        if (!blob || revoked) return;
+        if (revoked) return;
         currentUrl = URL.createObjectURL(blob);
         setSrc(currentUrl);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!revoked) setFailed(true);
+      });
     return () => {
       revoked = true;
       if (currentUrl) URL.revokeObjectURL(currentUrl);
     };
-  }, [paperId, questionId]);
+  }, [paperId, questionId, attempt]);
+  if (failed) {
+    return (
+      <button
+        type="button"
+        onClick={() => setAttempt((value) => value + 1)}
+        className="w-48 h-32 border-2 border-dashed border-neutral-300 flex items-center justify-center text-neutral-500 text-xs bg-neutral-50"
+        data-testid={`diagram-retry-${questionId}`}
+      >
+        <ImageIcon size={18} /> &nbsp; diagram unavailable — retry
+      </button>
+    );
+  }
   if (!src) {
     return (
       <div

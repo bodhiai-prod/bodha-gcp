@@ -70,7 +70,7 @@ class NormalPaperContractTests(unittest.TestCase):
 
     def test_reassembly_preserves_runtime_fields_and_restamps_structure(self):
         _spec, _topics, plan = fixture()
-        slot = plan["slots"][0]
+        slot = next(row for row in plan["slots"] if row["diagram_mode"] == "required")
         sections = [{"title": "Provider title", "questions": [{
             "id": "stable-id",
             "slot_id": slot["slot_id"],
@@ -80,12 +80,15 @@ class NormalPaperContractTests(unittest.TestCase):
             "marks": 999,
             "important": True,
             "diagram_path": "questions/stable-id.png",
+            "diagram_status": "ready",
         }]}]
         merged = merge_normal_sections(plan, sections)
         question = merged[0]["questions"][0]
         self.assertEqual(question["id"], "stable-id")
         self.assertEqual(question["question"], "Edited by teacher")
         self.assertTrue(question["important"])
+        self.assertEqual(question["diagram_path"], "questions/stable-id.png")
+        self.assertEqual(question["diagram_status"], "ready")
         self.assertEqual(question["topic"], slot["topic"])
         self.assertEqual(question["marks"], slot["marks"])
 
