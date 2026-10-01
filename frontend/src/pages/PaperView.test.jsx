@@ -1,6 +1,6 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
-import PaperView from "./PaperView";
+import PaperView, { questionDisplayLabel } from "./PaperView";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -36,6 +36,35 @@ const render = async (value) => {
   api.get.mockImplementation(url => Promise.resolve({ data: url === "/branding-presets" ? [] : value }));
   await act(async () => root.render(<PaperView />));
 };
+
+test("question labels retain the first compound part without changing ordinary numbering", () => {
+  expect(questionDisplayLabel(3, "(1)")).toBe("Q3. (1)");
+  expect(questionDisplayLabel(null, "(2)")).toBe("(2)");
+  expect(questionDisplayLabel(4, "")).toBe("Q4.");
+  expect(questionDisplayLabel(5, undefined)).toBe("Q5.");
+});
+
+test("compound labels render consistently in paper and edit views", async () => {
+  const compound = paper({
+    completion: { status: "incomplete", ready: false },
+    presentation: { action: "review_placement", action_label: "Review question placement" },
+    sections: [{ section_id: "A", title: "Section A", questions: [
+      { id: "q3-1", parent_id: "q3", display_number: 3, part_label: "(1)", question: "First part", marks: 4, format: "short_answer", type: "concept" },
+      { id: "q3-2", parent_id: "q3", display_number: 3, part_label: "(2)", question: "Second part", marks: 4, format: "short_answer", type: "concept" },
+      { id: "q4", display_number: 4, question: "Ordinary question", marks: 4, format: "short_answer", type: "concept" },
+    ] }],
+  });
+  await render(compound);
+
+  expect(container.querySelector('[data-testid="question-item-q3-1"] .font-bold').textContent).toBe("Q3. (1)");
+  expect(container.querySelector('[data-testid="question-item-q3-2"] .font-bold').textContent).toBe("(2)");
+  expect(container.querySelector('[data-testid="question-item-q4"] .font-bold').textContent).toBe("Q4.");
+
+  await act(async () => container.querySelector('[data-testid="generate-missing-questions-button"]').click());
+  expect(container.querySelector('[data-testid="edit-question-q3-1"] .font-bold').textContent).toBe("Q3. (1)");
+  expect(container.querySelector('[data-testid="edit-question-q3-2"] .font-bold').textContent).toBe("(2)");
+  expect(container.querySelector('[data-testid="edit-question-q4"] .font-bold').textContent).toBe("Q4.");
+});
 test("legacy near-complete paper is visible and generate pending queues continuation", async () => {
   await render(paper());
   expect(container.querySelector('[data-testid="paper-view-page"]')).not.toBeNull();

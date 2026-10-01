@@ -50,6 +50,15 @@ const typeBadge = (t) => {
 
 const TYPE_OPTIONS = ["information", "concept", "application"];
 const DIFF_OPTIONS = ["easy", "medium", "hard"];
+
+// A compound question's first scored part has both a paper number and a part
+// label. Keep those two pieces together: later parts intentionally render only
+// their part label, while ordinary questions have no part label to append.
+export const questionDisplayLabel = (questionNumber, partLabel) => {
+  if (questionNumber == null) return partLabel || "";
+  return `Q${questionNumber}.${partLabel ? ` ${partLabel}` : ""}`;
+};
+
 const GENERATION_PHASE_LABELS = {
   queued: "Preparing",
   resolve: "Preparing",
@@ -1024,7 +1033,7 @@ export default function PaperView() {
                       >
                         {firstPart && q.parent_lead_in && <p className="text-sm italic mb-2">{q.parent_lead_in}</p>}
                         <div className="flex items-start gap-2 mb-2">
-                          <span className="font-bold pt-2">{qNum ? `Q${qNum}.` : q.part_label}</span>
+                          <span className="font-bold pt-2">{questionDisplayLabel(qNum, q.part_label)}</span>
                           <textarea
                             value={q.question}
                             onChange={(e) =>
@@ -1146,7 +1155,7 @@ export default function PaperView() {
                       <div className="flex-1">
                         {firstPart && q.parent_lead_in && <p className="text-sm italic mb-2"><MathText text={q.parent_lead_in} /></p>}
                         <div className="flex items-start gap-2">
-                          <span className="font-bold">{qNum ? `Q${qNum}.` : q.part_label}</span>
+                          <span className="font-bold">{questionDisplayLabel(qNum, q.part_label)}</span>
                           {q.important && (
                             <Star
                               size={16}
