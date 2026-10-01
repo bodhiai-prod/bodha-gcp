@@ -893,7 +893,9 @@ async def generate_paper_background(
     # has been parsed. A single provider response moves from 0 straight to this
     # value; the UI continues to poll it while the finishing checks run.
     coercions: dict = {}
-    _normalise_paper_questions(sections, difficulty, coercions)
+    _normalise_paper_questions(
+        sections, difficulty, coercions, assign_ids=normal_plan is None
+    )
     first_view, withheld = _screen_viewable_sections(
         sections, spec=spec, normal_plan=normal_plan
     )
@@ -925,6 +927,20 @@ async def generate_paper_background(
     # One bounded correction attempt for a complete but noncompliant paper.
     # Truncated papers use the existing top-up path instead.
     initial_check = verify_instructions(sections, spec)
+    initial_template_misses = (
+        template_validation_misses(sections, spec)
+        if spec.get("section_allocations") else []
+    )
+    # A missing shared case stimulus is content failure, not a count shortfall.
+    # Surface it before the existing *single* correction attempt so the paper
+    # gets one chance to become a real case study.  Keep every other template
+    # diagnostic in the final/recovery gate; broadening this trigger would make
+    # harmless metadata differences regenerate an otherwise usable paper.
+    initial_case_misses = [
+        miss for miss in initial_template_misses
+        if "case study requires exactly one substantive shared stimulus" in miss.lower()
+    ]
+    initial_check["misses"].extend(initial_case_misses)
     invalid_type_misses = [
         f"Question {index}: generated an invalid cognitive type."
         for index, q in enumerate((q for s in sections for q in s.get("questions", [])), start=1)
@@ -963,11 +979,24 @@ async def generate_paper_background(
             _normalise_paper_questions(corrected, difficulty, corrected_coercions)
             (allocation_coverage(corrected, spec) if spec.get("section_allocations") else measure_coverage(corrected, topics_weighted, spec.get("total_questions") or derive_target_question_count(total_marks)))
             corrected_check = verify_instructions(corrected, spec)
+            corrected_template_misses = (
+                template_validation_misses(corrected, spec)
+                if spec.get("section_allocations") else []
+            )
+            corrected_check["misses"].extend(
+                miss for miss in corrected_template_misses
+                if "case study requires exactly one substantive shared stimulus" in miss.lower()
+            )
             corrected_check["misses"].extend(
                 "generated an invalid cognitive type"
                 for flags in corrected_coercions.values() if "invalid_question_type" in flags
             )
-            if corrected and len(corrected_check["misses"]) < len(initial_check["misses"]):
+            template_improved = (
+                not spec.get("section_allocations")
+                or len(corrected_template_misses) < len(initial_template_misses)
+            )
+            if (corrected and template_improved
+                    and len(corrected_check["misses"]) < len(initial_check["misses"])):
                 data, sections = corrected_data, corrected
                 coercions = corrected_coercions
         except Exception as exc:
@@ -1029,7 +1058,9 @@ async def generate_paper_background(
                 )
                 replacements = replacement_data.get("sections") or []
                 replacement_flags: dict = {}
-                _normalise_paper_questions(replacements, difficulty, replacement_flags)
+                _normalise_paper_questions(
+                    replacements, difficulty, replacement_flags, assign_ids=False
+                )
                 await complete_sections(
                     replacements,
                     ref=f"{paper_id}:invalid-slot-recovery",
@@ -1111,7 +1142,9 @@ async def generate_paper_background(
                 )
                 recovered = recovered_data.get("sections") or []
                 recovered_flags: dict = {}
-                _normalise_paper_questions(recovered, difficulty, recovered_flags)
+                _normalise_paper_questions(
+                    recovered, difficulty, recovered_flags, assign_ids=False
+                )
                 await complete_sections(
                     recovered,
                     ref=f"{paper_id}:missing-slot-recovery",
@@ -2026,7 +2059,9 @@ async def generate_missing_questions_background(
             )
             new_sections = new_data.get("sections") or []
             coercions: dict = {}
-            _normalise_paper_questions(new_sections, difficulty, coercions)
+            _normalise_paper_questions(
+                new_sections, difficulty, coercions, assign_ids=False
+            )
             await complete_sections(
                 new_sections,
                 ref=f"{paper_id}:slot-topup",
@@ -2868,11 +2903,41 @@ def reconcile_solution_shell(
     the three.
     """
     prev: dict[str, str] = {}
+    prev_by_slot: dict[str, str] = {}
+    previous_answers: list[dict] = []
     for sec in (existing or {}).get("sections") or []:
         for a in sec.get("answers") or []:
+            previous_answers.append(a)
             qid = a.get("question_id")
             if qid:
                 prev[qid] = a.get("answer") or ""
+            if a.get("slot_id"):
+                prev_by_slot[a["slot_id"]] = a.get("answer") or ""
+
+    paper_questions = [
+        q
+        for section in paper.get("sections", [])
+        for q in section.get("questions", [])
+        if q.get("id")
+    ]
+    current_ids = {q["id"] for q in paper_questions}
+    # Compatibility repair for papers generated during the normal-contract
+    # rollout.  Those jobs could assign a fresh UUID on resume after a complete
+    # solution had already been saved.  Normal slots have immutable order, so
+    # when *none* of the old ids match and the shapes are identical, position
+    # is an unambiguous bridge to the stable slot identity.  This path is never
+    # used for templates or partially matching/edited papers.
+    positional: dict[str, str] = {}
+    if (
+        paper_questions
+        and all(q.get("slot_id") for q in paper_questions)
+        and len(previous_answers) == len(paper_questions)
+        and not any(a.get("question_id") in current_ids for a in previous_answers)
+    ):
+        positional = {
+            q["id"]: (answer.get("answer") or "")
+            for q, answer in zip(paper_questions, previous_answers)
+        }
 
     sections: list = []
     missing: list[str] = []
@@ -2884,8 +2949,17 @@ def reconcile_solution_shell(
             qid = q.get("id")
             if not qid:
                 continue
-            text = prev.get(qid, "")
-            answers.append({"question_id": qid, "answer": text})
+            slot_id = q.get("slot_id")
+            if qid in prev:
+                text = prev[qid]
+            elif slot_id and slot_id in prev_by_slot:
+                text = prev_by_slot[slot_id]
+            else:
+                text = positional.get(qid, "")
+            answer = {"question_id": qid, "answer": text}
+            if slot_id:
+                answer["slot_id"] = slot_id
+            answers.append(answer)
             total += 1
             if text:
                 completed += 1

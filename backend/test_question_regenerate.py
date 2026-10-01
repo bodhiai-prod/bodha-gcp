@@ -319,6 +319,28 @@ class DiagramTests(RegenBase):
 
 
 class SolutionTests(unittest.TestCase):
+    def test_normal_slot_answers_survive_a_rollout_id_change(self):
+        paper = make_paper()
+        questions = paper["sections"][0]["questions"]
+        questions[0].update(id="normal-001", slot_id="normal-001")
+        questions[1].update(id="normal-002", slot_id="normal-002")
+        old_solution = {
+            "status": "ready", "completed": 2, "total": 2,
+            "sections": [{"title": "Section A", "answers": [
+                {"question_id": "obsolete-uuid-1", "answer": "V = IR."},
+                {"question_id": "obsolete-uuid-2", "answer": "A real image is formed."},
+            ]}],
+        }
+
+        reconciled, missing = reconcile_solution_shell(paper, old_solution)
+
+        self.assertEqual(missing, [])
+        self.assertEqual(reconciled["completed"], 2)
+        self.assertEqual(reconciled["sections"][0]["answers"], [
+            {"question_id": "normal-001", "slot_id": "normal-001", "answer": "V = IR."},
+            {"question_id": "normal-002", "slot_id": "normal-002", "answer": "A real image is formed."},
+        ])
+
     def test_only_the_rewritten_answer_is_blanked_and_it_is_refillable(self):
         p = make_paper()
         p["solution"] = {

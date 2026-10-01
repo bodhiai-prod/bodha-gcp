@@ -66,6 +66,7 @@ class NormalPaperContractTests(unittest.TestCase):
         self.assertEqual([section["title"] for section in sections], [row["title"] for row in plan["sections"]])
         questions = [question for section in sections for question in section["questions"]]
         self.assertEqual([question["slot_id"] for question in questions], [slot["slot_id"] for slot in plan["slots"]])
+        self.assertEqual([question["id"] for question in questions], [slot["slot_id"] for slot in plan["slots"]])
         self.assertEqual(validate_normal_plan(sections, plan), [])
 
     def test_reassembly_preserves_runtime_fields_and_restamps_structure(self):

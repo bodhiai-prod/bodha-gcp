@@ -277,6 +277,13 @@ def stamp_slot_content(candidate: dict, slot: dict, *, preserve_runtime: bool = 
         for key, value in slot.items()
         if key not in {"order", "section_title", "diagram_mode"}
     })
+    # A normal paper's slot is its durable identity.  Provider batches,
+    # progressive publication and worker resume can all materialize the same
+    # slot more than once; a random UUID at each pass breaks diagrams and
+    # solutions that were already keyed to the earlier instance.  Existing
+    # runtime IDs are retained for backwards compatibility, while newly
+    # materialized slots use the deterministic slot id.
+    question.setdefault("id", slot["slot_id"])
     if not slot.get("case_study"):
         question.pop("shared_stimulus", None)
     mode = slot.get("diagram_mode")

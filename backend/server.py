@@ -2158,6 +2158,13 @@ async def get_paper(paper_id: str, user: dict = Depends(get_current_user)):
     # Reads normalize presentation only; completion is exclusively queued by writes.
     repaired_sections, section_plan, _ = _normalize_saved_paper_sections(p)
     p["sections"], p["section_plan"] = repaired_sections, section_plan
+    if p.get("solution"):
+        # Solutions are keyed by question id.  Reconcile against the same
+        # normalized normal-paper view returned to the browser so a resumed
+        # generation cannot leave complete answers attached to obsolete ids.
+        p["solution"], _missing_answers = reconcile_solution_shell(
+            p, p["solution"]
+        )
     normalize_internal_choice_counts(p["sections"])
     p["instructions"] = printable_instructions(
         p.get("instructions"),
@@ -2540,6 +2547,9 @@ async def solution_docx(
     if not paper.get("solution"):
         raise HTTPException(status_code=409, detail="No solution is available to download")
     paper["sections"], _section_plan, _repaired = _normalize_saved_paper_sections(paper)
+    paper["solution"], _missing_answers = reconcile_solution_shell(
+        paper, paper["solution"]
+    )
 
     def asset_loader(path: str):
         try:
