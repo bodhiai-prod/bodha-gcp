@@ -975,6 +975,10 @@ def normal_slots_prompt(
             "difficulty": slot["difficulty"],
             "marks": slot["marks"],
             "diagram_mode": slot.get("diagram_mode", "allowed"),
+            **({"parent_id": slot.get("parent_id"), "part_label": slot.get("part_label"),
+                "case_study": True, "case_profile": slot.get("case_profile", ""),
+                "requires_shared_stimulus": bool(slot.get("requires_shared_stimulus"))}
+               if slot.get("case_study") else {}),
             **({"internal_choice_count": slot["internal_choice_count"]} if "internal_choice_count" in slot else {}),
         }
         for slot in slots
@@ -1002,10 +1006,12 @@ def normal_slots_prompt(
         '{"questions":[{"slot_id":"normal-001","question":"...",'
         '"options":["A","B","C","D"],"correct_option":0,'
         '"needs_diagram":false,"diagram_spec":{"figure":"...","labels":[],'
-        '"given_values":[],"unknowns":[],"why_required":"..."}}]}\n\n'
+        '"given_values":[],"unknowns":[],"why_required":"..."},'
+        '"shared_stimulus":"only for the first slot of a case-study parent"}]}\n\n'
         "RULES:\n"
         "- Section-level choices never substitute for within-question OR alternatives. Generate all supplied slots, including optional sections. Count marks once per slot, not per OR branch.\n"
         "- Return exactly one object for each supplied slot_id and no other slot_id.\n"
+        "- CASE-STUDY PARENTS: write one substantive shared passage, experiment, graph/data description, clinical situation, or real application that supplies information needed by every subpart. Return it as shared_stimulus on the FIRST slot of that parent only. Every sibling subpart must explicitly depend on that same stimulus and remain within one coherent topic; never combine unrelated standalone questions. Do not repeat the stimulus in question text. Follow case_profile and its exact mark/choice pattern.\n"
         "- When internal_choice_count is supplied, include exactly that many standalone OR lines "
         "inside the question string, joining complete student-facing alternatives with the same "
         "topic, marks and difficulty. Zero means no OR alternative. A metadata count alone "
@@ -1109,6 +1115,10 @@ def regen_question_prompt(
         if figure_allowed
         else "  - Figure: this slot carries NO figure. Set needs_diagram false."
     )
+    if slot.get("requires_shared_stimulus"):
+        slot_lines.append(
+            "  - Shared case stimulus REQUIRED: return a substantive shared_stimulus field before this first case subpart. It must supply information used by every subpart in the parent case."
+        )
 
     retry_block = ""
     if attempt > 1:
@@ -1166,6 +1176,7 @@ def regen_question_prompt(
         + "Return ONLY strict JSON of the form:\n"
         "{\n"
         '  "question": "...",\n'
+        + ('  "shared_stimulus": "coherent passage/data/experiment used by every case subpart",\n' if slot.get("requires_shared_stimulus") else '')
         + mcq_schema
         + '  "needs_diagram": false,\n'
         '  "diagram_spec": { "figure": "...", "labels": [], "given_values": [],\n'

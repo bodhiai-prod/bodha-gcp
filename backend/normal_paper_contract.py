@@ -29,7 +29,7 @@ FORMAT_WEIGHT = {
 }
 
 PROVIDER_CONTENT_FIELDS = (
-    "question", "options", "correct_option", "diagram_spec",
+    "question", "options", "correct_option", "diagram_spec", "shared_stimulus",
 )
 from slot_identity import SLOT_IDENTITY_FIELDS
 SLOT_STRUCTURE_FIELDS = set(SLOT_IDENTITY_FIELDS) - {'id'}
@@ -466,6 +466,13 @@ def validate_normal_plan(sections: list, plan: dict) -> list[dict[str, Any]]:
                 "code": "slot_diagram",
                 "category": "diagram",
                 "slot_id": slot["slot_id"],
+            })
+        if slot.get("requires_shared_stimulus") and len(str(question.get("shared_stimulus") or "").split()) < 20:
+            issues.append({
+                "code": "missing_case_stimulus",
+                "category": "structure",
+                "slot_id": slot["slot_id"],
+                "message": "A case-study parent requires one substantive shared stimulus used by all of its subparts.",
             })
     return issues
 

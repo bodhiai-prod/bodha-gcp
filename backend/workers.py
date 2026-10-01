@@ -2213,6 +2213,7 @@ def _independent_or_branches(question):
 # What the model IS asked for -- the stem and the things that follow from it.
 _CANDIDATE_FIELDS = (
     "question", "options", "correct_option", "needs_diagram", "diagram_spec",
+    "shared_stimulus",
 )
 # Disjoint on purpose: the replacement is built by merging the model's fields
 # over the slot's, and that merge IS the re-stamp. Adding a field to both lists

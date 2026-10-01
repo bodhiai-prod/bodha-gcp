@@ -1023,6 +1023,11 @@ def render_paper_docx(
                 if printed_parent is not None:
                     question_number += 1
                 printed_parent = parent_id
+                if question.get("shared_stimulus"):
+                    parent_stimulus = document.add_paragraph()
+                    parent_stimulus.paragraph_format.left_indent = Inches(0.12)
+                    parent_stimulus.paragraph_format.space_after = Pt(3)
+                    parent_stimulus.add_run(question["shared_stimulus"])
                 if question.get("parent_lead_in"):
                     parent_lead = document.add_paragraph()
                     parent_lead.paragraph_format.left_indent = Inches(0.12)

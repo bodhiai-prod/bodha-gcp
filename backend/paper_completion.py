@@ -64,6 +64,10 @@ def compile_plan(spec, paper):
                 continue
             eligible = [slot for slot in slots if slot['section_id'] == section['id']
                         and slot.get('group_id') == group['id']]
+            if any('internal_choice_count' in slot for slot in eligible):
+                for slot in eligible:
+                    slot.setdefault('internal_choice_count', 0)
+                continue
             for index, slot in enumerate(eligible):
                 slot['internal_choice_count'] = int(index < int(group['internal_choices']))
     parents = {}
@@ -71,6 +75,12 @@ def compile_plan(spec, paper):
         key = (slot['section_id'], slot.get('parent_id') or slot['slot_id'])
         parents.setdefault(key, len(parents) + 1)
         slot['display_number'] = parents[key]
+    first_case_slots = set()
+    for slot in slots:
+        key = (slot['section_id'], slot.get('parent_id') or slot['slot_id'])
+        if slot.get('case_study') and key not in first_case_slots:
+            slot['requires_shared_stimulus'] = True
+            first_case_slots.add(key)
     return {'slots': slots, 'sections': sections, 'contract_version': 2}
 
 

@@ -3,7 +3,7 @@ SLOT_IDENTITY_FIELDS = (
     'id', 'slot_id', 'section_id', 'section_title', 'topic', 'parent_topic',
     'topic_id', 'textbook_id', 'type', 'format', 'difficulty', 'marks',
     'allocation_id', 'group_id', 'parent_id', 'parent_label', 'part_label',
-    'parent_lead_in', 'display_number', 'internal_choice_count', 'order', 'diagram_mode',
+    'parent_lead_in', 'case_study', 'case_profile', 'requires_shared_stimulus', 'display_number', 'internal_choice_count', 'order', 'diagram_mode',
 )
 TEACHER_FIELDS = ('important',)
 

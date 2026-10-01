@@ -206,7 +206,8 @@ def _range_group(group_id, start, count, marks, fmt, *, label=None, internal_cho
     return group
 
 
-def _compound_group(group_id, number, parts, fmt, *, label=None, lead_in="", internal_choices=None):
+def _compound_group(group_id, number, parts, fmt, *, label=None, lead_in="", internal_choices=None,
+                    case_study=False, case_profile=""):
     """One printed question made from individually allocatable scored parts."""
     slots = [_slot(f"q{number}", i + 1, mark, fmt, lead_in=lead_in) for i, mark in enumerate(parts)]
     group = {
@@ -217,8 +218,17 @@ def _compound_group(group_id, number, parts, fmt, *, label=None, lead_in="", int
         "label": label or f"Question {number}: {len(parts)} scored parts",
         "slots": slots,
     }
+    if case_study:
+        group["case_study"] = True
+        group["case_profile"] = case_profile or "shared stimulus with connected subparts"
+        for slot in slots:
+            slot["case_study"] = True
+            slot["case_profile"] = group["case_profile"]
     if internal_choices is not None:
         group["internal_choices"] = internal_choices
+        if case_study and internal_choices:
+            for slot in slots[-int(internal_choices):]:
+                slot["internal_choice_count"] = 1
     return group
 
 
@@ -305,18 +315,27 @@ def _cbse12_row(subject, source, *, mathematics=False):
             _section("C", "SECTION C (6 x 3 = 18)", [_range_group("sa", 26, 6, 3, "short_answer", internal_choices=3)]),
             _section("D", "SECTION D (4 x 5 = 20)", [_range_group("la", 32, 4, 5, "long_answer", internal_choices=2)]),
             _section("E", "SECTION E (3 x 4 = 12)", [
-                _compound_group("q36", 36, [1, 1, 2], "short_answer", internal_choices=1),
-                _compound_group("q37", 37, [1, 1, 2], "short_answer", internal_choices=1),
-                _compound_group("q38", 38, [2, 2], "short_answer"),
+                _compound_group("q36", 36, [1, 1, 2], "short_answer", internal_choices=1, case_study=True, case_profile="passage/application case; 1+1+(2 OR 2)"),
+                _compound_group("q37", 37, [1, 1, 2], "short_answer", internal_choices=1, case_study=True, case_profile="passage/application case; 1+1+(2 OR 2)"),
+                _compound_group("q38", 38, [2, 2], "short_answer", case_study=True, case_profile="passage/application case; 2+2; no internal choice"),
             ]),
         ]
         marks = 80
     else:
+        case_shapes = {
+            "Physics": [([1, 1, 1, 1], None, "contextual passage/application; four connected 1-mark parts; no internal choice")] * 2,
+            "Chemistry": [([1, 1, 2], 1, "case/data/graph-based stimulus; 1+1+(2 OR 2)")] * 2,
+            "Biology": [([1, 2, 1], 1, "biological/clinical/ecological case; 1+2+(1 OR 1)")] * 2,
+        }
+        shapes = case_shapes[subject]
         sections = [
             _section("A", "SECTION A (16 x 1 = 16)", [_range_group("mcq", 1, 12, 1, "mcq"), _range_group("assertion_reason", 13, 4, 1, "mcq")]),
             _section("B", "SECTION B (5 x 2 = 10)", [_range_group("vsa", 17, 5, 2, "short_answer", internal_choices=2)]),
             _section("C", "SECTION C (7 x 3 = 21)", [_range_group("sa", 22, 7, 3, "short_answer", internal_choices=1)]),
-            _section("D", "SECTION D (2 x 4 = 8)", [_compound_group("q29", 29, [1, 2, 1], "short_answer", internal_choices=1), _compound_group("q30", 30, [1, 2, 1], "short_answer", internal_choices=1)]),
+            _section("D", "SECTION D (2 x 4 = 8)", [
+                _compound_group("q29", 29, shapes[0][0], "short_answer", internal_choices=shapes[0][1], case_study=True, case_profile=shapes[0][2]),
+                _compound_group("q30", 30, shapes[1][0], "short_answer", internal_choices=shapes[1][1], case_study=True, case_profile=shapes[1][2]),
+            ], section_instructions="This section contains two case-based questions of 4 marks each. Read each shared stimulus and answer only its connected subparts."),
             _section("E", "SECTION E (3 x 5 = 15)", [_range_group("la", 31, 3, 5, "long_answer", internal_choices=3)]),
         ]
         marks = 70
@@ -358,7 +377,7 @@ def _apply_current_official_structures(rows):
                     slots = []
                     for number in range(start, start + group["count"]):
                         if "case" in group.get("id", ""):
-                            slots.extend(_compound_group(group["id"], number, [1, 1, max(1, group["marks"] - 2)], group["format"]).get("slots", []))
+                            slots.extend(_compound_group(group["id"], number, [1, 1, max(1, group["marks"] - 2)], group["format"], internal_choices=1, case_study=True, case_profile="context/source/data-based stimulus; 1+1+(2 OR 2)").get("slots", []))
                         else:
                             slots.extend(_range_group(group["id"], number, 1, group["marks"], group["format"]).get("slots", []))
                     group["slots"] = slots
@@ -869,6 +888,10 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
                          "parent_label": (slot or {}).get("parent_label", ""),
                          "part_label": (slot or {}).get("part_label", ""),
                          "parent_lead_in": (slot or {}).get("lead_in", ""),
+                         "case_study": bool((slot or {}).get("case_study") or groups[pair].get("case_study")),
+                         "case_profile": (slot or {}).get("case_profile") or groups[pair].get("case_profile", ""),
+                         **({"internal_choice_count": (slot or {}).get("internal_choice_count")}
+                            if "internal_choice_count" in (slot or {}) else {}),
                          "allocation_id": hashlib.sha256(json.dumps(key).encode()).hexdigest()[:24]})
 
     for raw in allocations:
@@ -974,6 +997,8 @@ def allocation_prompt(spec):
             eligible = [row for row in rows if row['section_id'] == section['id'] and row['group_id'] == group['id']]
             # Exact slot allocations can carry explicit per-slot OR requests.
             # Legacy count rows retain the group-level quota.
+            if any('internal_choice_count' in row for row in eligible):
+                continue
             if all(row.get('slot_id') and int(row.get('count') or 1) == 1 for row in eligible):
                 for index, row in enumerate(eligible):
                     row['internal_choice_count'] = int(index < int(group['internal_choices']))

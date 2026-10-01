@@ -92,6 +92,32 @@ class BlueprintTests(unittest.TestCase):
         self.assertEqual(len(icse_math["sections"][1]["groups"]), 7)
         self.assertTrue(all(sum(slot["marks"] for slot in group["slots"]) == 10 for group in icse_math["sections"][1]["groups"]))
 
+    def test_cbse_case_study_shapes_are_subject_specific_and_cisce_is_not_relabelled(self):
+        presets = {row["id"]: row for row in catalog()}
+
+        def case_groups(blueprint_id, section_id):
+            section = next(section for section in presets[blueprint_id]["sections"] if section["id"] == section_id)
+            return [group for group in section["groups"] if group.get("case_study") or any(slot.get("case_study") for slot in group.get("slots") or [])]
+
+        self.assertEqual([[slot["marks"] for slot in group["slots"]] for group in case_groups("cbse12-physics", "D")], [[1, 1, 1, 1], [1, 1, 1, 1]])
+        self.assertTrue(all(group.get("internal_choices") is None for group in case_groups("cbse12-physics", "D")))
+        self.assertEqual([[slot["marks"] for slot in group["slots"]] for group in case_groups("cbse12-chemistry", "D")], [[1, 1, 2], [1, 1, 2]])
+        self.assertEqual([[slot["marks"] for slot in group["slots"]] for group in case_groups("cbse12-biology", "D")], [[1, 2, 1], [1, 2, 1]])
+        self.assertTrue(all([slot.get("internal_choice_count", 0) for slot in group["slots"]] == [0, 0, 1]
+                            for group in case_groups("cbse12-chemistry", "D")))
+        self.assertTrue(all([slot.get("internal_choice_count", 0) for slot in group["slots"]] == [0, 0, 1]
+                            for group in case_groups("cbse12-biology", "D")))
+        self.assertEqual([[slot["marks"] for slot in group["slots"]] for group in case_groups("cbse12-mathematics", "E")], [[1, 1, 2], [1, 1, 2], [2, 2]])
+        self.assertEqual(len(case_groups("cbse10-mathematics-standard", "E")), 1)
+        self.assertEqual(len(case_groups("cbse10-mathematics-standard", "E")[0]["slots"]), 9)
+        self.assertEqual([slot.get("internal_choice_count", 0) for slot in case_groups("cbse10-mathematics-standard", "E")[0]["slots"]],
+                         [0, 0, 1, 0, 0, 1, 0, 0, 1])
+        self.assertEqual(sum(len(case_groups("cbse10-science", sid)) for sid in ("A", "B", "C")), 3)
+        for blueprint_id in ("icse10-physics", "icse10-chemistry", "icse10-biology", "icse10-mathematics",
+                             "isc12-physics", "isc12-chemistry", "isc12-biology", "isc12-mathematics"):
+            self.assertFalse(any(slot.get("case_study") for section in presets[blueprint_id]["sections"]
+                                 for group in section["groups"] for slot in group.get("slots") or []), blueprint_id)
+
     def test_current_isc_templates_have_official_candidate_instructions(self):
         presets = {b["id"]: b for b in catalog()}
         math = presets["isc12-mathematics"]["student_instructions"]
