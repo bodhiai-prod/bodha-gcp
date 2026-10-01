@@ -71,7 +71,17 @@ export default function PaperView() {
   const { id } = useParams();
   const [paper, setPaper] = useState(null);
   const qualityReviewRunning = paper?.quality_review?.status === "running";
-  const qualityReviewBlocked = qualityReviewRunning || paper?.quality_review?.status === "needs_review" || (paper?.completion && !paper.completion.export_eligible);
+  const paperWorkActive = ["queued", "pending", "generating", "reviewing"].includes(paper?.generation_status)
+    || ["queued", "running"].includes(paper?.completion?.status)
+    || ["queued", "running"].includes(paper?.quality_review?.status)
+    || paper?.topup?.status === "generating"
+    || paper?.regen?.status === "generating";
+  const exportWarningIgnored = Boolean(paper?.export_warning_acknowledgement?.ignored) && !paperWorkActive;
+  const qualityReviewBlocked = !exportWarningIgnored && (
+    qualityReviewRunning
+    || paper?.quality_review?.status === "needs_review"
+    || (paper?.completion && !paper.completion.export_eligible)
+  );
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -83,6 +93,7 @@ export default function PaperView() {
   const [regenId, setRegenId] = useState(null);
   const [cancellingGeneration, setCancellingGeneration] = useState(false);
   const [docxDownloading, setDocxDownloading] = useState(false);
+  const [ignoringExportWarning, setIgnoringExportWarning] = useState(false);
   const [brandingApplying, setBrandingApplying] = useState(false);
   const [brandingPresets, setBrandingPresets] = useState([]);
   const [selectedBrandingId, setSelectedBrandingId] = useState("");
@@ -205,6 +216,20 @@ export default function PaperView() {
       toast.error(err?.response?.data?.detail || "Failed");
     } finally {
       setQueuing(false);
+    }
+  };
+
+  const ignoreExportWarning = async () => {
+    setIgnoringExportWarning(true);
+    try {
+      const { data } = await api.post(`/papers/${id}/ignore-export-warning`);
+      ++loadSequence.current;
+      setPaper(data);
+      toast.success("Warning ignored — downloads are now available");
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not ignore this warning");
+    } finally {
+      setIgnoringExportWarning(false);
     }
   };
 
@@ -580,7 +605,7 @@ export default function PaperView() {
   const completionLive = ["queued", "running"].includes(paper.completion?.status)
     || ["queued", "pending", "generating", "reviewing"].includes(paper.generation_status)
     || qualityReviewRunning;
-  const isPartial = paper.recovered_from_truncation || missingCount > 0 || completionPending;
+  const isPartial = !exportWarningIgnored && (paper.recovered_from_truncation || missingCount > 0 || completionPending);
   const busy = queuing || completionLive || topup?.status === "generating";
   // Which question the server is rewriting, and whether the button is offered
   // at all. Both rules live in lib/regenerate so they stay testable and cannot
@@ -775,10 +800,19 @@ export default function PaperView() {
               >
                 Regenerate all
               </button>
+              <button
+                type="button"
+                onClick={ignoreExportWarning}
+                disabled={busy || ignoringExportWarning}
+                className="qp-btn qp-btn-secondary text-xs"
+                data-testid="ignore-export-warning-button"
+              >
+                {ignoringExportWarning ? "Ignoring..." : "Ignore"}
+              </button>
             </div>
           </div>
         )}
-        {!isPartial && paper.quality_review?.status !== "needs_review" && paper.instruction_check?.honoured === false && !busy && !templateRecovery && !choiceRecovery && (
+        {!exportWarningIgnored && !isPartial && paper.quality_review?.status !== "needs_review" && paper.instruction_check?.honoured === false && !busy && !templateRecovery && !choiceRecovery && (
           <div className="no-print mb-6 border border-amber-300 bg-amber-50 p-4"
             data-testid="paper-requirements-check">
             <p className="font-bold text-sm">Some requested settings need review</p>

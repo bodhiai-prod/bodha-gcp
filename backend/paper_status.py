@@ -20,6 +20,26 @@ def _status(key, label, active=False, progress=None):
     return result
 
 
+def paper_work_is_active(paper):
+    """Whether a paper is still changing and therefore unsafe to export."""
+    return (
+        paper.get("generation_status") in {"queued", "pending", "generating", "reviewing"}
+        or (paper.get("completion") or {}).get("status") in {"queued", "running"}
+        or (paper.get("quality_review") or {}).get("status") in {"queued", "running"}
+        or (paper.get("topup") or {}).get("status") == "generating"
+        or (paper.get("regen") or {}).get("status") == "generating"
+    )
+
+
+def export_warning_is_ignored(paper):
+    """Return true only for a usable, acknowledged, stable paper snapshot."""
+    acknowledgement = paper.get("export_warning_acknowledgement") or {}
+    has_questions = any(
+        section.get("questions") for section in paper.get("sections") or []
+    )
+    return bool(acknowledgement.get("ignored") and has_questions and not paper_work_is_active(paper))
+
+
 def library_status_for_paper(paper, needs_review=False):
     """Return the single lifecycle state to show in a paper-library row.
 
@@ -33,6 +53,11 @@ def library_status_for_paper(paper, needs_review=False):
         progress = {"completed": completion.get("valid_scored_parts", 0), "total": completion.get("target_scored_parts", 0)}
         if state in {"running", "queued"}:
             return _status("generating", "Completing questions", active=True, progress=progress)
+    if export_warning_is_ignored(paper):
+        return _status("ready", "Ready")
+    if completion:
+        state = completion.get("status")
+        progress = {"completed": completion.get("valid_scored_parts", 0), "total": completion.get("target_scored_parts", 0)}
         if state == "incomplete":
             if any(section.get("questions") for section in paper.get("sections") or []):
                 return _status("needs_review", "Questions pending", progress=progress)
@@ -88,7 +113,7 @@ def presentation_for_paper(paper):
     completion = paper.get('completion') or {}
     progress = paper.get('generation_progress') or {}
     phase = completion.get('phase') or progress.get('phase') or 'preparing'
-    ready = bool(completion.get('ready') and completion.get('export_eligible')) if completion else library_status_for_paper(paper)['key'] == 'ready'
+    ready = export_warning_is_ignored(paper) or (bool(completion.get('ready') and completion.get('export_eligible')) if completion else library_status_for_paper(paper)['key'] == 'ready')
     stage = ('Ready' if ready else 'Checking and completing' if phase in
              ('validating', 'finalizing', 'repairing', 'alternatives', 'figures', 'incomplete', 'edited')
              or (paper.get('quality_review') or {}).get('status') in ('running', 'needs_review')

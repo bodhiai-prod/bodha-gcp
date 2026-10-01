@@ -57,6 +57,28 @@ test("OR-only shortfall still offers generate pending", async () => {
   expect(container.querySelector('[data-testid="generate-missing-questions-button"]')).not.toBeNull();
 });
 
+test("ignoring a stopped warning hides the banner and enables downloads", async () => {
+  const draft = paper({
+    generation_status: "cancelled",
+    completion: { status: "cancelled", ready: false, export_eligible: false },
+    quality_review: { status: "cancelled" },
+  });
+  await render(draft);
+  const ignore = container.querySelector('[data-testid="ignore-export-warning-button"]');
+  expect(ignore).not.toBeNull();
+  expect(container.querySelector('[data-testid="download-menu-button"]').disabled).toBe(true);
+  api.post.mockResolvedValue({ data: {
+    ...draft,
+    export_warning_acknowledgement: { ignored: true, acknowledged_by: "teacher" },
+    presentation: { ready: true, stage: "Ready" },
+  } });
+  await act(async () => ignore.click());
+  expect(api.post).toHaveBeenCalledWith("/papers/paper/ignore-export-warning");
+  expect(container.querySelector('[data-testid="partial-banner"]')).toBeNull();
+  expect(container.querySelector('[data-testid="download-menu-button"]').disabled).toBe(false);
+  expect(toast.success).toHaveBeenCalledWith(expect.stringContaining("downloads are now available"));
+});
+
 test("checking preview has one curated panel and no raw diagnostics", async () => {
   await render(paper({ generation_status: "ready",
     quality_review: { status: "running", message: "{'slot_id': 'secret-slot'}" },

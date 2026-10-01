@@ -31,6 +31,77 @@ def test_api_library_and_export_agree_for_every_mode():
     asyncio.run(run())
 
 
+def test_stopped_draft_can_be_acknowledged_and_exported():
+    async def run():
+        paper = paper_fixture()
+        paper.update({
+            'title': 'Stopped draft',
+            'generation_status': 'cancelled',
+            'sections': [{'title': 'A', 'questions': [{'id': 'q1', 'question': 'Q?', 'marks': 1}]}],
+            'completion': {'status': 'cancelled', 'ready': False, 'export_eligible': False},
+            'quality_review': {'status': 'cancelled'},
+        })
+        acknowledged = copy.deepcopy(paper)
+        acknowledged['export_warning_acknowledgement'] = {
+            'ignored': True, 'acknowledged_by': 'teacher', 'acknowledged_at': 'now'
+        }
+        papers = type('P', (), {
+            'find_one': AsyncMock(side_effect=[paper, acknowledged]),
+            'update_one': AsyncMock(),
+        })()
+        db = type('DB', (), {'papers': papers})()
+        with patch.object(server, 'db', db), patch.object(server, 'get_paper', AsyncMock(return_value=acknowledged)):
+            result = await server.ignore_paper_export_warning('paper', {'id': 'teacher', 'role': 'teacher'})
+        assert result['export_warning_acknowledgement']['ignored']
+        saved = papers.update_one.await_args.args[1]['$set']['export_warning_acknowledgement']
+        assert saved['ignored'] and saved['acknowledged_by'] == 'teacher'
+
+        export_db = type('DB', (), {'papers': type('P', (), {'find_one': AsyncMock(return_value=acknowledged)})()})()
+        with patch.object(server, 'db', export_db), \
+             patch.object(server, 'get_token_user', AsyncMock(return_value={'id': 'teacher', 'role': 'teacher'})), \
+             patch.object(server, '_normalize_saved_paper_sections', return_value=(acknowledged['sections'], None, False)), \
+             patch.object(server, 'render_paper_pdf_async', AsyncMock(return_value=b'pdf')):
+            response = await server.paper_pdf('paper', authorization='Bearer test', auth=None)
+        assert response.body == b'pdf'
+
+        export_db = type('DB', (), {'papers': type('P', (), {'find_one': AsyncMock(return_value=acknowledged)})()})()
+        with patch.object(server, 'db', export_db), \
+             patch.object(server, 'get_token_user', AsyncMock(return_value={'id': 'teacher', 'role': 'teacher'})), \
+             patch.object(server, '_normalize_saved_paper_sections', return_value=(acknowledged['sections'], None, False)), \
+             patch.object(server, 'render_paper_docx_async', AsyncMock(return_value=b'docx')):
+            response = await server.paper_docx('paper', authorization='Bearer test', auth=None)
+        assert response.body == b'docx'
+    asyncio.run(run())
+
+
+def test_export_warning_cannot_be_ignored_while_active_or_empty_or_by_another_user():
+    async def run():
+        base = paper_fixture()
+        cases = [
+            ({**base, 'generation_status': 'generating', 'sections': [{'questions': [{'id': 'q1'}]}]}, 409),
+            ({**base, 'generation_status': 'cancelled', 'sections': []}, 409),
+        ]
+        for paper, expected in cases:
+            db = type('DB', (), {'papers': type('P', (), {
+                'find_one': AsyncMock(return_value=paper), 'update_one': AsyncMock()
+            })()})()
+            with patch.object(server, 'db', db):
+                with pytest.raises(HTTPException) as error:
+                    await server.ignore_paper_export_warning('paper', {'id': 'teacher', 'role': 'teacher'})
+                assert error.value.status_code == expected
+                db.papers.update_one.assert_not_awaited()
+
+        owned = {**base, 'generation_status': 'cancelled', 'sections': [{'questions': [{'id': 'q1'}]}]}
+        db = type('DB', (), {'papers': type('P', (), {
+            'find_one': AsyncMock(return_value=owned), 'update_one': AsyncMock()
+        })()})()
+        with patch.object(server, 'db', db):
+            with pytest.raises(HTTPException) as error:
+                await server.ignore_paper_export_warning('paper', {'id': 'other', 'role': 'teacher'})
+            assert error.value.status_code == 403
+    asyncio.run(run())
+
+
 def test_all_continuation_urls_queue_the_same_coordinator():
     async def run():
         paper = paper_fixture()

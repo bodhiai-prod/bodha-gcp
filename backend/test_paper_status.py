@@ -67,3 +67,23 @@ class PaperLibraryStatusTests(unittest.TestCase):
         for paper, expected in cases:
             with self.subTest(paper=paper):
                 self.assertEqual(library_status_for_paper(paper)["key"], expected)
+
+    def test_acknowledged_stopped_draft_is_ready_but_active_work_wins(self):
+        acknowledged = {
+            "generation_status": "cancelled",
+            "quality_review": {"status": "cancelled"},
+            "completion": {"status": "cancelled", "export_eligible": False},
+            "sections": [{"questions": [{"id": "q1"}]}],
+            "export_warning_acknowledgement": {"ignored": True},
+        }
+        self.assertEqual(library_status_for_paper(acknowledged)["key"], "ready")
+        acknowledged["completion"]["status"] = "running"
+        self.assertEqual(library_status_for_paper(acknowledged)["key"], "generating")
+
+    def test_acknowledgement_does_not_make_empty_paper_ready(self):
+        status = library_status_for_paper({
+            "generation_status": "cancelled",
+            "sections": [],
+            "export_warning_acknowledgement": {"ignored": True},
+        })
+        self.assertEqual(status["key"], "generation_cancelled")

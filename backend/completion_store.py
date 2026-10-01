@@ -108,7 +108,8 @@ async def enqueue_continuation(paper, payload):
                         'generation_status': 'ready' if (current.get('completion') or {}).get('ready') else 'queued',
                         'completion': {**(current.get('completion') or {}), 'status': 'queued'},
                         'quality_review': {'status': 'running', 'stage': 'queued'},
-                        'topup': None, 'generation_recovery': None, 'regen': None})
+                        'topup': None, 'generation_recovery': None, 'regen': None,
+                        'export_warning_acknowledgement': None})
         txn.set(paper_ref, _encode_generation_requirements(current))
         txn.set(db._client.collection('paper_review_jobs').document(job['id']), job)
         if candidate:
@@ -150,7 +151,8 @@ async def save_teacher_edit(paper, fields):
         from firestore_compat import _set
         for key, value in fields.items():
             _set(current, key, value)
-        current.update({'generation_revision': revision + 1, 'completion': None})
+        current.update({'generation_revision': revision + 1, 'completion': None,
+                        'export_warning_acknowledgement': None})
         if candidate:
             from paper_completion import evaluate
             result = evaluate({**candidate, 'sections': current.get('sections') or []}, current)

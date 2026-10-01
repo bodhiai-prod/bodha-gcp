@@ -34,7 +34,12 @@ from activity import record_activity
 from instruction_spec import verify
 from latex_repair import repair_text
 from question_repair import validate_question
-from paper_status import library_status_for_paper, presentation_for_paper
+from paper_status import (
+    export_warning_is_ignored,
+    library_status_for_paper,
+    paper_work_is_active,
+    presentation_for_paper,
+)
 from llm_adapter import chat_complete, parse_json_response
 from section_blueprints import (Allocation, catalog, topic_catalog, blueprint_errors,
                                 compile_allocations, paper_summary, BlueprintStructure,
@@ -1985,6 +1990,9 @@ async def update_paper(
             set_fields["solution.is_stale"] = True
 
     if set_fields:
+        # An acknowledgement applies to one stable snapshot only. Any teacher
+        # edit must surface fresh validation results again.
+        set_fields["export_warning_acknowledgement"] = None
         if p.get("completion_engine") == "v2":
             from completion_store import save_teacher_edit, OwnershipLost
             try:
@@ -1993,6 +2001,38 @@ async def update_paper(
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
         else:
             await db.papers.update_one({"id": paper_id}, {"$set": set_fields})
+    return await get_paper(paper_id, user)
+
+
+@api_router.post("/papers/{paper_id}/ignore-export-warning")
+async def ignore_paper_export_warning(
+    paper_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Acknowledge a stopped, usable draft and allow it to be exported."""
+    paper = await db.papers.find_one(
+        {"id": paper_id, "is_deleted": False}, {"_id": 0}
+    )
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if paper["owner_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if paper_work_is_active(paper):
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for generation and final checks to stop before ignoring this warning",
+        )
+    if not any(section.get("questions") for section in paper.get("sections") or []):
+        raise HTTPException(status_code=409, detail="This paper has no questions to download")
+
+    await db.papers.update_one(
+        {"id": paper_id, "is_deleted": False},
+        {"$set": {"export_warning_acknowledgement": {
+            "ignored": True,
+            "acknowledged_at": utcnow_iso(),
+            "acknowledged_by": user["id"],
+        }}},
+    )
     return await get_paper(paper_id, user)
 
 
@@ -2169,7 +2209,10 @@ async def toggle_important(
         except OwnershipLost as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     else:
-        await db.papers.update_one({"id": paper_id}, {"$set": {"sections": p["sections"]}})
+        await db.papers.update_one({"id": paper_id}, {"$set": {
+            "sections": p["sections"],
+            "export_warning_acknowledgement": None,
+        }})
     return {"ok": True, "sections": p["sections"]}
 
 
@@ -2248,7 +2291,10 @@ async def regenerate_question_endpoint(
         "question_id": question_id,
         "started_at": utcnow_iso(),
     }
-    await db.papers.update_one({"id": paper_id}, {"$set": {"regen": regen}})
+    await db.papers.update_one({"id": paper_id}, {"$set": {
+        "regen": regen,
+        "export_warning_acknowledgement": None,
+    }})
 
     context_excerpt, feedback_hints = await _paper_generation_inputs(p)
     _spawn(
@@ -2321,6 +2367,7 @@ async def regenerate_paper(paper_id: str, user: dict = Depends(get_current_user)
             "topup": None,
             "generation_recovery": None,
             "review_status": None,
+            "export_warning_acknowledgement": None,
         }},
     )
 
@@ -2392,10 +2439,13 @@ async def paper_pdf(
         raise HTTPException(status_code=403, detail="Forbidden")
     if p.get("generation_status") in {"queued", "pending", "generating", "reviewing"}:
         raise HTTPException(status_code=409, detail="Paper is still being generated")
-    if p.get("generation_status") == "failed":
+    if not any(section.get("questions") for section in p.get("sections") or []):
+        raise HTTPException(status_code=409, detail="This paper has no questions to download")
+    if p.get("generation_status") == "failed" and not export_warning_is_ignored(p):
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
-    if ((p.get("completion") and not p["completion"].get("export_eligible"))
-        or (p.get("quality_review") or {}).get("status") not in (None, "passed")):
+    if (not export_warning_is_ignored(p) and
+        ((p.get("completion") and not p["completion"].get("export_eligible"))
+         or (p.get("quality_review") or {}).get("status") not in (None, "passed"))):
         raise HTTPException(status_code=409, detail="The paper draft is available, but final quality checks are still in progress")
     p["sections"], section_plan, repaired = _normalize_saved_paper_sections(p)
 
@@ -2442,10 +2492,13 @@ async def paper_docx(
         raise HTTPException(status_code=403, detail="Forbidden")
     if paper.get("generation_status") in {"queued", "pending", "generating", "reviewing"}:
         raise HTTPException(status_code=409, detail="Paper is still being generated")
-    if paper.get("generation_status") == "failed":
+    if not any(section.get("questions") for section in paper.get("sections") or []):
+        raise HTTPException(status_code=409, detail="This paper has no questions to download")
+    if paper.get("generation_status") == "failed" and not export_warning_is_ignored(paper):
         raise HTTPException(status_code=409, detail="Paper generation failed; nothing to download")
-    if ((paper.get("completion") and not paper["completion"].get("export_eligible"))
-        or (paper.get("quality_review") or {}).get("status") not in (None, "passed")):
+    if (not export_warning_is_ignored(paper) and
+        ((paper.get("completion") and not paper["completion"].get("export_eligible"))
+         or (paper.get("quality_review") or {}).get("status") not in (None, "passed"))):
         raise HTTPException(status_code=409, detail="The paper draft is available, but final quality checks are still in progress")
     paper["sections"], section_plan, repaired = _normalize_saved_paper_sections(paper)
 
