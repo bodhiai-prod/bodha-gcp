@@ -21,6 +21,7 @@ from question_repair import validate_question, alternative_issues
 from latex_repair import repair_text
 from question_dedupe import is_duplicate
 from export_utils import canonical_question_type, printable_instructions
+from case_study_contract import case_issues, parent_context, repair_slots
 
 ENGINE_VERSION = 'v2'
 MAX_ROUNDS = 2
@@ -188,6 +189,9 @@ def evaluate(candidate, paper):
     gates = list(verify(sections, spec).get('misses') or [])
     gates.extend(allocation_misses(sections, spec))
     gates.extend(str(issue) for issue in structural)
+    for issue in case_issues(sections, plan):
+        unresolved.update(issue['slot_ids'])
+        gates.append(issue['message'])
     if candidate.get('unplaced') or any(q.get('slot_id') not in expected for q in questions(sections)):
         gates.append('Saved questions need explicit slot placement before completion can continue.')
     if choices:
@@ -229,6 +233,9 @@ async def generate_batch(slots, candidate, paper, payload, ref):
     # written in the context of the whole printed parent question.
     prompt += '\nParent context: ' + json.dumps([{k: s.get(k) for k in
         ('slot_id', 'parent_label', 'part_label', 'parent_lead_in')} for s in slots])
+    retained_parent_context = parent_context(candidate['sections'], candidate['plan'], slots)
+    if retained_parent_context:
+        prompt += '\nAccepted case context (do not change it while repairing a child): ' + json.dumps(retained_parent_context, ensure_ascii=False)
     if paper.get('is_competitive'):
         from prompts import competitive_system_for_exam
         from llm_adapter import chain_for_exam
@@ -402,6 +409,7 @@ async def run_completion(job, *, store=None):
                 section['questions'] = [q for q in section['questions'] if not content_issues(q)]
             accepted = {q['slot_id'] for q in questions(candidate['sections']) if not content_issues(q)}
             missing = [s for s in candidate['plan']['slots'] if s['slot_id'] not in accepted or s['slot_id'] in replacement_slots]
+            missing = repair_slots(missing, candidate['sections'], candidate['plan'])
 
             async def fill(index, slots):
                 async with semaphore:
@@ -412,7 +420,8 @@ async def run_completion(job, *, store=None):
                         async with lock:
                             candidate.setdefault('pending_batches', {})[key] = generated
                             await checkpoint()
-                        invalid_topics = await check_topics(generated, paper, payload, f"{paper['id']}:scope:{round_index}:{index}")
+                        proposed = adopt_existing([*candidate['sections'], *generated], candidate['plan'])
+                        invalid_topics = await check_topics(proposed, paper, payload, f"{paper['id']}:scope:{round_index}:{index}")
                         replacements_with_figures = [q for q in questions(generated)
                             if q['slot_id'] in replacement_slots and q.get('needs_diagram')
                             and q['slot_id'] not in invalid_topics and not content_issues(q)]
@@ -460,6 +469,7 @@ async def run_completion(job, *, store=None):
                 await fill(f'resume-{index}', [s for s in candidate['plan']['slots'] if s['slot_id'] in ids])
             accepted = {q['slot_id'] for q in questions(candidate['sections'])}
             missing = [s for s in candidate['plan']['slots'] if s['slot_id'] not in accepted or s['slot_id'] in replacement_slots]
+            missing = repair_slots(missing, candidate['sections'], candidate['plan'])
             await asyncio.gather(*(fill(i, batch) for i, batch in enumerate(batches(missing))))
             if round_index == 0 and candidate['first_pass_valid_count'] is None:
                 candidate['first_pass_valid_count'] = len(questions(candidate['sections']))

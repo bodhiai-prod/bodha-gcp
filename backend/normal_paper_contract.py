@@ -476,7 +476,7 @@ def validate_normal_plan(sections: list, plan: dict) -> list[dict[str, Any]]:
                 "category": "diagram",
                 "slot_id": slot["slot_id"],
             })
-        if slot.get("requires_shared_stimulus") and len(str(question.get("shared_stimulus") or "").split()) < 20:
+        if slot.get("requires_shared_stimulus") and not str(question.get("shared_stimulus") or "").strip():
             issues.append({
                 "code": "missing_case_stimulus",
                 "category": "structure",

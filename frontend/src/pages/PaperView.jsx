@@ -1014,6 +1014,13 @@ export default function PaperView() {
                 {(section.questions || []).map((q, qi) => {
                   const parentId = q.parent_id;
                   const firstPart = Boolean(parentId && parentId !== printedParent);
+                  const passageIndex = firstPart
+                    ? (section.questions || []).findIndex((candidate) =>
+                        candidate.parent_id === parentId && candidate.shared_stimulus)
+                    : -1;
+                  const caseStimulus = passageIndex >= 0
+                    ? section.questions[passageIndex].shared_stimulus
+                    : "";
                   let qNum = null;
                   if (firstPart) {
                     qNum = q.display_number || counter;
@@ -1031,6 +1038,12 @@ export default function PaperView() {
                         className="border-2 border-neutral-300 p-4"
                         data-testid={`edit-question-${q.id}`}
                       >
+                        {firstPart && caseStimulus && (
+                          <textarea value={caseStimulus}
+                            onChange={(e) => updateQ(si, passageIndex, { shared_stimulus: e.target.value })}
+                            className="qp-input w-full mb-2" rows={4} spellCheck={false}
+                            aria-label={`Case study passage for ${q.id}`} />
+                        )}
                         {firstPart && q.parent_lead_in && <p className="text-sm italic mb-2">{q.parent_lead_in}</p>}
                         <div className="flex items-start gap-2 mb-2">
                           <span className="font-bold pt-2">{questionDisplayLabel(qNum, q.part_label)}</span>
@@ -1153,6 +1166,7 @@ export default function PaperView() {
                       data-testid={`question-item-${q.id}`}
                     >
                       <div className="flex-1">
+                        {firstPart && caseStimulus && <p className="text-sm mb-2"><MathText text={caseStimulus} /></p>}
                         {firstPart && q.parent_lead_in && <p className="text-sm italic mb-2"><MathText text={q.parent_lead_in} /></p>}
                         <div className="flex items-start gap-2">
                           <span className="font-bold">{questionDisplayLabel(qNum, q.part_label)}</span>

@@ -1977,6 +1977,15 @@ async def update_paper(
             manual_quality_misses.extend(text_issues)
             manual_quality_misses.extend(_fixed_options_issues)
         manual_quality_misses.extend(internal_choice_misses(new_sections, p.get("generation_requirements") or {}))
+        # Case parents are content dependencies. A saved edit must not restore
+        # a ready state merely because every individual child still has a stem.
+        from case_study_contract import case_issues
+        manual_quality_misses.extend(
+            issue["message"] for issue in case_issues(
+                new_sections,
+                {"slots": (p.get("generation_requirements") or {}).get("section_allocations") or []},
+            )
+        )
         manual_quality_misses = list(dict.fromkeys(manual_quality_misses))
         set_fields["quality_review.status"] = "needs_review" if manual_quality_misses else "passed"
         set_fields["quality_review.stage"] = "needs_review" if manual_quality_misses else "ready"

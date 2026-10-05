@@ -1079,7 +1079,7 @@ def allocation_misses(sections, spec):
             case_parents.setdefault((row["section_id"], row["parent_id"]), []).extend(found.get(row["allocation_id"], []))
     for (section_id, parent_id), questions in case_parents.items():
         stimuli = [str(question.get("shared_stimulus") or "").strip() for question in questions]
-        if sum(len(stimulus.split()) >= 20 for stimulus in stimuli) != 1:
+        if len([stimulus for stimulus in stimuli if stimulus]) != 1:
             misses.append(
                 f"Section {section_id} / {parent_id}: case study requires exactly one substantive shared stimulus used by all subparts."
             )

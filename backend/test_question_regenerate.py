@@ -120,6 +120,17 @@ class RegenBase(unittest.TestCase):
 
 
 class SlotTests(RegenBase):
+    def test_case_child_repair_receives_and_preserves_shared_passage(self):
+        p = make_paper()
+        first, child = p["sections"][0]["questions"]
+        for question in (first, child):
+            question.update({"case_study": True, "parent_id": "case-1", "section_id": "A"})
+        first["shared_stimulus"] = "A 2 ohm resistor carries 3 A for 4 seconds."
+        with patch.object(workers, "chat_complete", self.scripted(reply("Calculate the energy dissipated."))):
+            out = run(regenerate_question(p, child["id"]))
+        self.assertIn("A 2 ohm resistor", self.calls[0])
+        self.assertEqual(out["question"]["shared_stimulus"], first["shared_stimulus"])
+
     def test_the_model_never_gets_to_change_the_slot(self):
         p = make_paper()
         rogue = json.dumps({

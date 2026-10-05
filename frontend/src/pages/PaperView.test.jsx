@@ -49,7 +49,7 @@ test("compound labels render consistently in paper and edit views", async () => 
     completion: { status: "incomplete", ready: false },
     presentation: { action: "review_placement", action_label: "Review question placement" },
     sections: [{ section_id: "A", title: "Section A", questions: [
-      { id: "q3-1", parent_id: "q3", display_number: 3, part_label: "(1)", question: "First part", marks: 4, format: "short_answer", type: "concept" },
+      { id: "q3-1", parent_id: "q3", display_number: 3, part_label: "(1)", shared_stimulus: "A trolley starts at rest and accelerates uniformly.", question: "First part", marks: 4, format: "short_answer", type: "concept" },
       { id: "q3-2", parent_id: "q3", display_number: 3, part_label: "(2)", question: "Second part", marks: 4, format: "short_answer", type: "concept" },
       { id: "q4", display_number: 4, question: "Ordinary question", marks: 4, format: "short_answer", type: "concept" },
     ] }],
@@ -59,11 +59,13 @@ test("compound labels render consistently in paper and edit views", async () => 
   expect(container.querySelector('[data-testid="question-item-q3-1"] .font-bold').textContent).toBe("Q3. (1)");
   expect(container.querySelector('[data-testid="question-item-q3-2"] .font-bold').textContent).toBe("(2)");
   expect(container.querySelector('[data-testid="question-item-q4"] .font-bold').textContent).toBe("Q4.");
+  expect(container.textContent).toContain("A trolley starts at rest and accelerates uniformly.");
 
   await act(async () => container.querySelector('[data-testid="generate-missing-questions-button"]').click());
   expect(container.querySelector('[data-testid="edit-question-q3-1"] .font-bold').textContent).toBe("Q3. (1)");
   expect(container.querySelector('[data-testid="edit-question-q3-2"] .font-bold').textContent).toBe("(2)");
   expect(container.querySelector('[data-testid="edit-question-q4"] .font-bold').textContent).toBe("Q4.");
+  expect(container.querySelector('[aria-label="Case study passage for q3-1"]')).not.toBeNull();
 });
 test("legacy near-complete paper is visible and generate pending queues continuation", async () => {
   await render(paper());

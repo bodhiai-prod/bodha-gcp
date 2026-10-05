@@ -69,6 +69,7 @@ from normal_paper_contract import (
     review_status as normal_review_status,
     validate_normal_plan,
 )
+from case_study_contract import case_groups, case_issues, review_cases, review_misses
 
 ACTIVE_GENERATION_STATUSES = ["queued", "pending", "generating", "reviewing"]
 
@@ -78,6 +79,7 @@ def _screen_viewable_sections(
     *,
     spec: dict,
     normal_plan: dict | None = None,
+    case_review_misses: list[dict] | None = None,
 ) -> tuple[list, list[str]]:
     """Return only question blocks that are safe and coherent enough to preview.
 
@@ -112,9 +114,10 @@ def _screen_viewable_sections(
             if row and row.get("case_study") and row.get("parent_id"):
                 case_questions.setdefault((row.get("section_id"), row.get("parent_id")), []).append(question)
     for parent, questions in case_questions.items():
-        valid_stimuli = [question for question in questions if len(str(question.get("shared_stimulus") or "").split()) >= 20]
+        valid_stimuli = [question for question in questions if str(question.get("shared_stimulus") or "").strip()]
         if len(valid_stimuli) != 1:
             invalid_case_parents.add(parent)
+    invalid_case_parents.update((issue.get("section_id"), issue.get("parent_id")) for issue in (case_review_misses or []))
     if required_choice_groups:
         choice_counts = {key: 0 for key in required_choice_groups}
         choice_ids = {key: set() for key in required_choice_groups}
@@ -185,6 +188,25 @@ def _screen_viewable_sections(
             safe_questions.append(question)
         section["questions"] = safe_questions
     return [section for section in screened if section.get("questions")], issues
+
+
+async def _review_template_case_studies(sections: list, spec: dict, *, ref: str) -> list[dict]:
+    """Review assembled template cases; fail closed only for their parent."""
+    plan = {"slots": list(spec.get("section_allocations") or [])}
+    deterministic = case_issues(sections, plan)
+    groups = case_groups(sections, plan)
+    if not groups:
+        return deterministic
+    try:
+        cache = await review_cases(sections, plan, _request_paper_json, ref=f"{ref}:case-review")
+        return [*deterministic, *review_misses(sections, plan, cache)]
+    except Exception as exc:
+        return [*deterministic, *[
+            {"code": "case_semantic", "section_id": group["section_id"], "parent_id": group["parent_id"],
+             "slot_ids": [slot.get("slot_id") for slot in group["slots"]],
+             "message": f"Case-study review could not complete: {str(exc)[:160]}"}
+            for group in groups
+        ]]
 
 
 def _preview_allowed(sections, spec, target):
@@ -896,8 +918,9 @@ async def generate_paper_background(
     _normalise_paper_questions(
         sections, difficulty, coercions, assign_ids=normal_plan is None
     )
+    initial_case_review = await _review_template_case_studies(sections, spec, ref=paper_id)
     first_view, withheld = _screen_viewable_sections(
-        sections, spec=spec, normal_plan=normal_plan
+        sections, spec=spec, normal_plan=normal_plan, case_review_misses=initial_case_review
     )
     if _preview_allowed(first_view, spec, target_q):
         draft_published = True
@@ -1248,6 +1271,8 @@ async def generate_paper_background(
                 "count": int(latex_stats["unrepaired"]),
             })
     allocation_issues = template_validation_misses(sections, spec) if spec.get("section_allocations") else []
+    final_case_review = await _review_template_case_studies(sections, spec, ref=paper_id)
+    final_check["misses"].extend(issue["message"] for issue in final_case_review)
     final_check["misses"].extend(allocation_issues)
     if not spec.get("section_allocations"):
         actual_marks = sum(float(q.get("marks") or 0) for s in sections for q in (s.get("questions") or []))
@@ -1281,11 +1306,12 @@ async def generate_paper_background(
         + (["Required internal choices could not be repaired."] if internal_choice_recovery else [])
         + (["Required internal choices remain incomplete."] if final_choice_diagnostics else [])
         + (["Template allocation needs review."] if structural_recovery else [])
+        + ([issue["message"] for issue in final_case_review])
         + ([review_budget.exhausted_reason] if review_budget.exhausted_reason else [])
     ))
     validation_error = "; ".join(quality_misses)[:500] or None
     final_sections, final_withheld = _screen_viewable_sections(
-        sections, spec=spec, normal_plan=normal_plan
+        sections, spec=spec, normal_plan=normal_plan, case_review_misses=final_case_review
     )
     final_quality_misses = list(dict.fromkeys([
         *quality_misses,
@@ -2452,6 +2478,14 @@ async def regenerate_question(
         # while retaining every allocation identity and other slot field.
         slot["internal_choice_count"] = required_internal_choice_count
     old_text = old.get("question") or ""
+    # A case passage is shared parent data, not disposable content on the
+    # first child. Keep it available to a child rewrite and preserve it when
+    # the provider correctly returns only the requested child stem.
+    case_siblings = [q for s in sections for q in (s.get("questions") or [])
+                     if q.get("id") != question_id and q.get("case_study")
+                     and q.get("section_id") == old.get("section_id") and q.get("parent_id") == old.get("parent_id")]
+    shared_stimulus = next((q.get("shared_stimulus") for q in [old, *case_siblings]
+                            if str(q.get("shared_stimulus") or "").strip()), "")
     difficulty = str(slot.get("difficulty") or paper.get("difficulty") or "medium")
     # Everything the replacement must not collide with. The old question is not
     # in here -- it is leaving -- but its text is in `rejected` below, because
@@ -2489,6 +2523,11 @@ async def regenerate_question(
             rejected=prior + ([old_text] if old_text else []) + rejected_now,
             attempt=attempt,
         )
+        if old.get("case_study"):
+            prompt += ('\nCASE CONTEXT (immutable for this child repair): ' + json.dumps({
+                "shared_stimulus": shared_stimulus,
+                "siblings": [{"slot_id": q.get("slot_id"), "question": q.get("question")} for q in case_siblings],
+            }, ensure_ascii=False) + '\nWrite only the requested child; do not remove or replace the shared stimulus.')
         if branch_only:
             prompt += ('\nWrite ONLY the missing independent alternative branches, separated by standalone OR lines. '
                        'Each branch must independently match the topic, marks and difficulty. Do not repeat or rewrite these accepted branches: '
@@ -2509,6 +2548,8 @@ async def regenerate_question(
         # a topic it preferred, marks it thought better of -- is dropped here
         # rather than corrected later.
         cand = {**slot, **{k: fresh[k] for k in _CANDIDATE_FIELDS if k in fresh}}
+        if old.get("case_study") and shared_stimulus and not cand.get("shared_stimulus"):
+            cand["shared_stimulus"] = shared_stimulus
 
         coercions: dict = {}
         holder = [{"title": section.get("title", ""), "questions": [cand]}]
@@ -2840,6 +2881,11 @@ SWEEP_BATCH_SIZE = 2
 def _questions_payload(paper: dict) -> list[dict]:
     """Flatten a paper's sections into the shape solution_prompt() expects."""
     out: list[dict] = []
+    passages = {
+        (q.get("section_id"), q.get("parent_id")): q.get("shared_stimulus")
+        for s in paper.get("sections", []) for q in s.get("questions", [])
+        if q.get("case_study") and q.get("parent_id") and q.get("shared_stimulus")
+    }
     for s in paper.get("sections", []):
         for q in s.get("questions", []):
             if not q.get("question"):
@@ -2860,6 +2906,10 @@ def _questions_payload(paper: dict) -> list[dict]:
             if (item["format"] or "").lower() == "mcq" and q.get("options"):
                 item["options"] = q["options"]
                 item["correct_option"] = q.get("correct_option", 0)
+            stimulus = passages.get((q.get("section_id"), q.get("parent_id")))
+            if stimulus:
+                item["shared_stimulus"] = stimulus
+                item["parent_id"] = q.get("parent_id")
             out.append(item)
     return out
 
