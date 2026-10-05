@@ -186,6 +186,43 @@ def test_docx_renders_physics_symbols_and_upright_si_units():
     assert '<m:sty m:val="p"' in document_xml
 
 
+def test_docx_disables_proofing_for_paragraphs_with_native_math():
+    """SI units and variables must not receive editor spelling underlines."""
+    paper = _paper()
+    paper["sections"][0]["questions"][0]["question"] = (
+        r"Specific heat is $c=0.4\,\mathrm{J\,g^{-1}\,K^{-1}}$; "
+        r"the echo returns after $1.6\,\mathrm{s}$."
+    )
+
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    math_start = document_xml.rfind("<w:p>", 0, document_xml.index("Specific heat"))
+    math_end = document_xml.find("</w:p>", math_start)
+    math_paragraph = document_xml[math_start:math_end]
+    assert "<m:oMath>" in math_paragraph
+    assert "<w:noProof/>" in math_paragraph
+
+
+def test_docx_renders_isotope_notation_as_native_left_scripts():
+    paper = _paper()
+    paper["sections"][0]["questions"][0]["question"] = (
+        r"Complete the fusion reaction: ${}^{2}_{1}\mathrm{H}+{}^{2}_{1}\mathrm{H}"
+        r"\to{}^{4}_{2}\mathrm{He}+Q$."
+    )
+
+    data = render_paper_docx(paper)
+    with ZipFile(BytesIO(data)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    assert document_xml.count("<m:sPre>") == 3
+    assert "<m:sPrePr/>" in document_xml
+    assert "<m:t>^</m:t>" not in document_xml
+    assert "<m:t>H</m:t>" in document_xml
+    assert document_xml.count('<m:sty m:val="p"') >= 3
+
+
 def test_docx_renders_limits_and_vector_accents_as_native_omml():
     paper = _paper()
     paper["sections"][0]["questions"][0]["question"] = (

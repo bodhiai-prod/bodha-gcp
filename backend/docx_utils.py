@@ -327,8 +327,11 @@ def _latex_to_ast(source: str):
     """Parse common LaTeX into a small AST suitable for native Word math."""
     nodes = []
     cursor = 0
+    pending_prescript = False
     while cursor < len(source):
         char = source[cursor]
+        if pending_prescript and not char.isspace() and char not in "^_":
+            pending_prescript = False
         if char.isspace():
             cursor += 1
             continue
@@ -337,7 +340,12 @@ def _latex_to_ast(source: str):
             continue
         if char == "{":
             group, cursor = _latex_group(source, cursor)
-            nodes.extend(_latex_to_ast(group))
+            if group:
+                nodes.extend(_latex_to_ast(group))
+            else:
+                # An empty group immediately before scripts is LaTeX's
+                # conventional way to write a left script: ``{}^{A}_{Z}X``.
+                pending_prescript = True
             continue
         if char == "\\":
             if source.startswith("\\\\", cursor):
@@ -467,7 +475,7 @@ def _latex_to_ast(source: str):
             cursor += 1
             continue
         if char in "^_":
-            if nodes:
+            if nodes and not pending_prescript:
                 content, next_cursor = _latex_group(source, cursor + 1)
                 nodes[-1] = (
                     "sup" if char == "^" else "sub",
@@ -475,6 +483,26 @@ def _latex_to_ast(source: str):
                     _latex_to_ast(content),
                 )
                 cursor = next_cursor
+                continue
+            # Nuclear notation commonly begins with an empty group followed by
+            # scripts, e.g. ``{}^{2}_{1}\mathrm{H}``.  Treating the first
+            # ``^`` as text leaked a literal caret and attached the lower
+            # script to the mass number.  OMML has a dedicated left-script
+            # construct for isotope and ion notation.
+            lower, upper = [], []
+            script_cursor = cursor
+            while script_cursor < len(source) and source[script_cursor] in "^_":
+                marker = source[script_cursor]
+                content, script_cursor = _latex_group(source, script_cursor + 1)
+                if marker == "^":
+                    upper = _latex_to_ast(content)
+                else:
+                    lower = _latex_to_ast(content)
+            base, next_cursor = _consume_nary_base(source, script_cursor)
+            if base:
+                nodes.append(("prescript", base, lower, upper))
+                cursor = next_cursor
+                pending_prescript = False
                 continue
         nodes.append(("text", char))
         cursor += 1
@@ -601,6 +629,16 @@ def _omml_node(node):
             _omml_container("m:sup" if kind == "sup" else "m:sub", node[2])
         )
         return element
+    if kind == "prescript":
+        # m:sPre stores the lower and upper scripts to the *left* of the base
+        # expression.  This is the native Word representation of isotope
+        # notation such as ``{}^{2}_{1}\mathrm{H}``.
+        element = OxmlElement("m:sPre")
+        element.append(OxmlElement("m:sPrePr"))
+        element.append(_omml_container("m:sub", node[2]))
+        element.append(_omml_container("m:sup", node[3]))
+        element.append(_omml_arg(node[1]))
+        return element
     if kind == "matrix":
         delimiters = {
             "matrix": ("", ""), "pmatrix": ("(", ")"), "bmatrix": ("[", "]"),
@@ -678,6 +716,24 @@ def _remove_paragraph_borders(element) -> None:
 def _set_keep(paragraph, *, keep_next=False, keep_together=False):
     paragraph.paragraph_format.keep_with_next = keep_next
     paragraph.paragraph_format.keep_together = keep_together
+
+
+def _disable_proofing_for_math(paragraph) -> None:
+    """Prevent editors from spell-checking native equation runs as prose.
+
+    LibreOffice marks single-letter variables and SI-unit abbreviations such as
+    ``c``, ``J`` and ``K`` with red spelling underlines even though they live
+    inside native OMML equations.  The marks are editor UI, not printed
+    content, but they make exported question papers look broken.  Paragraph
+    proofing is the portable OOXML control available around inline OMML.
+    """
+    properties = paragraph._p.get_or_add_pPr()
+    run_properties = properties.find(qn("w:rPr"))
+    if run_properties is None:
+        run_properties = OxmlElement("w:rPr")
+        properties.append(run_properties)
+    if run_properties.find(qn("w:noProof")) is None:
+        run_properties.append(OxmlElement("w:noProof"))
 
 
 def _set_table_borders(table, color="FFFFFF"):
@@ -770,6 +826,7 @@ def _add_equation_block(container, latex: str):
     paragraph.paragraph_format.space_after = Pt(4)
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _set_keep(paragraph, keep_together=True)
+    _disable_proofing_for_math(paragraph)
     _append_native_equation(paragraph, latex, display=True)
     return paragraph
 
@@ -780,6 +837,11 @@ def _append_rich_text(paragraph, container, text: str):
     if not matches:
         paragraph.add_run(text or "")
         return paragraph
+
+    # Disable proofing only when the paragraph contains an equation; ordinary
+    # prose-only paragraphs retain the editor's normal spelling support.
+    if paragraph is not None:
+        _disable_proofing_for_math(paragraph)
 
     cursor = 0
     last_block = None
@@ -801,6 +863,7 @@ def _append_rich_text(paragraph, container, text: str):
         else:
             if paragraph is None:
                 paragraph = container.add_paragraph()
+                _disable_proofing_for_math(paragraph)
             _append_native_equation(paragraph, latex, display=False)
         cursor = match.end()
     if cursor < len(text):
@@ -810,6 +873,7 @@ def _append_rich_text(paragraph, container, text: str):
             paragraph = last_block
         elif paragraph is None:
             paragraph = container.add_paragraph()
+            _disable_proofing_for_math(paragraph)
             paragraph.add_run(tail)
         else:
             paragraph.add_run(tail)
