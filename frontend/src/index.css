@@ -65,6 +65,9 @@ body {
     letter-spacing: 0.12em;
     text-transform: uppercase;
     font-weight: 700;
+    /* Tailwind also exposes an `overline` utility. This shared app label
+       class intentionally keeps the name, but must not inherit its text line. */
+    text-decoration-line: none;
 }
 
 /* Hard offset shadow interactions */

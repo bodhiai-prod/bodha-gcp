@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
+import MathText from "@/components/MathText";
 import { toast } from "sonner";
 import { useConfirmation } from "@/context/ConfirmationContext";
 import {
@@ -182,7 +183,7 @@ export default function QBank() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search questions..."
-              className="qp-input pl-10"
+              className="qp-input !pl-11"
               data-testid="qbank-search-input"
             />
           </div>
@@ -227,7 +228,10 @@ export default function QBank() {
                 data-testid={`qbank-item-${q.id}`}
               >
                 <div className="min-w-0 flex-1">
-                  <div className="font-body break-words">{q.question}</div>
+                  <MathText
+                    text={q.question}
+                    className="font-body break-words"
+                  />
                   <div className="flex flex-wrap gap-1 mt-2">
                     <span className="qp-badge qp-badge-blue">{q.type}</span>
                     <span className="qp-badge">{q.difficulty}</span>

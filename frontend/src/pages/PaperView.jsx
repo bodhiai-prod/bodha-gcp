@@ -501,7 +501,7 @@ export default function PaperView() {
               {paper.title || "Generating paper…"}
             </h1>
             <p className="text-neutral-600">
-              {paper.generation_status === "reviewing" ? "We are validating and completing the remaining questions." : <>The AI is drafting questions for <b>{paper.subject}</b> · Class <b>{paper.class_name}</b>.</>}
+              {paper.generation_status === "reviewing" ? "We are validating and completing the remaining questions." : <>Our Engine is drafting questions for <b>{paper.subject}</b> · Class <b>{paper.class_name}</b>.</>}
             </p>
             <p className="text-sm text-neutral-500 mt-4">
               Progress updates automatically through each generation phase.

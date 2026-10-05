@@ -83,6 +83,12 @@ test("queued continuation keeps saved paper on screen", async () => {
   expect(container.querySelector('[data-testid="paper-view-page"]')).not.toBeNull();
   expect(container.textContent).toContain("Explain algebra operation 37.");
 });
+test("generation screen identifies the drafting engine", async () => {
+  await render(paper({ generation_status: "generating", sections: [] }));
+  expect(container.querySelector('[data-testid="paper-generating-page"]')).not.toBeNull();
+  expect(container.textContent).toContain("Our Engine is drafting questions for");
+  expect(container.textContent).not.toContain("The AI is drafting questions for");
+});
 test("OR-only shortfall still offers generate pending", async () => {
   await render(paper({ target_question_count: 38, completion: { status: "incomplete", ready: false, unresolved_count: 10 } }));
   expect(container.querySelector('[data-testid="generate-missing-questions-button"]')).not.toBeNull();

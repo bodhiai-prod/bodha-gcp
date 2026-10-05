@@ -145,11 +145,11 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-4">
               <div className="overline">// RECENT PAPERS</div>
               <Link
-                to="/papers/new"
+                to="/papers"
                 className="qp-btn-ghost text-xs uppercase tracking-wider"
-                data-testid="link-new-paper"
+                data-testid="link-view-all-papers"
               >
-                + New
+                View all
               </Link>
             </div>
             <div className="border-2 border-black bg-white">

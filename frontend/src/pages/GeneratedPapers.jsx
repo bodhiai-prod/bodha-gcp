@@ -115,7 +115,7 @@ export default function GeneratedPapers() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search by title or subject..."
-              className="qp-input pl-10"
+              className="qp-input !pl-11"
               data-testid="generated-papers-search"
             />
           </div>
