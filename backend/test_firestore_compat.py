@@ -63,10 +63,46 @@ def test_generation_requirements_are_firestore_safe_and_round_trip():
     blueprint = encoded["generation_requirements"]["blueprint"]
     assert blueprint["disjoint_section_pairs"] == [{"first": "B", "second": "C"}]
     assert blueprint["sections"][0]["groups"][0]["slots"] == {
-        "q1-i": {"id": "q1-i", "marks": 1},
-        "q1-ii": {"id": "q1-ii", "marks": 1},
+        "q1-i": {"id": "q1-i", "marks": 1, "_firestore_slot_order": 0},
+        "q1-ii": {"id": "q1-ii", "marks": 1, "_firestore_slot_order": 1},
     }
     assert _decode_generation_requirements(encoded) == document
+
+
+def test_generation_requirements_restore_slot_order_after_map_reordering():
+    slots = [{"id": f"q1-{index}", "marks": 1} for index in range(1, 16)]
+    document = {
+        "generation_requirements": {
+            "blueprint": {"id": "custom-test", "version": 1, "sections": [{"groups": [{"slots": slots}]}]},
+        },
+    }
+    encoded = _encode_generation_requirements(document)
+    stored = encoded["generation_requirements"]["blueprint"]["sections"][0]["groups"][0]["slots"]
+    # Simulate Firestore returning the map in a different field iteration order.
+    encoded["generation_requirements"]["blueprint"]["sections"][0]["groups"][0]["slots"] = dict(reversed(list(stored.items())))
+
+    decoded = _decode_generation_requirements(encoded)
+    restored = decoded["generation_requirements"]["blueprint"]["sections"][0]["groups"][0]["slots"]
+    assert [slot["id"] for slot in restored] == [slot["id"] for slot in slots]
+    assert all("_firestore_slot_order" not in slot for slot in restored)
+
+
+def test_legacy_official_slot_maps_recover_catalog_order():
+    # Papers created by the old codec have no persisted ordinal.  The official
+    # template remains the authoritative recovery source.
+    slots = {f"q1-{index}": {"id": f"q1-{index}", "marks": 1} for index in range(15, 0, -1)}
+    document = {
+        "generation_requirements": {
+            "blueprint": {
+                "id": "icse10-physics", "version": 2,
+                "sections": [{"groups": [{"slots": slots}]}],
+            },
+        },
+    }
+
+    decoded = _decode_generation_requirements(document)
+    restored = decoded["generation_requirements"]["blueprint"]["sections"][0]["groups"][0]["slots"]
+    assert [slot["id"] for slot in restored] == [f"q1-{index}" for index in range(1, 16)]
 
 
 def test_claim_one_uses_a_begun_transaction_for_its_read(monkeypatch):

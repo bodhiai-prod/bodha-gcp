@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 import logging
 import uuid
 from dataclasses import dataclass
-from functools import cmp_to_key
+from functools import cmp_to_key, lru_cache
 from typing import Any, AsyncIterator, Iterable
 
 from google.cloud import firestore
@@ -27,8 +27,69 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 
 _MISSING = object()
+_SLOT_ORDER_FIELD = "_firestore_slot_order"
 worker_write_lease = contextvars.ContextVar("worker_write_lease", default=None)
 logger = logging.getLogger("bodhiai.firestore")
+
+
+@lru_cache(maxsize=64)
+def _official_slot_order(blueprint_id: str, blueprint_version: str) -> dict[str, int]:
+    """Return the immutable printable order for a shipped slot-aware template.
+
+    Firestore map fields do not carry an application-level sequence contract.
+    This is deliberately a recovery path for records written before explicit
+    slot ordinals were persisted; newly written records use that ordinal.
+    """
+    if not blueprint_id:
+        return {}
+    try:
+        from section_blueprints import catalog
+        blueprint = next(
+            (item for item in catalog()
+             if item.get("id") == blueprint_id
+             and str(item.get("version")) == blueprint_version),
+            None,
+        )
+    except Exception:  # A read must remain available even if the catalog is unavailable.
+        logger.exception("Unable to load official blueprint order for %s", blueprint_id)
+        return {}
+    if not blueprint:
+        return {}
+    return {
+        str(slot["id"]): index
+        for index, slot in enumerate(
+            slot
+            for section in blueprint.get("sections") or []
+            for group in section.get("groups") or []
+            for slot in group.get("slots") or []
+            if isinstance(slot, dict) and slot.get("id") is not None
+        )
+    }
+
+
+def _restore_slot_sequence(slots: dict, blueprint: dict) -> list[dict]:
+    """Decode a Firestore slot map without letting map iteration set question order."""
+    values = [slot for slot in slots.values() if isinstance(slot, dict)]
+    canonical_order = _official_slot_order(
+        str(blueprint.get("id") or ""), str(blueprint.get("version") or "")
+    )
+
+    def order_key(item: tuple[int, dict]) -> tuple[int, int, str]:
+        original_index, slot = item
+        persisted_order = slot.get(_SLOT_ORDER_FIELD)
+        if type(persisted_order) is int:
+            return 0, persisted_order, str(slot.get("id") or "")
+        canonical_index = canonical_order.get(str(slot.get("id") or ""))
+        if canonical_index is not None:
+            return 1, canonical_index, str(slot.get("id") or "")
+        # Custom legacy templates have no trustworthy sequence after the old
+        # map conversion. Preserve their read order rather than inventing one.
+        return 2, original_index, str(slot.get("id") or "")
+
+    ordered = [slot for _, slot in sorted(enumerate(values), key=order_key)]
+    for slot in ordered:
+        slot.pop(_SLOT_ORDER_FIELD, None)
+    return ordered
 
 
 def _encode_generation_requirements(document: dict[str, Any]) -> dict[str, Any]:
@@ -53,7 +114,7 @@ def _encode_generation_requirements(document: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(group, dict) or not isinstance(group.get("slots"), list):
                 continue
             group["slots"] = {
-                str(slot.get("id", index)): slot
+                str(slot.get("id", index)): {**slot, _SLOT_ORDER_FIELD: index}
                 for index, slot in enumerate(group["slots"])
                 if isinstance(slot, dict)
             }
@@ -81,7 +142,7 @@ def _decode_generation_requirements(document: dict[str, Any]) -> dict[str, Any]:
             continue
         for group in section.get("groups") or []:
             if isinstance(group, dict) and isinstance(group.get("slots"), dict):
-                group["slots"] = list(group["slots"].values())
+                group["slots"] = _restore_slot_sequence(group["slots"], blueprint)
 
     pairs = blueprint.get("disjoint_section_pairs")
     if isinstance(pairs, list) and all(isinstance(pair, dict) for pair in pairs):
