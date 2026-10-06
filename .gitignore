@@ -202,6 +202,11 @@ credentials.json
 !frontend/public/assets/bodhaai-app-icon-512.png
 .pytest_cache/
 
+# Local promo production workspaces
+/promo/
+/promo-live/
+/promo-video/
+
 # ---- not needed to run on EC2 ----
 .gitconfig
 *.md
