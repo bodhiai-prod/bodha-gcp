@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { CaretDown } from "@phosphor-icons/react";
+import QuestionCountStepper from "@/components/QuestionCountStepper";
+import { countDiagramSelections, MAX_DIAGRAMS_PER_PAPER } from "@/lib/diagramSelection";
 
 const DIFFICULTY_LABELS = { easy: "Simple", medium: "Moderate", hard: "Challenging" };
 
@@ -30,6 +32,8 @@ export default function FormatTopicAllocator({ formats, allocations, onChange, b
   useEffect(() => setActiveBook((current) => bookIds.includes(current) ? current : bookIds[0] || ""), [bookIds]);
   const format = formats[formatIndex];
   const status = allocationStatus(formats, allocations);
+  const selectedDiagrams = countDiagramSelections(allocations);
+  const diagramLimitReached = selectedDiagrams >= MAX_DIAGRAMS_PER_PAPER;
   const assigned = status.actual[format?.key] || 0;
   const remaining = Math.max(0, (format?.count || 0) - assigned);
   const units = useMemo(() => unitsFor(details[activeBook]), [activeBook, details]);
@@ -65,12 +69,11 @@ export default function FormatTopicAllocator({ formats, allocations, onChange, b
           <option value="">Default ({DIFFICULTY_LABELS[difficulty]})</option>
           {Object.entries(DIFFICULTY_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
         </select></label>
-        <label className="diagram-toggle"><input type="checkbox" checked={Boolean(row.diagrams)} onChange={(event) => updateRow(topic, { diagrams: event.target.checked })} />At least one diagram</label>
-        <div className="question-stepper-field"><span>Questions</span><div className="question-stepper" role="group" aria-label={`Question count for ${topic.name} in ${format.label}`}>
-          <button type="button" disabled={row.count <= 1} onClick={() => updateRow(topic, { count: row.count - 1 })}>−</button>
-          <output>{row.count}</output>
-          <button type="button" disabled={row.count >= max} onClick={() => updateRow(topic, { count: row.count + 1 })}>+</button>
-        </div></div>
+        <label className="diagram-toggle"><input type="checkbox" checked={Boolean(row.diagrams)} disabled={!row.diagrams && diagramLimitReached} onChange={(event) => {
+          if (event.target.checked && diagramLimitReached) return;
+          updateRow(topic, { diagrams: event.target.checked });
+        }} />At least one diagram</label>
+        <div className="question-stepper-field"><span>Questions</span><QuestionCountStepper value={row.count} max={max} onChange={(count) => updateRow(topic, { count })} label={`questions for ${topic.name} in ${format.label}`} /></div>
       </div>}
     </div>;
   };
@@ -80,6 +83,9 @@ export default function FormatTopicAllocator({ formats, allocations, onChange, b
       <div><div className="overline">// ASSIGN TOPICS BY FORMAT</div><strong className="block mt-1">{format.label}</strong></div>
       <span className={`qp-badge ${assigned === format.count ? "qp-badge-success" : "qp-badge-red"}`}>{format.label}: {assigned}/{format.count} filled</span>
     </div>
+    <p className={`diagram-selection-status ${diagramLimitReached ? "is-limit" : ""}`} role={diagramLimitReached ? "alert" : "status"}>
+      {selectedDiagrams} diagram{selectedDiagrams === 1 ? "" : "s"} selected{diagramLimitReached ? " — maximum reached" : ""}
+    </p>
     <div className="section-tabs mb-4" role="tablist" aria-label="Question formats">
       {formats.map((item, index) => <button type="button" role="tab" aria-selected={index === formatIndex} className={index === formatIndex ? "is-active" : ""} key={item.key} onClick={() => setFormatIndex(index)}><strong>{item.label}</strong><small>{status.actual[item.key] || 0}/{item.count}</small></button>)}
     </div>

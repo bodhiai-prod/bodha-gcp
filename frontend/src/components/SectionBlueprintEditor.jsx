@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { CaretDown } from "@phosphor-icons/react";
 import { allocationBuckets, groupSlots, normalizeBucketAllocations, updateAllocation } from "@/lib/sectionBlueprint";
+import QuestionCountStepper from "@/components/QuestionCountStepper";
+import { countDiagramSelections, MAX_DIAGRAMS_PER_PAPER } from "@/lib/diagramSelection";
 
 const labels = { easy: "Simple", medium: "Moderate", hard: "Challenging" };
 const formatLabels = { mcq: "Multiple choice", short_answer: "Short answer", long_answer: "Long answer", fill_blank: "Fill in the blank", true_false: "True / false" };
@@ -44,6 +46,8 @@ export default function SectionBlueprintEditor({ blueprint, bookIds, details, al
   const matchesSearch = topic => `${topic.name} ${topic.parent_topic || ""}`.toLowerCase().includes(search.toLowerCase());
   const visibleUnits = units.map(unit => ({ ...unit, subtopics: unit.subtopics.filter(matchesSearch) }))
     .filter(unit => matchesSearch(unit) || unit.subtopics.length);
+  const selectedDiagrams = countDiagramSelections(allocations);
+  const diagramLimitReached = selectedDiagrams >= MAX_DIAGRAMS_PER_PAPER;
 
   const topicRow = (topic, group, bucket, assigned, { parent, subtopics = [] } = {}) => {
     const inTarget = allocation => allocation.section_id === section.id && allocation.group_id === group.id && allocation.bucket_id === bucket.id;
@@ -72,8 +76,11 @@ export default function SectionBlueprintEditor({ blueprint, bookIds, details, al
       {inheritsSubtopics && <div className="section-topic-inherited-count">{inheritedCount} question{inheritedCount === 1 ? "" : "s"} assigned to selected subtopics</div>}
       {row && !inheritsSubtopics && <div className="section-topic-controls">
         <label>Difficulty<select aria-label={`Difficulty for ${topic.name} in ${bucket.id}`} value={row.difficulty || ""} onChange={event => change({ difficulty: event.target.value || null })}><option value="">Default ({labels[difficulty]})</option>{Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-        <label className="diagram-toggle"><input type="checkbox" checked={row.diagrams} onChange={event => change({ diagrams: event.target.checked })} />At least one diagram</label>
-        <div className="question-stepper-field"><span>Questions</span><div className="question-stepper" role="group" aria-label={`Question count for ${topic.name} in ${bucket.id}`}><button type="button" aria-label={`Decrease questions for ${topic.name}`} disabled={row.count <= 1} onClick={() => change({ count: row.count - 1 })}>−</button><output aria-live="polite">{row.count}</output><button type="button" aria-label={`Increase questions for ${topic.name}`} disabled={remaining <= 0} onClick={() => change({ count: row.count + 1 })}>+</button></div><small>{row.count * bucket.marks} marks</small></div>
+        <label className="diagram-toggle"><input type="checkbox" checked={row.diagrams} disabled={!row.diagrams && diagramLimitReached} onChange={event => {
+          if (event.target.checked && diagramLimitReached) return;
+          change({ diagrams: event.target.checked });
+        }} />At least one diagram</label>
+        <div className="question-stepper-field"><span>Questions</span><QuestionCountStepper value={row.count} max={row.count + remaining} onChange={(count) => change({ count })} label={`questions for ${topic.name} in ${bucket.id}`} /><small>{row.count * bucket.marks} marks</small></div>
       </div>}
     </div>;
   };
@@ -81,6 +88,9 @@ export default function SectionBlueprintEditor({ blueprint, bookIds, details, al
   return <section className="qp-card section-blueprint" data-testid="section-blueprint-editor">
     <h2 className="font-bold uppercase tracking-wide text-sm">Section-wise topic breakdown &amp; blueprint</h2>
     <p className="text-xs text-neutral-500 mt-2 mb-4">Choose topics once for each question type and mark range. The generator keeps the blueprint’s individual question numbering and format rules.</p>
+    <p className={`diagram-selection-status ${diagramLimitReached ? "is-limit" : ""}`} role={diagramLimitReached ? "alert" : "status"}>
+      {selectedDiagrams} diagram{selectedDiagrams === 1 ? "" : "s"} selected{diagramLimitReached ? " — maximum reached" : ""}
+    </p>
     {!blueprint && <p className="text-sm mb-4">Choose a Paper Blueprint preset or analyze your custom blueprint to define sections.</p>}
     <div className="space-y-2 mb-4">
       {!bookIds.length && <p className="text-sm">Select a textbook to load its topics.</p>}

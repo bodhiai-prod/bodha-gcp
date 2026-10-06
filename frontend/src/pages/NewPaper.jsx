@@ -11,6 +11,7 @@ import FormatTopicAllocator, { allocationStatus } from "@/components/FormatTopic
 import ConfigurationSummary from "@/components/ConfigurationSummary";
 import SavedPaperConfigurations from "@/components/SavedPaperConfigurations";
 import { normalizeBucketAllocations, retainCompatibleAllocations } from "@/lib/sectionBlueprint";
+import { countDiagramSelections, MAX_DIAGRAMS_PER_PAPER } from "@/lib/diagramSelection";
 import useConfigurationPreview from "@/hooks/useConfigurationPreview";
 import { toast } from "sonner";
 import {
@@ -46,8 +47,7 @@ export default function NewPaper() {
   const [totalMarks, setTotalMarks] = useState(50);
   const [questionCount, setQuestionCount] = useState(16);
   const [diagramCount, setDiagramCount] = useState("");
-  const [formatMode, setFormatMode] = useState("percentages");
-  const [exactFormatCounts, setExactFormatCounts] = useState({});
+  const [diagramCountError, setDiagramCountError] = useState("");
   const [info, setInfo] = useState(40);
   const [concept, setConcept] = useState(40);
   const [selectedTopics, setSelectedTopics] = useState([]);
@@ -72,11 +72,11 @@ export default function NewPaper() {
   const [newFormatLabel, setNewFormatLabel] = useState("");
   const [formatTopicAllocations, setFormatTopicAllocations] = useState([]);
   const [formatTopicStage, setFormatTopicStage] = useState("mix");
-  const effectiveQuestionCount = formatMode === "counts"
-    ? formats.reduce((sum, f) => sum + (exactFormatCounts[f.key] || 0), 0)
-    : Number(questionCount);
-  const formatQuestionCounts = formatMode === "counts" ? exactFormatCounts :
-    apportionCounts(Object.fromEntries(formats.map((f) => [f.key, f.value])), effectiveQuestionCount);
+  const effectiveQuestionCount = Number(questionCount);
+  const formatQuestionCounts = apportionCounts(
+    Object.fromEntries(formats.map((f) => [f.key, f.value])),
+    effectiveQuestionCount
+  );
   const activeFormats = useMemo(() => formats
     .map((format) => ({ ...format, count: Number(formatQuestionCounts[format.key] || 0) }))
     .filter((format) => format.count > 0), [formats, formatQuestionCounts]);
@@ -122,8 +122,8 @@ export default function NewPaper() {
     total_questions: sectionBlueprint.trim() ? null : effectiveQuestionCount,
     diagram_count: diagramCount === "" ? null : Number(diagramCount),
     distribution: { information: Number(info), concept: Number(concept), application: Number(application) },
-    format_distribution: formatMode === "percentages" ? Object.fromEntries(formats.filter((f) => Number(f.value) > 0).map((f) => [f.key, Number(f.value)])) : null,
-    format_counts: formatMode === "counts" ? Object.fromEntries(activeFormats.map((f) => [f.key, f.count])) : null,
+    format_distribution: Object.fromEntries(formats.filter((f) => Number(f.value) > 0).map((f) => [f.key, Number(f.value)])),
+    format_counts: null,
     format_topic_allocations: blueprint ? null : formatTopicAllocations,
     custom_instructions: customInstructions.trim() || null,
     section_blueprint: sectionBlueprint.trim() || null,
@@ -132,7 +132,7 @@ export default function NewPaper() {
     section_topic_allocations: blueprint ? blueprintAllocations : null,
     textbook_ids: selectedTbIds,
     topics: blueprint ? selectedTopics.map(({ key, ...topic }) => ({ ...topic, difficulty: topicDifficulties[key] || null })) : allocatedTopics,
-  }), [difficulty, duration, totalMarks, effectiveQuestionCount, diagramCount, info, concept, application, formatMode, formats, activeFormats, formatTopicAllocations, customInstructions, sectionBlueprint, blueprint, blueprintAllocations, selectedTbIds, selectedTopics, topicDifficulties, allocatedTopics]);
+  }), [difficulty, duration, totalMarks, effectiveQuestionCount, diagramCount, info, concept, application, formats, formatTopicAllocations, customInstructions, sectionBlueprint, blueprint, blueprintAllocations, selectedTbIds, selectedTopics, topicDifficulties, allocatedTopics]);
 
   const applySavedConfiguration = (config) => {
     const available = new Set(textbooks.map((book) => book.id));
@@ -142,15 +142,24 @@ export default function NewPaper() {
     setDuration(config.duration_minutes || 60);
     setTotalMarks(config.total_marks || 50);
     if (config.total_questions != null) setQuestionCount(config.total_questions);
-    setDiagramCount(config.diagram_count == null ? "" : config.diagram_count);
+    const restoredDiagramCount = config.diagram_count == null ? "" : Math.min(MAX_DIAGRAMS_PER_PAPER, Number(config.diagram_count));
+    setDiagramCount(restoredDiagramCount);
+    setDiagramCountError("");
+    if (Number(config.diagram_count) > MAX_DIAGRAMS_PER_PAPER) toast.warning("Saved diagram count was reduced to the maximum of 5.");
     setInfo(Number(config.distribution?.information ?? 40));
     setConcept(Number(config.distribution?.concept ?? 40));
     const savedMix = config.format_distribution || config.format_counts;
     if (savedMix) {
       const defaults = Object.fromEntries(DEFAULT_FORMATS.map((format) => [format.key, format]));
-      setFormats(Object.entries(savedMix).map(([key, value]) => ({ ...(defaults[key] || { key, label: key.replaceAll("_", " "), default: 0 }), value: config.format_distribution ? Number(value) : 0, custom: !defaults[key] })));
-      if (config.format_counts) setExactFormatCounts(config.format_counts);
-      setFormatMode(config.format_counts ? "counts" : "percentages");
+      const restoredFormats = Object.entries(savedMix).map(([key, value]) => ({
+        ...(defaults[key] || { key, label: key.replaceAll("_", " "), default: 0 }),
+        value: Number(value),
+        custom: !defaults[key],
+      }));
+      setFormats(config.format_counts ? distributeFormatValues(restoredFormats, 100) : restoredFormats);
+      if (config.format_counts && config.total_questions == null) {
+        setQuestionCount(Object.values(config.format_counts).reduce((sum, value) => sum + Number(value || 0), 0));
+      }
     }
     setFormatTopicAllocations(config.format_topic_allocations || []);
     setFormatTopicStage(config.format_topic_allocations?.length ? "confirmed" : "mix");
@@ -338,14 +347,17 @@ export default function NewPaper() {
       return toast.error("Allow at least one mark per question");
     if (!promptOverride && info + concept + application !== 100)
       return toast.error("Distribution must sum to 100%");
-    if (!promptOverride && formatMode === "percentages" && formatActive && formatTotal !== 100)
+    if (!promptOverride && formatActive && formatTotal !== 100)
       return toast.error(
         "Format mix must sum to 100% (or set all to 0 to let AI decide)"
       );
+    const selectedDiagramCount = countDiagramSelections(blueprint ? blueprintAllocations : formatTopicAllocations);
+    if (Number(diagramCount) > MAX_DIAGRAMS_PER_PAPER || selectedDiagramCount > MAX_DIAGRAMS_PER_PAPER)
+      return toast.error("Select no more than 5 diagrams");
 
     // Build format_distribution payload (only when sliders are still active)
     const fmtPayload = {};
-    if (!promptOverride && formatMode === "percentages") {
+    if (!promptOverride) {
       for (const f of formats) {
         const v = Number(f.value || 0);
         if (v > 0) fmtPayload[f.key] = v;
@@ -366,8 +378,7 @@ export default function NewPaper() {
         duration_minutes: Number(duration),
         total_marks: Number(totalMarks),
         total_questions: promptOverride ? null : effectiveQuestionCount,
-        format_counts: !promptOverride && formatMode === "counts"
-          ? Object.fromEntries(formats.map((f) => [f.key, exactFormatCounts[f.key] || 0])) : null,
+        format_counts: null,
         diagram_count: diagramCount === "" ? null : Number(diagramCount),
         distribution: { information: info, concept, application },
         format_distribution: fmtPayload,
@@ -461,10 +472,10 @@ export default function NewPaper() {
     textbook_ids: selectedTbIds, topics: blueprint ? buildTopicPayload(selectedTopics, topicDifficulties, difficulty) : allocatedTopics,
     difficulty, duration_minutes: Number(duration), total_marks: Number(totalMarks),
     total_questions: promptOverride ? null : effectiveQuestionCount,
-    format_counts: !promptOverride && formatMode === "counts" ? exactFormatCounts : null,
+    format_counts: null,
     diagram_count: diagramCount === "" ? null : Number(diagramCount),
     distribution: { information: info, concept, application },
-    format_distribution: !promptOverride && formatMode === "percentages" ? Object.fromEntries(formats.filter(f => f.value > 0).map(f => [f.key, f.value])) : null,
+    format_distribution: !promptOverride ? Object.fromEntries(formats.filter(f => f.value > 0).map(f => [f.key, f.value])) : null,
     format_topic_allocations: blueprint ? null : formatTopicAllocations,
     custom_instructions: customInstructions.trim() || null, section_blueprint: sectionBlueprint.trim() || null,
     blueprint_id: blueprint?.id || null, blueprint_version: blueprint?.version || null,
@@ -633,19 +644,37 @@ export default function NewPaper() {
                 <div>
                   <label className="qp-label" htmlFor="question-count">Questions</label>
                   <input id="question-count" type="number" min={1} max={200}
-                    value={effectiveQuestionCount} disabled={promptOverride || formatMode === "counts"}
+                    value={effectiveQuestionCount} disabled={promptOverride}
                     onChange={(e) => setQuestionCount(e.target.value)} className="qp-input"
                     data-testid="paper-question-count-input" />
                   <p className="text-xs text-neutral-500 mt-1">
-                    {promptOverride ? "Set by the blueprint" : formatMode === "counts" ? "Sum of format counts below" : "Exact number to generate"}
+                    {promptOverride ? "Set by the blueprint" : "Exact number to generate"}
                   </p>
                 </div>
                 <div>
                   <label className="qp-label" htmlFor="diagram-count">Supplied diagrams</label>
-                  <input id="diagram-count" type="number" min={0} max={200} placeholder="Automatic"
-                    value={diagramCount} onChange={(e) => setDiagramCount(e.target.value)}
+                  <input id="diagram-count" type="number" min={0} max={MAX_DIAGRAMS_PER_PAPER} placeholder="Automatic"
+                    value={diagramCount} onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw === "") {
+                        setDiagramCount("");
+                        setDiagramCountError("");
+                        return;
+                      }
+                      const value = Math.max(0, Math.trunc(Number(raw)));
+                      if (value > MAX_DIAGRAMS_PER_PAPER) {
+                        setDiagramCount(MAX_DIAGRAMS_PER_PAPER);
+                        setDiagramCountError("Maximum 5 diagrams allowed.");
+                        return;
+                      }
+                      setDiagramCount(value);
+                      setDiagramCountError("");
+                    }}
+                    aria-invalid={Boolean(diagramCountError)} aria-describedby="diagram-count-help"
                     className="qp-input" data-testid="paper-diagram-count-input" />
-                  <p className="text-xs text-neutral-500 mt-1">Leave blank for automatic, or 0 for none.</p>
+                  <p id="diagram-count-help" className={`text-xs mt-1 ${diagramCountError ? "text-red-700 font-semibold" : "text-neutral-500"}`} role={diagramCountError ? "alert" : undefined}>
+                    {diagramCountError || "Leave blank for automatic, or 0 for none. (Max 5 diagrams)"}
+                  </p>
                 </div>
               </div>
 
@@ -724,25 +753,16 @@ export default function NewPaper() {
                     }`}
                     data-testid="format-total"
                   >
-                    {formatMode === "counts" ? `${effectiveQuestionCount} questions` : `${formatTotal}%`}
+                    {formatTotal}%
                   </span>
                 )}
               </div>
               <p className="text-xs text-neutral-500 font-mono mb-4">
                 MCQ, Short / Long Answer, Fill-in-the-blanks, True / False, or
-                add your own. Use exact counts or percentages. Percentage mixes
-                are converted to the whole-question counts shown below.
+                add your own. Set the percentage mix; it is converted to the
+                whole-question counts shown below.
               </p>
-              <label className="qp-label" htmlFor="format-mode">Set formats using</label>
-              <select id="format-mode" className="qp-input mb-4" value={formatMode}
-                onChange={(e) => {
-                  if (e.target.value === "counts") setExactFormatCounts(formatQuestionCounts);
-                  else setQuestionCount(effectiveQuestionCount || 16);
-                  setFormatMode(e.target.value);
-                }} data-testid="format-mode">
-                <option value="percentages">Percentages</option>
-                <option value="counts">Exact question counts</option>
-              </select>
+              <div className="qp-label mb-4">Set formats using</div>
 
               {formats.map((f) => (
                 <div
@@ -766,28 +786,18 @@ export default function NewPaper() {
                       )}
                     </div>
                     <div className="font-mono text-sm font-bold">
-                      {formatMode === "percentages" ? `${f.value}% · ` : ""}
-                      {formatQuestionCounts[f.key] || 0} questions
+                      {f.value}% · {formatQuestionCounts[f.key] || 0} questions
                     </div>
                   </div>
-                  {formatMode === "percentages" ? (
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={f.value}
-                      onChange={(e) =>
-                        setFormatValue(f.key, Number(e.target.value))
-                      }
-                      className="w-full mt-1"
-                      data-testid={`format-${f.key}-slider`}
-                    />
-                  ) : <input type="number" min={0} max={200}
-                    value={exactFormatCounts[f.key] || 0}
-                    onChange={(e) => setExactFormatCounts((curr) => ({
-                      ...curr, [f.key]: Math.max(0, Math.min(200, Math.trunc(Number(e.target.value)))),
-                    }))} aria-label={`Number of ${f.label} questions`} className="qp-input"
-                    data-testid={`format-${f.key}-count`} />}
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={f.value}
+                    onChange={(e) => setFormatValue(f.key, Number(e.target.value))}
+                    className="w-full mt-1"
+                    data-testid={`format-${f.key}-slider`}
+                  />
                 </div>
               ))}
 
@@ -816,7 +826,7 @@ export default function NewPaper() {
                 </button>
               </div>
               {!promptOverride && <button type="button" className="qp-btn qp-btn-primary w-full mt-4" data-testid="format-topics-next"
-                disabled={!activeFormats.length || (formatMode === "percentages" && formatTotal !== 100)}
+                disabled={!activeFormats.length || formatTotal !== 100}
                 onClick={() => setFormatTopicStage("allocate")}>Next: assign topics<ArrowRight size={16} weight="bold" /></button>}
               </> : <FormatTopicAllocator formats={activeFormats} allocations={formatTopicAllocations}
                 onChange={(next) => { setFormatTopicAllocations(next); setFormatTopicStage("allocate"); }} bookIds={selectedTbIds} details={tbDetails}

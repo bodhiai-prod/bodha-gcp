@@ -172,7 +172,7 @@ class BlueprintTests(unittest.TestCase):
         buckets = allocation_buckets(bp["sections"][0]["groups"][0])
         self.assertEqual([(bucket["id"], len(bucket["slots"])) for bucket in buckets], [("questions:q20", 2), ("questions:q22", 2)])
         rows = [
-            Allocation(section_id="A", group_id="questions", bucket_id=bucket["id"], textbook_id=book["id"], topic_id=topic["topic_id"], count=2)
+            Allocation(section_id="A", group_id="questions", bucket_id=bucket["id"], textbook_id=book["id"], topic_id=topic["topic_id"], count=2, diagrams=True)
             for bucket in buckets
         ]
         spec, errors = compile_allocations(bp, rows, [book], "medium", 14)
@@ -181,6 +181,25 @@ class BlueprintTests(unittest.TestCase):
         self.assertEqual([(row["format"], row["marks"], row["count"]) for row in spec["section_allocations"]], [
             ("short_answer", 2, 1), ("short_answer", 2, 1), ("long_answer", 5, 1), ("long_answer", 5, 1),
         ])
+        self.assertEqual(sum(bool(row["diagrams"]) for row in spec["section_allocations"]), 2)
+
+    def test_rejects_more_than_five_diagram_enabled_allocation_rows(self):
+        book, *_ = fixture()
+        topic = topic_catalog(book)[1]
+        bp = {
+            "id": "diagram-limit", "version": 1, "label": "Diagram limit", "total_marks": 6,
+            "duration_minutes": 30,
+            "sections": [{"id": f"S{i}", "title": f"Section {i}", "groups": [
+                {"id": "main", "count": 1, "marks": 1, "format": "short_answer"}
+            ]} for i in range(6)],
+        }
+        rows = [
+            Allocation(section_id=f"S{i}", group_id="main", textbook_id=book["id"],
+                       topic_id=topic["topic_id"], count=1, diagrams=True)
+            for i in range(6)
+        ]
+        _, errors = compile_allocations(bp, rows, [book], "medium", 6)
+        self.assertTrue(any("no more than 5" in error for error in errors))
 
     def test_legacy_slot_counts_are_canonicalized_before_preview_and_generation(self):
         book, *_ = fixture()

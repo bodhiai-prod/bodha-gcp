@@ -492,6 +492,8 @@ pre.math-fallback {
 .section-topic-controls label,.question-stepper-field { font-size:10px; display:flex; flex-direction:column; gap:4px; }
 .section-topic-controls label.diagram-toggle { flex-direction:row; align-items:center; }
 .section-topic-controls select { border:1px solid #a3a3a3; padding:6px; background:#fff; font-size:11px; }
+.diagram-selection-status { margin:0 0 12px; color:#525252; font-size:12px; font-weight:600; }
+.diagram-selection-status.is-limit { color:#b91c1c; }
 .question-stepper { display:inline-grid; grid-template-columns:30px minmax(34px,auto) 30px; width:max-content; min-height:32px; border:1px solid #111; background:#fff; }
 .question-stepper button { border:0; background:#f5f5f5; color:#111; font-size:18px; line-height:1; cursor:pointer; }
 .question-stepper button:first-child { border-right:1px solid #111; }
@@ -499,7 +501,9 @@ pre.math-fallback {
 .question-stepper button:hover:not(:disabled) { background:#002fa7; color:#fff; }
 .question-stepper button:focus-visible { position:relative; outline:2px solid #002fa7; outline-offset:-2px; }
 .question-stepper button:disabled { color:#a3a3a3; cursor:not-allowed; }
-.question-stepper output { display:grid; place-items:center; min-width:34px; padding:0 7px; font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; }
+.question-stepper input { width:52px; min-width:34px; border:0; padding:0 5px; text-align:center; font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; appearance:textfield; }
+.question-stepper input::-webkit-inner-spin-button,.question-stepper input::-webkit-outer-spin-button { margin:0; appearance:none; }
+.question-stepper input:focus-visible { outline:2px solid #002fa7; outline-offset:-2px; }
 .blueprint-unit { border:1px solid #ddd; margin:8px 0; background:#fafafa; }
 .blueprint-unit > .section-topic-row { border:0; margin:0; }
 .blueprint-unit-toggle { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; border-top:1px solid #ddd; padding:8px 12px; color:#002fa7; background:#fff; font-size:11px; font-weight:700; text-align:left; }

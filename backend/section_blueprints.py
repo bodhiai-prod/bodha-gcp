@@ -6,6 +6,7 @@ also declare scored *slots*: a slot is a printable subpart with its own topic
 allocation, while its parent question remains one printed question.
 """
 from board_instructions import candidate_content, detailed_template_prompt
+from diagram_policy import MAX_DIAGRAMS_PER_PAPER
 from collections import Counter
 from copy import deepcopy
 import hashlib
@@ -940,10 +941,13 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
             # Replace the bucket-level identity with exact slot identities.
             # This keeps the generation contract, exports, and recovery logic
             # unchanged while the editor stays compact.
-            for slot in available_slots[:a["count"]]:
+            for index, slot in enumerate(available_slots[:a["count"]]):
                 seen.discard((*pair, slot["id"], a["textbook_id"], a["topic_id"]))
-                resolve(a, pair, {**slot, "marks": slot.get("marks", groups[pair]["marks"]),
-                                  "format": slot.get("format", groups[pair]["format"])}, bucket_id=bucket_id)
+                # The editor's checkbox promises at least one diagram for the
+                # allocation row, not one diagram for every compatible slot.
+                resolved_allocation = a if index == 0 or not a.get("diagrams") else {**a, "diagrams": False}
+                resolve(resolved_allocation, pair, {**slot, "marks": slot.get("marks", groups[pair]["marks"]),
+                                                     "format": slot.get("format", groups[pair]["format"])}, bucket_id=bucket_id)
             continue
         if not explicit_slots:
             slot_id = slot_id or None
@@ -979,6 +983,8 @@ def compile_allocations(bp, allocations, books, difficulty, total_marks, diagram
             errors.append(f"Section {pair[0]} / {pair[1]}: this template requires at least {group['diagram_minimum']} diagram question(s); enable diagrams on an allocation.")
     minimum = sum(bool(a["diagrams"]) for a in resolved)
     maximum = sum(a["count"] for a in resolved if a["diagrams"])
+    if minimum > MAX_DIAGRAMS_PER_PAPER:
+        errors.append(f"Select no more than {MAX_DIAGRAMS_PER_PAPER} diagram-enabled topic assignments.")
     if diagram_count is not None and not minimum <= diagram_count <= maximum:
         errors.append(f"Supplied diagrams must be between {minimum} and {maximum} for these assignments.")
     for first, second in bp.get("disjoint_section_pairs") or []:

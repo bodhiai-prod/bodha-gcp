@@ -55,6 +55,7 @@ from normal_paper_contract import (
     validate_normal_plan,
 )
 from textbook_topics import merge_topic_batches, topic_context
+from diagram_policy import MAX_DIAGRAMS_PER_PAPER
 from pdf_utils import (
     PDF_POOL_MAX_WORKERS,
     chunk_text,
@@ -389,7 +390,7 @@ class PaperRequest(BaseModel):
     total_marks: int = Field(default=50, ge=1, le=1000)
     total_questions: Optional[int] = Field(default=None, ge=1, le=200)
     format_counts: Optional[Dict[str, int]] = None
-    diagram_count: Optional[int] = Field(default=None, ge=0, le=200)
+    diagram_count: Optional[int] = Field(default=None, ge=0, le=MAX_DIAGRAMS_PER_PAPER)
     distribution: dict  # {information, concept, application}
     # Optional free-form instructions appended to the LLM prompt.
     custom_instructions: Optional[str] = None
@@ -512,7 +513,7 @@ class PaperConfigurationBase(BaseModel):
     duration_minutes: int = Field(default=60, ge=1, le=1440)
     total_marks: int = Field(default=50, ge=1, le=1000)
     total_questions: Optional[int] = Field(default=None, ge=1, le=200)
-    diagram_count: Optional[int] = Field(default=None, ge=0, le=200)
+    diagram_count: Optional[int] = Field(default=None, ge=0, le=MAX_DIAGRAMS_PER_PAPER)
     distribution: Dict[str, int] = Field(default_factory=dict)
     format_distribution: Optional[Dict[str, int]] = None
     format_counts: Optional[Dict[str, int]] = None
@@ -545,7 +546,7 @@ class PaperConfigurationUpdate(BaseModel):
     duration_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     total_marks: Optional[int] = Field(default=None, ge=1, le=1000)
     total_questions: Optional[int] = Field(default=None, ge=1, le=200)
-    diagram_count: Optional[int] = Field(default=None, ge=0, le=200)
+    diagram_count: Optional[int] = Field(default=None, ge=0, le=MAX_DIAGRAMS_PER_PAPER)
     distribution: Optional[Dict[str, int]] = None
     format_distribution: Optional[Dict[str, int]] = None
     format_counts: Optional[Dict[str, int]] = None
@@ -1567,6 +1568,8 @@ async def _resolve_configuration(req, user, books):
                 if fmt not in expected:
                     errors.append(f"Remove {count} topic assignment{'s' if count != 1 else ''} for inactive format {fmt}.")
             diagram_minimum = sum(bool(allocation.get("diagrams")) for allocation in format_topic_allocations)
+            if diagram_minimum > MAX_DIAGRAMS_PER_PAPER:
+                errors.append(f"Select no more than {MAX_DIAGRAMS_PER_PAPER} diagram-enabled topic assignments.")
             if req.diagram_count is not None and req.diagram_count < diagram_minimum:
                 errors.append(f"The topic assignments require at least {diagram_minimum} diagrams; increase the supplied diagram count or clear a diagram requirement.")
     rows = spec.get("section_allocations", [])
