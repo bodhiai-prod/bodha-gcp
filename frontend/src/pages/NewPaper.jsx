@@ -762,8 +762,6 @@ export default function NewPaper() {
                 add your own. Set the percentage mix; it is converted to the
                 whole-question counts shown below.
               </p>
-              <div className="qp-label mb-4">Set formats using</div>
-
               {formats.map((f) => (
                 <div
                   key={f.key}

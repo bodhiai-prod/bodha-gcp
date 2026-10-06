@@ -1,10 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
-import { toast } from "sonner";
 import {
-  Plus,
   Trophy,
   ArrowRight,
   Books,
@@ -49,29 +46,6 @@ const PRESETS = [
 export default function CompetitiveExams() {
   const [exams, setExams] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({
-    name: "",
-    description: "",
-    exam_type: "GENERIC",
-  });
-
-  const quickCreate = async (preset) => {
-    setCreating(true);
-    try {
-      await api.post("/competitive-exams", {
-        name: preset.name,
-        description: preset.description,
-        exam_type: preset.code,
-      });
-      toast.success(`${preset.name} library created`);
-      load();
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || "Could not create exam");
-    } finally {
-      setCreating(false);
-    }
-  };
 
   const load = async () => {
     try {
@@ -85,22 +59,6 @@ export default function CompetitiveExams() {
   useEffect(() => {
     load();
   }, []);
-
-  const create = async (e) => {
-    e.preventDefault();
-    if (!form.name.trim()) return toast.error("Name required");
-    setCreating(true);
-    try {
-      await api.post("/competitive-exams", form);
-      toast.success("Exam created");
-      setForm({ name: "", description: "", exam_type: "GENERIC" });
-      load();
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || "Could not create exam");
-    } finally {
-      setCreating(false);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-[#FAFAFA]">
@@ -138,10 +96,11 @@ export default function CompetitiveExams() {
             {PRESETS.map((p) => (
               <button
                 key={p.code}
-                onClick={() => quickCreate(p)}
-                disabled={creating}
+                type="button"
+                disabled
+                aria-disabled="true"
                 data-testid={`preset-${p.code}`}
-                className="text-left border-2 border-black p-4 bg-white hover:bg-neutral-50 transition-colors disabled:opacity-50"
+                className="text-left border-2 border-black p-4 bg-white opacity-45 cursor-not-allowed"
               >
                 <div className="flex items-center gap-2 mb-1">
                   <span
@@ -168,17 +127,17 @@ export default function CompetitiveExams() {
               <div className="border-2 border-dashed border-neutral-300 p-12 text-center bg-white">
                 <Books size={36} className="mx-auto text-neutral-400 mb-3" />
                 <p className="text-neutral-600 text-sm">
-                  No competitive exam libraries yet. Create your first one on the right.
+                  <strong>in progress, stay tuned</strong>
                 </p>
               </div>
             ) : (
               <div className="space-y-3">
                 {exams.map((e) => (
-                  <Link
+                  <article
                     key={e.id}
-                    to={`/competitive-exams/${e.id}`}
                     data-testid={`exam-card-${e.id}`}
-                    className="block border-2 border-black bg-white p-5 hard-shadow hover:bg-neutral-50 transition-colors"
+                    aria-disabled="true"
+                    className="border-2 border-black bg-white p-5 hard-shadow-static opacity-45 cursor-not-allowed"
                   >
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                       <div>
@@ -204,7 +163,7 @@ export default function CompetitiveExams() {
                       </div>
                       <ArrowRight size={20} weight="bold" className="text-neutral-400" />
                     </div>
-                  </Link>
+                  </article>
                 ))}
               </div>
             )}
@@ -212,61 +171,40 @@ export default function CompetitiveExams() {
 
           <aside>
             <form
-              onSubmit={create}
+              onSubmit={(event) => event.preventDefault()}
               className="qp-card hard-shadow-static"
               data-testid="new-exam-form"
             >
-              <div className="overline text-neutral-500 mb-2">// NEW EXAM</div>
-              <h3 className="font-display text-2xl mb-3">Create exam</h3>
-              <div className="mb-3">
-                <label className="qp-label">Name</label>
-                <input
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  className="qp-input"
-                  placeholder="JEE Main 2026"
-                  data-testid="new-exam-name"
-                />
-              </div>
-              <div className="mb-3">
-                <label className="qp-label">Description</label>
-                <textarea
-                  value={form.description}
-                  onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  className="qp-input"
-                  rows={3}
-                  placeholder="Physics + Chemistry + Maths…"
-                  data-testid="new-exam-description"
-                />
-              </div>
-              <div className="mb-3">
-                <label className="qp-label">Exam type</label>
-                <select
-                  value={form.exam_type}
-                  onChange={(e) => setForm({ ...form, exam_type: e.target.value })}
-                  className="qp-input"
-                  data-testid="new-exam-type"
-                >
-                  <option value="GENERIC">Generic (default model chain)</option>
-                  <option value="JEE_MAINS">JEE Mains</option>
-                  <option value="JEE_ADV">JEE Advanced</option>
-                  <option value="CAT">CAT (IIM)</option>
-                  <option value="UPSC">UPSC CSE</option>
-                  <option value="NEET">NEET UG</option>
-                </select>
-              </div>
-              <p className="text-xs text-neutral-500 mb-4">
-                Exams and the papers you upload into them are private to your
-                account.
-              </p>
-              <button
-                type="submit"
-                disabled={creating}
-                className="qp-btn qp-btn-primary w-full"
-                data-testid="new-exam-submit"
-              >
-                <Plus size={16} weight="bold" /> {creating ? "Creating…" : "Create exam"}
-              </button>
+              <fieldset disabled className="opacity-45 cursor-not-allowed">
+                <div className="overline text-neutral-500 mb-2">// NEW EXAM</div>
+                <h3 className="font-display text-2xl mb-3">Create exam</h3>
+                <div className="mb-3">
+                  <label className="qp-label">Name</label>
+                  <input disabled className="qp-input" placeholder="JEE Main 2026" data-testid="new-exam-name" />
+                </div>
+                <div className="mb-3">
+                  <label className="qp-label">Description</label>
+                  <textarea disabled className="qp-input" rows={3} placeholder="Physics + Chemistry + Maths…" data-testid="new-exam-description" />
+                </div>
+                <div className="mb-3">
+                  <label className="qp-label">Exam type</label>
+                  <select disabled defaultValue="GENERIC" className="qp-input" data-testid="new-exam-type">
+                    <option value="GENERIC">Generic (default model chain)</option>
+                    <option value="JEE_MAINS">JEE Mains</option>
+                    <option value="JEE_ADV">JEE Advanced</option>
+                    <option value="CAT">CAT (IIM)</option>
+                    <option value="UPSC">UPSC CSE</option>
+                    <option value="NEET">NEET UG</option>
+                  </select>
+                </div>
+                <p className="text-xs text-neutral-500 mb-4">
+                  Exams and the papers you upload into them are private to your
+                  account.
+                </p>
+                <button type="submit" disabled className="qp-btn qp-btn-primary w-full" data-testid="new-exam-submit">
+                  Create exam
+                </button>
+              </fieldset>
             </form>
           </aside>
         </div>
