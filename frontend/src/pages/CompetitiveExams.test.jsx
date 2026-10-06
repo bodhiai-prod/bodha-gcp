@@ -26,7 +26,11 @@ test("locks competitive-page creation controls and shows the in-progress message
   api.get.mockResolvedValue({ data: [] });
   await act(async () => root.render(<CompetitiveExams />));
 
-  expect(container.textContent).toContain("in progress, stay tuned");
+  const status = [...container.querySelectorAll("p")].find((element) => element.textContent === "in progress, stay tuned");
+  expect(status).not.toBeNull();
+  expect(status.className).toContain("font-bold");
+  expect(status.className).toContain("text-red-700");
+  expect(container.textContent).toContain("Create your first test");
   expect([...container.querySelectorAll('[data-testid^="preset-"]')]).toHaveLength(5);
   expect([...container.querySelectorAll('[data-testid^="preset-"]')].every((button) => button.disabled)).toBe(true);
   expect(container.querySelector('[data-testid="new-exam-name"]').disabled).toBe(true);

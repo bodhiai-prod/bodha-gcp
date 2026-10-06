@@ -70,10 +70,8 @@ export default function CompetitiveExams() {
             <h1 className="font-display text-5xl">
               Train against <span className="text-[#002FA7]">past papers.</span>
             </h1>
-            <p className="text-neutral-600 mt-2 max-w-xl">
-              Upload past papers for any competitive exam (JEE, NEET, CAT, GATE…).
-              Generated practice papers will be difficulty-calibrated by similarity
-              search across what you've uploaded — RAG, in the open.
+            <p className="mt-2 max-w-xl font-bold text-red-700">
+              in progress, stay tuned
             </p>
           </div>
         </div>
@@ -126,9 +124,7 @@ export default function CompetitiveExams() {
             ) : exams.length === 0 ? (
               <div className="border-2 border-dashed border-neutral-300 p-12 text-center bg-white">
                 <Books size={36} className="mx-auto text-neutral-400 mb-3" />
-                <p className="text-neutral-600 text-sm">
-                  <strong>in progress, stay tuned</strong>
-                </p>
+                <p className="text-neutral-600 text-sm">Create your first test</p>
               </div>
             ) : (
               <div className="space-y-3">
