@@ -10,6 +10,7 @@ import SectionBlueprintEditor from "@/components/SectionBlueprintEditor";
 import FormatTopicAllocator, { allocationStatus } from "@/components/FormatTopicAllocator";
 import ConfigurationSummary from "@/components/ConfigurationSummary";
 import SavedPaperConfigurations from "@/components/SavedPaperConfigurations";
+import TextbookMultiSelect from "@/components/TextbookMultiSelect";
 import { normalizeBucketAllocations, retainCompatibleAllocations } from "@/lib/sectionBlueprint";
 import { countDiagramSelections, MAX_DIAGRAMS_PER_PAPER } from "@/lib/diagramSelection";
 import useConfigurationPreview from "@/hooks/useConfigurationPreview";
@@ -230,16 +231,13 @@ export default function NewPaper() {
     return () => window.clearInterval(timer);
   }, [selectedTbIds, textbooks, tbDetails]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const addTextbook = (id) => {
-    if (!id) return;
-    if (selectedTbIds.includes(id)) return;
-    setSelectedTbIds((curr) => [...curr, id]);
-  };
-
-  const removeTextbook = (id) => {
-    setSelectedTbIds((curr) => curr.filter((x) => x !== id));
-    setSelectedTopics((curr) => curr.filter((t) => t.textbook_id !== id));
-    setAllocations(curr => curr.filter(a => a.textbook_id !== id));
+  const setSelectedTextbooks = (nextIds) => {
+    const removedIds = new Set(selectedTbIds.filter((id) => !nextIds.includes(id)));
+    setSelectedTbIds(nextIds);
+    if (!removedIds.size) return;
+    setSelectedTopics((curr) => curr.filter((topic) => !removedIds.has(topic.textbook_id)));
+    setAllocations((curr) => curr.filter((allocation) => !removedIds.has(allocation.textbook_id)));
+    setFormatTopicAllocations((curr) => curr.filter((allocation) => !removedIds.has(allocation.textbook_id)));
   };
 
   const toggleTopic = (bookId, name, parent = "") => {
@@ -555,62 +553,11 @@ export default function NewPaper() {
 
               <div className="mb-4">
                 <label className="qp-label">Textbooks</label>
-                <select
-                  value=""
-                  onChange={(e) => {
-                    addTextbook(e.target.value);
-                    e.target.value = "";
-                  }}
-                  className="qp-input"
-                  data-testid="paper-textbook-select"
-                >
-                  <option value="">
-                    {selectedTbIds.length > 0
-                      ? "+ Add another textbook"
-                      : "Select textbook"}
-                  </option>
-                  {textbooks
-                    .filter((t) => !selectedTbIds.includes(t.id))
-                    .map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.original_filename} — {t.subject} / Class{" "}
-                        {t.class_name}
-                      </option>
-                    ))}
-                </select>
-                {selectedTbIds.length > 0 && (
-                  <div
-                    className="mt-3 flex flex-wrap gap-2"
-                    data-testid="selected-textbooks-chips"
-                  >
-                    {selectedTbIds.map((id) => {
-                      const tb = textbooks.find((t) => t.id === id);
-                      const label = tb
-                        ? `${tb.original_filename.slice(0, 28)}${
-                            tb.original_filename.length > 28 ? "…" : ""
-                          }`
-                        : id.slice(0, 8);
-                      return (
-                        <span
-                          key={id}
-                          className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-xs font-mono"
-                          data-testid={`textbook-chip-${id}`}
-                        >
-                          {label}
-                          <button
-                            type="button"
-                            onClick={() => removeTextbook(id)}
-                            aria-label="Remove"
-                            className="hover:text-[#E63946]"
-                            data-testid={`textbook-chip-remove-${id}`}
-                          >
-                            <XIcon size={12} weight="bold" />
-                          </button>
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
+                <TextbookMultiSelect
+                  textbooks={textbooks}
+                  selectedIds={selectedTbIds}
+                  onChange={setSelectedTextbooks}
+                />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
