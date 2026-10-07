@@ -570,6 +570,7 @@ pre.math-fallback {
 .paper-summary-books.is-single { list-style:disc; }
 .paper-summary-books.is-multiple { list-style:decimal; }
 .paper-summary-books li + li { margin-top:5px; }
+.paper-summary-book { min-width:0; overflow-wrap:anywhere; }
 .paper-summary-totals { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:18px 0; text-align:center; }
 .paper-summary-totals strong,.paper-summary-totals small { display:block; }
 .paper-summary-totals strong { font-size:24px; }
@@ -593,5 +594,13 @@ pre.math-fallback {
 .match-following-table thead th { background:#f5f5f5; font-weight:700; text-align:center; }
 .match-following-table .match-following-number { width:42px; text-align:center; }
 .match-following-tail { margin-top:12px; white-space:pre-wrap; }
+/* KaTeX creates unbreakable `.base` chunks after top-level relation and binary
+   operators. Let browsers wrap between those chunks while keeping every chunk
+   (fractions, roots, exponents, and grouped terms) intact. */
+.math-text { min-width:0; }
+.math-text .katex,
+.math-text .katex-display > .katex { white-space:normal; }
+.math-text .katex .base { white-space:nowrap; }
+.math-text .katex-display { max-width:100%; }
 @media(max-width:1100px) { .paper-with-summary { grid-template-columns:minmax(0,1fr); } .paper-summary { position:static; } }
 @media print { .paper-with-summary { display:block!important; } .paper-summary { display:none!important; } }

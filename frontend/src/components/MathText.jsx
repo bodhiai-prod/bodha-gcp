@@ -108,7 +108,7 @@ const fallback = (value, block) =>
 export default function MathText({ text, className = "" }) {
   const segments = splitMath(text || "");
   return (
-    <span className={className}>
+    <span className={["math-text", className].filter(Boolean).join(" ")}>
       {segments.map((seg, i) => {
         if (seg.kind === "inline") {
           return (

@@ -203,7 +203,7 @@ export default function MockTestResult() {
                   ) : (
                     <XCircle size={22} weight="fill" className="text-red-500 shrink-0 mt-1" />
                   )}
-                  <div className="text-base font-bold flex-1">
+                  <div className="text-base font-bold flex-1 min-w-0">
                     Q{idx + 1}. <MathText text={q.question || ""} />
                   </div>
                 </div>
@@ -226,7 +226,7 @@ export default function MockTestResult() {
                           <span className="font-bold w-5">
                             {String.fromCharCode(65 + oi)}.
                           </span>
-                          <span className="flex-1">
+                          <span className="flex-1 min-w-0">
                             <MathText text={String(opt)} />
                           </span>
                           {isAns && (

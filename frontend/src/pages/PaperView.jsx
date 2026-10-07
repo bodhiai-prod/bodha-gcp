@@ -1165,7 +1165,7 @@ export default function PaperView() {
                       className="flex flex-col md:flex-row md:items-start gap-3 border-b border-dashed border-neutral-200 pb-4 last:border-0"
                       data-testid={`question-item-${q.id}`}
                     >
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0">
                         {firstPart && caseStimulus && <p className="text-sm mb-2"><MathText text={caseStimulus} /></p>}
                         {firstPart && q.parent_lead_in && <p className="text-sm italic mb-2"><MathText text={q.parent_lead_in} /></p>}
                         <div className="flex items-start gap-2">
@@ -1178,7 +1178,7 @@ export default function PaperView() {
                               className="mt-1"
                             />
                           )}
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <MatchTheFollowing text={q.question} />
                           </div>
                           <span className="font-mono font-bold text-sm shrink-0">
@@ -1204,7 +1204,7 @@ export default function PaperView() {
                                     data-testid={`mcq-option-${q.id}-${oi}`}
                                   >
                                     <span className="font-bold w-7 shrink-0">{label}</span>
-                                    <span className="flex-1">
+                                    <span className="flex-1 min-w-0">
                                       <MathText text={String(opt)} />
                                     </span>
                                     {isCorrect && (

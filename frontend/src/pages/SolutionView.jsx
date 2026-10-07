@@ -524,7 +524,7 @@ export default function SolutionView() {
                       >
                         <div className="flex items-start gap-2">
                           <span className="font-bold">Q{qNum}.</span>
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <MatchTheFollowing text={q.question} />
                           </div>
                           <span className="font-mono font-bold text-sm shrink-0">
@@ -543,7 +543,7 @@ export default function SolutionView() {
 
                         <QuestionDiagram paperId={id} question={q} />
 
-                        <div className="mt-4 pl-6">
+                        <div className="mt-4 pl-6 min-w-0">
                           <div className="overline text-neutral-500 mb-2">
                             // ANSWER
                           </div>
@@ -564,7 +564,7 @@ export default function SolutionView() {
                             />
                           ) : (
                             <div
-                              className="bg-neutral-50 border border-neutral-300 p-4 whitespace-pre-wrap text-sm leading-relaxed"
+                              className="bg-neutral-50 border border-neutral-300 p-4 whitespace-pre-wrap text-sm leading-relaxed max-w-full"
                               data-testid={`answer-${q.id}`}
                             >
                               {answerByQid[q.id] ? (
