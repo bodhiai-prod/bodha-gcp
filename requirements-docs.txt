@@ -1,0 +1,3 @@
+# Documentation-only dependencies. These are intentionally separate from the
+# backend runtime requirements and are used to build the MkDocs site.
+mkdocs-material>=9.5,<10

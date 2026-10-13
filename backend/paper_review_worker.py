@@ -8,11 +8,13 @@ import socket
 from deps import db, logger, utcnow_iso
 from paper_review_queue import claim_next, complete, heartbeat, retry_or_needs_review, enqueue_diagrams
 from workers import generate_paper_background, generate_diagrams_background
+from queue_wakeup import QueueWakeup
 
-POLL_SECONDS = float(os.environ.get("PAPER_REVIEW_POLL_SECONDS", "1.5"))
+POLL_SECONDS = float(os.environ.get("PAPER_REVIEW_POLL_SECONDS", "20"))
 HEARTBEAT_SECONDS = float(os.environ.get("PAPER_REVIEW_HEARTBEAT_SECONDS", "20"))
 MAX_CONCURRENCY = max(1, int(os.environ.get("PAPER_REVIEW_CONCURRENCY", "2")))
 DIAGRAM_JOB_CONCURRENCY = 1
+RECOVERY_SECONDS = float(os.environ.get("PAPER_REVIEW_RECOVERY_SECONDS", "60"))
 
 
 async def _keep_lease(job_id: str, worker_id: str, lease_token: str | None = None) -> None:
@@ -170,21 +172,43 @@ async def run() -> None:
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
     logger.info("paper review worker started as %s", worker_id)
     active: dict[asyncio.Task, str] = {}
-    while True:
-        active = {task: kind for task, kind in active.items() if not task.done()}
-        if len(active) >= MAX_CONCURRENCY:
-            await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
-            continue
-        # A diagram can never consume the last review-worker slot. Quality
-        # jobs always win, then one non-blocking diagram may use spare room.
-        job = await claim_next(worker_id, ["paper_review", "paper_generation"])
-        if job is None and sum(1 for kind in active.values() if kind == "paper_diagram") < DIAGRAM_JOB_CONCURRENCY:
-            job = await claim_next(worker_id, ["paper_diagram"])
-        if job is None:
-            await asyncio.sleep(POLL_SECONDS)
-            continue
-        task = asyncio.create_task(process_job(job, worker_id))
-        active[task] = job.get("kind", "paper_review")
+    wakeup = QueueWakeup(os.environ["GCP_PROJECT_ID"], os.environ.get("FIRESTORE_DATABASE", "(default)"),
+                         recovery_seconds=RECOVERY_SECONDS, fallback_seconds=POLL_SECONDS,
+                         enabled=os.environ.get("PAPER_REVIEW_LISTENER_ENABLED", "true").lower() == "true")
+    try:
+        while True:
+            # Clear before reaping too: a task finishing between the capacity
+            # check and wait must leave its completion wake set.
+            wakeup.event.clear()
+            for task in list(active):
+                if task.done():
+                    del active[task]
+                    if not task.cancelled() and task.exception() is not None:
+                        logger.error("Queue job task failed", exc_info=task.exception())
+            await wakeup.connect()
+            # Arrivals during discovery remain set until the subsequent wait.
+            if len(active) >= MAX_CONCURRENCY:
+                await wakeup.wait()
+                continue
+            try:
+                job = await claim_next(worker_id, ["paper_review", "paper_generation"])
+                if job is None and sum(1 for kind in active.values() if kind == "paper_diagram") < DIAGRAM_JOB_CONCURRENCY:
+                    job = await claim_next(worker_id, ["paper_diagram"])
+            except Exception:
+                logger.exception("Indexed queue discovery failed; will retry without scanning history")
+                await asyncio.sleep(POLL_SECONDS)
+                continue
+            if job is None:
+                await wakeup.wait()
+                continue
+            task = asyncio.create_task(process_job(job, worker_id))
+            task.add_done_callback(lambda _task: wakeup.event.set())
+            active[task] = job.get("kind", "paper_review")
+    finally:
+        for task in active:
+            task.cancel()
+        await asyncio.gather(*active, return_exceptions=True)
+        await wakeup.close()
 
 
 if __name__ == "__main__":
