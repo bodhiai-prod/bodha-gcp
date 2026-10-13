@@ -63,15 +63,8 @@ async def claim_next(worker_id: str, kinds: list[str] | None = None) -> dict[str
     status transition.
     """
     kinds = kinds or ["paper_review", "paper_generation", "paper_diagram"]
-    kind_filter: Any = kinds[0] if len(kinds) == 1 else {"$in": kinds}
-    return await db.paper_review_jobs.claim_one(
-        {
-            "kind": kind_filter,
-            "$or": [
-                {"status": "queued", "next_run_at": {"$lte": utcnow_iso()}},
-                {"status": "leased", "lease_until": {"$lt": utcnow_iso()}},
-            ],
-        },
+    return await db.paper_review_jobs.claim_due_job(
+        kinds, utcnow_iso(),
         {"status": "leased", "worker_id": worker_id, "lease_until": _after(LEASE_SECONDS),
          "lease_token": str(uuid.uuid4()), "heartbeat_at": utcnow_iso(), "stage": "generating", "started_at": utcnow_iso()},
     )

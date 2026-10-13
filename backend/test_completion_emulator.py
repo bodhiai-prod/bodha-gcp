@@ -82,6 +82,37 @@ class EmulatorTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*(queue.enqueue_generation(paper_id='paper', payload={}, revision=1) for _ in range(3)))
         self.assertEqual(len(await self.db.paper_review_jobs._matching_snapshots({'paper_id': 'paper'})), 1)
 
+    async def test_indexed_competing_workers_claim_new_job_once(self):
+        await queue.enqueue_generation(paper_id='other-paper', payload={}, revision=1)
+        results = await asyncio.gather(queue.claim_next('contender-1'), queue.claim_next('contender-2'))
+        winners = [job for job in results if job is not None]
+        self.assertEqual(len(winners), 1)
+        self.assertEqual(winners[0]['paper_id'], 'other-paper')
+
+    async def test_real_listener_wakes_for_new_job_without_polling(self):
+        from queue_wakeup import QueueWakeup
+        wakeup = QueueWakeup(self.db._client.project, '(default)', recovery_seconds=60)
+        try:
+            await wakeup.connect()
+            await asyncio.wait_for(wakeup.event.wait(), timeout=10)  # initial snapshot
+            wakeup.event.clear()
+            await queue.enqueue_generation(paper_id='new-paper', payload={})
+            await asyncio.wait_for(wakeup.event.wait(), timeout=10)
+            job = await queue.claim_next('listener-worker')
+            self.assertEqual(job['paper_id'], 'new-paper')
+        finally:
+            await wakeup.close()
+
+    async def test_future_retry_is_ineligible_until_due(self):
+        from datetime import datetime, timedelta, timezone
+        job = queue.generation_job(paper_id='delayed-paper', payload={})
+        job['next_run_at'] = (datetime.now(timezone.utc) + timedelta(seconds=.5)).isoformat()
+        await self.db.paper_review_jobs.insert_once(job['id'], job)
+        self.assertIsNone(await queue.claim_next('early-worker'))
+        await asyncio.sleep(.6)
+        claimed = await queue.claim_next('due-worker')
+        self.assertEqual(claimed['paper_id'], 'delayed-paper')
+
     async def test_repeated_continuation_snapshots_checkpoint_once(self):
         await self.store.save({'sections': [], 'round': 2, 'budget': {'provider_calls_used': 24}},
                               {'completion': {'status': 'incomplete'}})

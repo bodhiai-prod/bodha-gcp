@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator, Iterable
 
 from google.cloud import firestore
 from google.cloud.firestore_v1.async_client import AsyncClient
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 
 _MISSING = object()
@@ -322,6 +323,14 @@ class FirestoreCollection:
     async def _matching_snapshots(self, query: dict[str, Any] | None) -> list[tuple[Any, dict[str, Any]]]:
         matches: list[tuple[Any, dict[str, Any]]] = []
         native = self._native_query(query)
+        if native is None and self._name == "paper_review_jobs":
+            # Lease mutations include a time predicate. Push the safe equality
+            # subset (especially id) down and recheck the complete predicate
+            # below and in the transaction. Never scan job history for renewal.
+            simple = {key: value for key, value in (query or {}).items()
+                      if not key.startswith("$") and not isinstance(value, dict)}
+            if simple:
+                native = self._native_query(simple)
         source = native if native is not None else self._collection
         async for snapshot in source.stream():
             data = _decode_generation_requirements(snapshot.to_dict() or {})
@@ -415,20 +424,58 @@ class FirestoreCollection:
         return _WriteResult()
 
     async def insert_once(self, key: str, document: dict[str, Any]) -> None:
-        from google.api_core.exceptions import AlreadyExists
-        try:
-            await self._collection.document(key).create(_encode_generation_requirements(document))
-        except AlreadyExists:
-            pass
+        from google.api_core.exceptions import AlreadyExists, Aborted
+        reference = self._collection.document(key)
+        for attempt in range(4):
+            # Repeated enqueue must leave an existing (possibly leased) job
+            # untouched. Avoid contending on its write lock just to discover
+            # it exists; create's precondition still protects concurrent NEW
+            # enqueues, so this read is only an optimisation.
+            if (await reference.get()).exists:
+                return
+            try:
+                await reference.create(_encode_generation_requirements(document))
+                return
+            except AlreadyExists:
+                return
+            except Aborted:
+                if attempt == 3:
+                    raise
+                await asyncio.sleep(.05 * (2 ** attempt))
 
-    async def claim_one(self, query: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any] | None:
+    async def claim_due_job(self, kinds: list[str], now: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        """Discover bounded eligible jobs using indexes, never a history scan.
+
+        Reclaim expired owners first. Transactional eligibility checks still
+        fence contenders and heartbeats racing with discovery. Missing indexes
+        propagate to the worker's retry/logging path, not an expensive fallback.
+        """
+        for status, time_field, operator in (
+            ("leased", "lease_until", "<"), ("queued", "next_run_at", "<="),
+        ):
+            kind_filter = kinds[0] if len(kinds) == 1 else {"$in": kinds}
+            predicate = {"status": status, "kind": kind_filter,
+                         time_field: {"$lt" if operator == "<" else "$lte": now}}
+            native = (self._collection
+                      .where(filter=FieldFilter("status", "==", status))
+                      .where(filter=FieldFilter("kind", "in", kinds))
+                      .where(filter=FieldFilter(time_field, operator, now))
+                      .order_by(time_field).limit(8))
+            candidates = [(snapshot, _decode_generation_requirements(snapshot.to_dict() or {}))
+                          async for snapshot in native.stream()]
+            claimed = await self.claim_one(predicate, fields, candidates=candidates)
+            if claimed is not None:
+                return claimed
+        return None
+
+    async def claim_one(self, query: dict[str, Any], fields: dict[str, Any], *, candidates=None) -> dict[str, Any] | None:
         """Atomically transition one matching document to a leased state.
 
         Queue consumers must not use a read followed by ``update_one``: two
         workers can observe the same queued document.  Firestore transactions
         give the lease an optimistic compare-and-set boundary.
         """
-        matches = await self._matching_snapshots(query)
+        matches = await self._matching_snapshots(query) if candidates is None else candidates
         for snapshot, _document in matches:
             transaction = self._client.transaction()
             try:
