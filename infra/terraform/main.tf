@@ -96,11 +96,39 @@ resource "google_service_account" "build" {
 }
 
 resource "google_artifact_registry_repository" "app" {
-  location      = var.region
-  repository_id = "bodha"
-  format        = "DOCKER"
-  description   = "Immutable Bodha backend and frontend images"
-  depends_on    = [google_project_service.required]
+  location               = var.region
+  repository_id          = "bodha"
+  format                 = "DOCKER"
+  description            = "Immutable Bodha backend and frontend images"
+  cleanup_policy_dry_run = var.artifact_cleanup_dry_run
+
+  # Keep rules override deletion, including for build-ID-tagged images.
+  cleanup_policies {
+    id     = "delete-build-images-after-30-days"
+    action = "DELETE"
+    condition {
+      tag_state             = "ANY"
+      package_name_prefixes = ["backend", "frontend"]
+      older_than            = "2592000s"
+    }
+  }
+  cleanup_policies {
+    id     = "keep-latest-20-per-package"
+    action = "KEEP"
+    most_recent_versions {
+      package_name_prefixes = ["backend", "frontend"]
+      keep_count            = 20
+    }
+  }
+  cleanup_policies {
+    id     = "keep-explicit-protected-builds"
+    action = "KEEP"
+    condition {
+      tag_state    = "TAGGED"
+      tag_prefixes = var.artifact_protected_build_ids
+    }
+  }
+  depends_on = [google_project_service.required]
 }
 
 resource "google_storage_bucket" "app" {
