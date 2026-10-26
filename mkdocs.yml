@@ -54,6 +54,7 @@ nav:
       - User journeys: guide/user-journeys.md
   - Architecture:
       - System architecture: guide/architecture.md
+      - Technical architecture reference: guide/technical-architecture-reference.md
       - Generation lifecycle: guide/generation.md
       - Data and security: guide/data-security.md
   - Development:
