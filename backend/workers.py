@@ -402,6 +402,7 @@ async def generate_diagrams_for_paper(paper_id: str, owner_id: str, sections: li
     return sections
 
 
+@tracked('diagram')
 async def generate_diagrams_background(paper_id: str, owner_id: str) -> None:
     """Run diagram generation for a paper and update its sections in-place."""
     try:
@@ -1557,6 +1558,7 @@ def template_requires_full_recovery(sections: list, spec: dict) -> bool:
     ))
 
 
+@tracked('template_recovery')
 async def recover_template_generation_background(
     paper_id: str,
     owner_id: str,
@@ -2536,7 +2538,9 @@ async def regenerate_question(
                        'Each branch must independently match the topic, marks and difficulty. Do not repeat or rewrite these accepted branches: '
                        + json.dumps(branches) + '\nMissing branches: ' + str(required_internal_choice_count - len(branches) + 1))
         try:
-            raw = await chat_complete(system_message=REGEN_SYSTEM, user_text=prompt)
+            from usage_ledger import call_attempt
+            with call_attempt(work_phase='regeneration', generation_attempt=attempt, question_id=question_id):
+                raw = await chat_complete(system_message=REGEN_SYSTEM, user_text=prompt)
             fresh = _extract_candidate(parse_json_response(raw))
         except Exception as exc:
             logger.warning("Regeneration provider attempt %s failed for %s: %s", attempt, paper_id, exc)
@@ -3063,9 +3067,9 @@ async def _run_solution_batches(
         )
         for attempt in range(2):
             try:
-                raw = await chat_complete(
-                    system_message=SOLUTION_SYSTEM, user_text=prompt
-                )
+                from usage_ledger import call_attempt
+                with call_attempt(work_phase='solution', batch=bi + 1, generation_attempt=attempt + 1, solution_pass=label):
+                    raw = await chat_complete(system_message=SOLUTION_SYSTEM, user_text=prompt)
                 data = parse_json_response(raw)
                 for a in data.get("answers") or []:
                     qid = a.get("question_id")
@@ -3092,6 +3096,7 @@ def _blank_of(payload: list[dict], answers: dict[str, str]) -> list[dict]:
     return [q for q in payload if not answers.get(q["id"])]
 
 
+@tracked('solution')
 async def build_solution_for_paper(paper: dict, user_id: str) -> dict:
     """Generate a solution for a single paper. Returns the solution dict.
     Raises HTTPException on failure. Does not persist."""

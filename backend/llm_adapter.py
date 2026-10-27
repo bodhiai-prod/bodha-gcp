@@ -524,6 +524,7 @@ def _chat_openrouter_sync(model_id: str, system_message: str, user_text: str) ->
         ],
         "max_tokens": OPENROUTER_TEXT_MAX_TOKENS,
         "temperature": OPENROUTER_TEXT_TEMPERATURE,
+        "usage": {"include": True},
     }
 
     started = time.perf_counter()
@@ -536,11 +537,22 @@ def _chat_openrouter_sync(model_id: str, system_message: str, user_text: str) ->
             timeout=(10, OPENROUTER_TEXT_TIMEOUT),
         )
     except Exception as e:  # noqa: BLE001 — requests.RequestException et al
+        if _usage_sink:
+            try:
+                _usage_sink(model_id, {"failed": True}, stop_reason="network_error", latency_ms=int((time.perf_counter() - started) * 1000))
+            except Exception:
+                logger.debug("usage sink failed", exc_info=True)
         # Tagged rather than left to speak for itself: a socket failure against a
         # hosted API is transient by definition, but requests phrases them in
         # ways _is_transient has no marker for ("Max retries exceeded with url").
         raise RuntimeError(f"OpenRouter request failed ({_TRANSIENT_TAG}): {e}") from e
     latency_ms = int((time.perf_counter() - started) * 1000)
+
+    if resp.status_code != 200 and _usage_sink:
+        try:
+            _usage_sink(model_id, {"failed": True}, stop_reason=f"http_{resp.status_code}", latency_ms=latency_ms)
+        except Exception:
+            logger.debug("usage sink failed", exc_info=True)
 
     if resp.status_code in (401, 403):
         # A bad key will never come good. Note the body, never the headers.
@@ -561,6 +573,11 @@ def _chat_openrouter_sync(model_id: str, system_message: str, user_text: str) ->
     try:
         body = resp.json()
     except ValueError:
+        if _usage_sink:
+            try:
+                _usage_sink(model_id, {"failed": True}, stop_reason="invalid_json", latency_ms=latency_ms)
+            except Exception:
+                logger.debug("usage sink failed", exc_info=True)
         raise RuntimeError(
             f"OpenRouter returned a non-JSON body: {resp.text[:300]}"
         ) from None
@@ -568,6 +585,11 @@ def _chat_openrouter_sync(model_id: str, system_message: str, user_text: str) ->
     # An upstream provider failure arrives as HTTP 200 with an `error` object and
     # no choices, so the status code alone is not enough to call this a success.
     if body.get("error"):
+        if _usage_sink:
+            try:
+                _usage_sink(model_id, {"failed": True}, stop_reason="provider_error", latency_ms=latency_ms)
+            except Exception:
+                logger.debug("usage sink failed", exc_info=True)
         raise RuntimeError(f"OpenRouter error: {str(body['error'])[:300]}")
 
     choices = body.get("choices") or []
@@ -599,6 +621,7 @@ def _chat_openrouter_sync(model_id: str, system_message: str, user_text: str) ->
                 {
                     "inputTokens": inp,
                     "outputTokens": out,
+                    "cost_usd": usage.get("cost"),
                     "totalTokens": int(usage.get("total_tokens") or (inp + out)),
                 },
                 stop_reason=stop_reason,
@@ -674,6 +697,9 @@ async def chat_complete(
     PER_CALL_TIMEOUT = _text_timeout()
     last_err: Exception | None = None
     chain = provider_chain or PROVIDER_CHAIN
+    from usage_ledger import call_attempt
+    import uuid
+    request_group = str(uuid.uuid4())
 
     for model_id in chain:
         for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
@@ -687,12 +713,12 @@ async def chat_complete(
                     # retain the guard for the tiny race between reservation
                     # and constructing the awaited request.
                     raise TimeoutError("The final-quality budget expired before the provider request started")
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        _text_complete_sync, model_id, system_message, user_text
-                    ),
-                    timeout=timeout,
-                )
+                with call_attempt(request_group=request_group, provider_attempt=attempt,
+                                  fallback_index=chain.index(model_id)):
+                    response = await asyncio.wait_for(
+                        asyncio.to_thread(_text_complete_sync, model_id, system_message, user_text),
+                        timeout=timeout,
+                    )
                 if response:
                     if attempt > 1:
                         logger.info(

@@ -23,20 +23,42 @@ async def admin_usage(user: dict = Depends(get_current_user), resource_id: str =
     query = {k: v for k, v in dict(resource_id=resource_id, user_id=user_id, kind=kind, status=status).items() if v}
     operations = await db.usage_operations.find(query, {'_id': 0}).to_list(None)
     operations.sort(key=lambda row: row.get('started_at', ''), reverse=True)
-    selected = operations[(page - 1) * page_size:page * page_size]
+    # Paginate resources, not operations, so a paper's history never spills
+    # across pages and its switches always represent the full matching history.
+    grouped = {}
+    for operation in operations:
+        grouped.setdefault((operation.get('resource_type'), operation.get('resource_id')), []).append(operation)
+    selected_groups = list(grouped.values())[(page - 1) * page_size:page * page_size]
+    selected = [operation for group in selected_groups for operation in group]
     for operation in selected:
         calls = await db.usage_calls.find({'operation_id': operation['id']}, {'_id': 0}).to_list(None)
         operation['calls'] = sorted(calls, key=lambda row: row['timestamp'])
+        operation['stages'] = await db.usage_stages.find({'operation_id': operation['id']}, {'_id': 0}).to_list(None)
         operation['known_cost_inr'] = sum(call.get('cost_inr') or 0 for call in calls)
         operation['unknown_calls'] = sum(call.get('cost_inr') is None for call in calls)
         operation['tokens'] = sum(call.get('total_tokens', 0) for call in calls)
+        if operation['resource_type'] == 'book':
+            related = await db.usage_calls.find({'resource_id': operation['resource_id']}, {'_id': 0}).to_list(None)
+            operation['book_cost'] = {
+                'vision_inr': sum(c.get('cost_inr') or 0 for c in related if c.get('kind') == 'cloud_vision_ocr'),
+                'llm_inr': sum(c.get('cost_inr') or 0 for c in related if c.get('kind') != 'cloud_vision_ocr'),
+                'unknown': sum(c.get('cost_inr') is None for c in related),
+                'call_count': len(related),
+            }
         collection = db.textbooks if operation['resource_type'] == 'book' else db.papers
         resource = await collection.find_one({'id': operation['resource_id']}, {'_id': 0}) or {}
         operation['resource_name'] = resource.get('title') or resource.get('original_filename') or operation['resource_id']
         owner_id = operation.get('user_id') or resource.get('owner_id')
         owner = await db.users.find_one({'id': owner_id}, {'_id': 0}) if owner_id else None
         operation['teacher'] = (owner or {}).get('full_name') or (owner or {}).get('email') or 'Unattributed'
-    return {'items': selected, 'total': len(operations), 'page': page, 'page_size': page_size}
+    return {'items': selected, 'total': len(grouped), 'page': page, 'page_size': page_size}
+
+
+@api_router.post('/admin/usage/reprice')
+async def reprice_usage(user: dict = Depends(get_current_user)):
+    require_admin(user)
+    from usage_rates import reprice_unknown
+    return await reprice_unknown(db)
 
 
 def _parse_time(value: str | None) -> datetime | None:

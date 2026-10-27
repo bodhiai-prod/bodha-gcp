@@ -9,6 +9,7 @@ from deps import db, logger, utcnow_iso
 from paper_review_queue import claim_next, complete, heartbeat, retry_or_needs_review, enqueue_diagrams
 from workers import generate_paper_background, generate_diagrams_background
 from queue_wakeup import QueueWakeup
+from usage_ledger import tracked
 
 POLL_SECONDS = float(os.environ.get("PAPER_REVIEW_POLL_SECONDS", "20"))
 HEARTBEAT_SECONDS = float(os.environ.get("PAPER_REVIEW_HEARTBEAT_SECONDS", "20"))
@@ -24,6 +25,7 @@ async def _keep_lease(job_id: str, worker_id: str, lease_token: str | None = Non
             return
 
 
+@tracked('paper_job')
 async def process_job(job: dict, worker_id: str) -> None:
     from firestore_compat import worker_write_lease
     snapshots = await db.paper_review_jobs._matching_snapshots({"id": job["id"]})

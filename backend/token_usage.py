@@ -105,13 +105,14 @@ def _record(
     stop_reason: str = "",
     latency_ms: int = 0,
     outcome: str = "ok",
+    reported_cost_usd: float | None = None,
 ) -> None:
     """Record one billed Bedrock call. Never raises — see the callers."""
     try:
         from usage_ledger import record_call
         record_call(dict(kind=kind, ref=ref, model_id=model_id, input_tokens=input_tokens,
                          output_tokens=output_tokens, total_tokens=total_tokens, images=images,
-                         stop_reason=stop_reason, latency_ms=latency_ms, outcome=outcome))
+                         stop_reason=stop_reason, latency_ms=latency_ms, outcome=outcome, reported_cost_usd=reported_cost_usd))
     except Exception:
         logger.exception('Durable usage accounting failed')
     _write_row(
@@ -158,12 +159,13 @@ def record_tokens(
         input_tokens=inp,
         output_tokens=out,
         total_tokens=total,
+        reported_cost_usd=usage.get('cost_usd'),
         stop_reason=stop_reason,
         latency_ms=latency_ms,
         # max_tokens means the response came back truncated and parse_json_response
         # had to salvage it — worth flagging in the report, since the call was
         # billed in full either way.
-        outcome="truncated" if stop_reason == "max_tokens" else "ok",
+        outcome="failed" if usage.get('failed') else ("truncated" if stop_reason == "max_tokens" else "ok"),
     )
     logger.info(
         f"[tokens] {kind} {_short(ref)}  {model_id}  "

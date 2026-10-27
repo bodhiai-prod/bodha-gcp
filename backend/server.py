@@ -203,18 +203,23 @@ async def _run_ingestion(textbook_id: str, owner_id: str, data: bytes | None = N
             "processing.error": None,
         }})
         try:
+            from usage_ledger import stage
             if data is None:
-                data, _content_type = await asyncio.to_thread(get_object, textbook["storage_path"])
-            text = await asyncio.to_thread(extract_text, data)
-            chunks = chunk_text(text)
-            selected_chunks = spread_chunks(chunks)
+                async with stage('download'):
+                    data, _content_type = await asyncio.to_thread(get_object, textbook["storage_path"])
+            async with stage('text_extraction'):
+                text = await asyncio.to_thread(extract_text, data)
+            async with stage('chunking'):
+                chunks = chunk_text(text)
+                selected_chunks = spread_chunks(chunks)
             if not chunks:
                 raise ValueError("No readable text was extracted from this PDF")
-            await save_textbook_chunks(textbook_id, selected_chunks)
+            async with stage('save_chunks'):
+                await save_textbook_chunks(textbook_id, selected_chunks)
             await db.textbooks.update_one({"id": textbook_id}, {"$set": {
                 "status": "indexed",
                 "chunk_count": len(chunks),
-                "processing": {"kind": "ingestion", "status": "ready", "completed": len(chunks), "total": len(chunks), "attempt": int((textbook.get("processing") or {}).get("attempt", 0)) + 1, "error": None, "finished_at": utcnow_iso()},
+                "processing": {"kind": "ingestion", "status": "ready", "completed": len(chunks), "total": len(chunks), "attempt": int((textbook.get("processing") or {}).get("attempt", 0)) + 1, "error": None, "started_at": now, "finished_at": utcnow_iso()},
             }})
             await record_activity(owner_id, "textbook.indexed", {"textbook_id": textbook_id, "chunks": len(chunks)})
         except Exception as exc:  # noqa: BLE001
@@ -1364,6 +1369,7 @@ async def _extract_book_topics_inner(tb):
         return {"status": "failed", "error": str(exc)[:500]}
 
 
+@__import__('usage_ledger').tracked('book_indexing')
 async def _extract_book_topics(tb):
     """Bound topic extraction so book uploads cannot create an LLM stampede."""
     async with _TOPIC_SEMAPHORE:

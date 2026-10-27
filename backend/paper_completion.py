@@ -416,8 +416,10 @@ async def run_completion(job, *, store=None):
                 async with semaphore:
                     key = ','.join(s['slot_id'] for s in slots)
                     try:
-                        generated = candidate.get('pending_batches', {}).get(key) or await generate_batch(slots, candidate, paper, payload,
-                                                         f"{paper['id']}:{round_index}:{index}")
+                        from usage_ledger import call_attempt
+                        with call_attempt(generation_round=round_index, batch=str(index), work_phase='generation' if round_index == 0 else 'repair'):
+                            generated = candidate.get('pending_batches', {}).get(key) or await generate_batch(slots, candidate, paper, payload,
+                                                             f"{paper['id']}:{round_index}:{index}")
                         async with lock:
                             candidate.setdefault('pending_batches', {})[key] = generated
                             await checkpoint()

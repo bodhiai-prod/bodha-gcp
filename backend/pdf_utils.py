@@ -567,6 +567,8 @@ def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 40, dpi: int = 150) -> str:
             middle = []
         page_numbers = sorted(set(head + middle + tail))
 
+    counters = {'requests': 0, 'errors': 0}
+    counters_lock = threading.Lock()
     def _ocr_one_page(pn: int) -> str:
         """Rasterize page `pn` and run it through Cloud Vision. Never raises."""
         try:
@@ -584,6 +586,8 @@ def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 40, dpi: int = 150) -> str:
         out: list[str] = []
         for img in imgs:
             try:
+                with counters_lock:
+                    counters['requests'] += 1
                 resp = _get_vision_client().document_text_detection(
                     image=vision.Image(content=_ocr_page_bytes(img)),
                     timeout=60,
@@ -595,6 +599,8 @@ def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 40, dpi: int = 150) -> str:
                     text = (resp.text_annotations[0].description or "").strip()
                 out.append(text)
             except Exception as e:  # noqa: BLE001
+                with counters_lock:
+                    counters['errors'] += 1
                 # Auth/permission/throttling all land here. Logged rather than
                 # swallowed — a silent empty result is what made the old
                 # missing-Tesseract failure so hard to diagnose.
@@ -606,6 +612,16 @@ def _ocr_pdf(pdf_bytes: bytes, max_pages: int = 40, dpi: int = 150) -> str:
     with ThreadPoolExecutor(max_workers=workers) as pool:
         # executor.map preserves input order — page order, not completion order.
         pieces = list(pool.map(_ocr_one_page, page_numbers))
+
+    if counters['requests']:
+        try:
+            from usage_ledger import record_call
+            record_call({'kind': 'cloud_vision_ocr', 'model_id': 'gcp/vision-document-text',
+                         'images': counters['requests'], 'input_tokens': 0, 'output_tokens': 0,
+                         'total_tokens': 0, 'latency_ms': 0, 'outcome': 'partial' if counters['errors'] else 'ok',
+                         'failed_requests': counters['errors']})
+        except Exception:
+            logger.exception('OCR usage accounting failed')
 
     succeeded = sum(1 for p in pieces if p.strip())
     logger.info(
