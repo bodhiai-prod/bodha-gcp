@@ -267,6 +267,7 @@ async def check_topics(sections, paper, payload, ref):
     return set(data.get('invalid_slot_ids') or []) | {q['slot_id'] for q in questions(sections) if q['slot_id'] not in checked}
 
 
+@__import__('usage_ledger').tracked('completion')
 async def run_completion(job, *, store=None):
     """Initial generation plus two targeted rounds under one persisted budget."""
     from workers import internal_choice_repair_targets, regenerate_question, generate_diagrams_for_paper

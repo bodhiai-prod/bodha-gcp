@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
+import AdminUsage from "@/components/AdminUsage";
 import { toast } from "sonner";
 import { useConfirmation } from "@/context/ConfirmationContext";
 import {
@@ -23,6 +24,7 @@ import {
 } from "@phosphor-icons/react";
 
 const TABS = [
+  { key: "usage", label: "Usage & Reliability" },
   { key: "library", label: "Shared Library" },
   { key: "textbooks", label: "All Textbooks" },
   { key: "papers", label: "All Papers" },
@@ -255,6 +257,7 @@ export default function Admin() {
             reindexingId={reindexingId}
           />
         )}
+        {tab === "usage" && <AdminUsage />}
         {tab === "papers" && <AllPapersTab papers={papers} loading={loading} />}
         {tab === "users" && <UsersTab users={users} total={userTotal} filters={userFilters} onFiltersChange={(next) => { setUserFilters(next); loadUsers(next); }} onOpen={openUser} loading={loading} />}
         {tab === "activity" && <ActivityTab activity={activity} loading={loading} />}

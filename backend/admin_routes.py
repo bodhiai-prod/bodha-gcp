@@ -8,6 +8,30 @@ from auth import get_current_user
 from deps import api_router, db, require_admin
 
 
+@api_router.get('/admin/usage')
+async def admin_usage(user: dict = Depends(get_current_user), resource_id: str = '',
+                      user_id: str = '', kind: str = '', status: str = '',
+                      page: int = Query(1, ge=1), page_size: int = Query(30, ge=1, le=100)):
+    require_admin(user)
+    query = {k: v for k, v in dict(resource_id=resource_id, user_id=user_id, kind=kind, status=status).items() if v}
+    operations = await db.usage_operations.find(query, {'_id': 0}).to_list(None)
+    operations.sort(key=lambda row: row.get('started_at', ''), reverse=True)
+    selected = operations[(page - 1) * page_size:page * page_size]
+    for operation in selected:
+        calls = await db.usage_calls.find({'operation_id': operation['id']}, {'_id': 0}).to_list(None)
+        operation['calls'] = sorted(calls, key=lambda row: row['timestamp'])
+        operation['known_cost_inr'] = sum(call.get('cost_inr') or 0 for call in calls)
+        operation['unknown_calls'] = sum(call.get('cost_inr') is None for call in calls)
+        operation['tokens'] = sum(call.get('total_tokens', 0) for call in calls)
+        collection = db.textbooks if operation['resource_type'] == 'book' else db.papers
+        resource = await collection.find_one({'id': operation['resource_id']}, {'_id': 0}) or {}
+        operation['resource_name'] = resource.get('title') or resource.get('original_filename') or operation['resource_id']
+        owner_id = operation.get('user_id') or resource.get('owner_id')
+        owner = await db.users.find_one({'id': owner_id}, {'_id': 0}) if owner_id else None
+        operation['teacher'] = (owner or {}).get('full_name') or (owner or {}).get('email') or 'Unattributed'
+    return {'items': selected, 'total': len(operations), 'page': page, 'page_size': page_size}
+
+
 def _parse_time(value: str | None) -> datetime | None:
     if not value:
         return None

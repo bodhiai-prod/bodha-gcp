@@ -57,6 +57,7 @@ from storage import APP_NAME, put_object
 from textbook_content import load_textbook_chunks
 from topic_balance import measure_coverage, topic_shortfall
 from token_usage import tag
+from usage_ledger import tracked
 from review_budget import begin as begin_review_budget
 from normal_paper_contract import (
     NORMAL_CONTRACT_VERSION,
@@ -676,6 +677,7 @@ async def _generate_normal_candidate(
     return {"instructions": "", "sections": sections}
 
 
+@tracked('question_generation')
 async def generate_paper_background(
     paper_id: str,
     owner_id: str,
@@ -2025,6 +2027,7 @@ async def _auto_topup_if_short(
         logger.warning(f"Auto top-up skipped for {paper_id}: {e}")
 
 
+@tracked('completion')
 async def generate_missing_questions_background(
     paper_id: str,
     owner_id: str,
@@ -2688,6 +2691,7 @@ def _invalidate_solution(paper: dict, question_id: str, targeted: bool) -> dict 
     return solution
 
 
+@tracked('regeneration')
 async def regenerate_question_background(
     paper_id: str,
     owner_id: str,
@@ -2791,6 +2795,7 @@ async def _fail_regen(paper_id: str, question_id: str, err: str) -> None:
     )
 
 
+@tracked('choice_repair')
 async def repair_internal_choices_background(
     paper_id: str,
     owner_id: str,
@@ -3147,6 +3152,7 @@ async def build_solution_for_paper(paper: dict, user_id: str) -> dict:
     return shell
 
 
+@tracked('solution')
 async def generate_solution_background(
     paper_id: str, user_id: str, only_qids: Optional[list[str]] = None
 ) -> None:

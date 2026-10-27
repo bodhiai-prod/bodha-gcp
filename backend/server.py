@@ -182,6 +182,7 @@ def spread_chunks(chunks: List[str], limit: int = STORED_CHUNK_LIMIT) -> List[st
     return head + body
 
 
+@__import__('usage_ledger').tracked('ingestion', 'textbook_id')
 async def _run_ingestion(textbook_id: str, owner_id: str, data: bytes | None = None) -> None:
     """Run one persisted ingestion job under a process-wide concurrency limit.
 

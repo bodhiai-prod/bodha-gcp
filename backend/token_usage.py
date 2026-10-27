@@ -107,6 +107,13 @@ def _record(
     outcome: str = "ok",
 ) -> None:
     """Record one billed Bedrock call. Never raises — see the callers."""
+    try:
+        from usage_ledger import record_call
+        record_call(dict(kind=kind, ref=ref, model_id=model_id, input_tokens=input_tokens,
+                         output_tokens=output_tokens, total_tokens=total_tokens, images=images,
+                         stop_reason=stop_reason, latency_ms=latency_ms, outcome=outcome))
+    except Exception:
+        logger.exception('Durable usage accounting failed')
     _write_row(
         {
             "timestamp": datetime.now(timezone.utc).isoformat(),
