@@ -12,6 +12,17 @@ export default function AdminUsage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillReport, setBackfillReport] = useState('');
+  const backfill = async () => {
+    setBackfilling(true); setError('');
+    try {
+      const { data: result } = await api.post('/admin/usage/backfill');
+      setBackfillReport(`Recovered ${result.operations_created} historical groups and ${result.calls_imported} provider calls. ${result.csv_available ? 'Available token logs were scanned.' : 'No token CSV is available on this server; costs and call details cannot be recovered from resource records alone.'} ${result.malformed_rows || 0} malformed log rows skipped.`);
+      setPage(1); setRefresh(value => value + 1);
+    } catch { setError('Historical import failed. Retry is safe; already imported entries are retained.'); }
+    finally { setBackfilling(false); }
+  };
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
@@ -25,7 +36,7 @@ export default function AdminUsage() {
   return <section className="space-y-6" aria-label="Usage and reliability">
     <div className="flex flex-wrap justify-between gap-4">
       <div><h2 className="font-display text-3xl">Usage & reliability</h2><p className="text-sm text-neutral-500 mt-2">Trace provider spend from each resource to its operations and individual calls.</p></div>
-      <button className="border-2 border-black px-4 py-2 bg-white" onClick={() => setRefresh(value => value + 1)}>Refresh</button>
+      <div className="flex gap-3"><button disabled={backfilling} className="border-2 border-black px-4 py-2 bg-white disabled:opacity-50" onClick={backfill}>{backfilling ? 'Recovering history…' : 'Recover previous generations'}</button><button className="border-2 border-black px-4 py-2 bg-white" onClick={() => setRefresh(value => value + 1)}>Refresh</button></div>
     </div>
     <div className="border-l-4 border-[#002FA7] bg-blue-50 p-4 text-sm">INR costs are estimates based on the pricing and exchange rate recorded with each call. Unknown charges are excluded from known subtotals. Provider call time can overlap and is not operation elapsed time.</div>
     <div className="flex flex-wrap gap-3">
@@ -38,12 +49,14 @@ export default function AdminUsage() {
       <input aria-label="Resource ID" placeholder="Filter by paper or book ID" className="border border-neutral-300 p-3 flex-1 min-w-48" value={filters.resource_id} onChange={event => change('resource_id', event.target.value)} />
     </div>
     {error && <div role="alert" className="bg-red-50 p-4 text-red-800">{error}</div>}
+    {backfillReport && <p role="status" className="bg-blue-50 p-4 text-sm">{backfillReport}</p>}
     {loading ? <p role="status">Loading usage…</p> : data?.items.length === 0 ? <div className="border-2 border-dashed border-neutral-300 p-12 text-center"><h3 className="text-lg">No operations recorded</h3><p className="text-sm text-neutral-500 mt-2">New generation and ingestion runs will appear here. Try adjusting your filters.</p></div> : data?.items.map(operation => <details key={operation.id} className="border-2 border-black bg-white group">
       <summary className="cursor-pointer p-5 flex flex-wrap items-center justify-between gap-4">
         <div className="min-w-0"><span className="text-xs uppercase tracking-wider text-[#002FA7]">{operation.resource_type} · {label(operation.kind)}</span><h3 className="font-medium mt-1 break-all">{operation.resource_name}</h3><p className="text-xs text-neutral-500 mt-1">{operation.teacher} · {new Date(operation.started_at).toLocaleString()}</p></div>
-        <div className="flex flex-wrap gap-6 text-sm"><div><p className="text-xs text-neutral-500">Known subtotal</p><p>{money(operation.known_cost_inr)}</p>{operation.unknown_calls > 0 && <p className="text-xs text-amber-700">+ {operation.unknown_calls} unknown charges</p>}</div><div><p className="text-xs text-neutral-500">Operation elapsed</p>{duration(operation.active_ms)}</div><span className={operation.status.includes('fail') ? 'text-red-700' : 'text-neutral-600'}>{operation.status}</span></div>
+        <div className="flex flex-wrap gap-6 text-sm"><div><p className="text-xs text-neutral-500">Known subtotal</p><p>{operation.calls.length === 0 || operation.unknown_calls === operation.calls.length ? 'Unavailable' : money(operation.known_cost_inr)}</p>{operation.unknown_calls > 0 && <p className="text-xs text-amber-700">{operation.unknown_calls} unknown charges</p>}</div><div><p className="text-xs text-neutral-500">Operation elapsed</p>{duration(operation.active_ms)}</div><span className={operation.status.includes('fail') ? 'text-red-700' : 'text-neutral-600'}>{operation.status}</span></div>
       </summary>
       <div className="border-t border-neutral-200 p-5 space-y-4">
+        {operation.source === 'historical' && <div className="bg-amber-50 p-3 text-sm"><strong>Recovered history</strong><p>{operation.history_note}</p><p>INR amounts, when available, are reconstructed using configured pricing at import time.</p></div>}
         <div className="text-xs text-neutral-500 break-all">Resource: <button className="underline text-[#002FA7]" onClick={() => change('resource_id', operation.resource_id)}>{operation.resource_id}</button><br />Operation: {operation.id}{operation.parent_id && <><br />Parent operation: {operation.parent_id}</>}</div>
         {operation.error_type && <p className="text-red-700 text-sm">Failure: {operation.error_type}</p>}
         <p className="text-sm">{operation.calls.length} provider calls · {operation.tokens.toLocaleString('en-IN')} tokens</p>

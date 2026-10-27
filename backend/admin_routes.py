@@ -8,6 +8,13 @@ from auth import get_current_user
 from deps import api_router, db, require_admin
 
 
+@api_router.post('/admin/usage/backfill')
+async def backfill_usage(user: dict = Depends(get_current_user)):
+    require_admin(user)
+    from usage_backfill import backfill
+    return await backfill(db)
+
+
 @api_router.get('/admin/usage')
 async def admin_usage(user: dict = Depends(get_current_user), resource_id: str = '',
                       user_id: str = '', kind: str = '', status: str = '',
