@@ -4,7 +4,7 @@ import { api } from '@/lib/api';
 const money = value => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 4 }).format(value);
 const duration = value => value == null ? '—' : `${(value / 1000).toFixed(1)}s`;
 const label = value => value.replaceAll('_', ' ');
-const category = kind => ({ paper_job: 'Generation', question_generation: 'Generation', completion: 'Completion', template_recovery: 'Completion', choice_repair: 'Completion', solution: 'Solution', regeneration: 'Regeneration', diagram: 'Diagrams', ingestion: 'Ingestion', book_indexing: 'Indexing' }[kind] || label(kind));
+const category = kind => ({ paper_job: 'Paper job', question_generation: 'Question generation', completion: 'Completion', template_recovery: 'Completion', choice_repair: 'Completion', solution: 'Solution', regeneration: 'Regeneration', diagram: 'Diagrams', ingestion: 'Ingestion', book_indexing: 'Indexing' }[kind] || label(kind));
 
 export default function AdminUsage() {
   const [filters, setFilters] = useState({ kind: '', status: '', resource_id: '' });

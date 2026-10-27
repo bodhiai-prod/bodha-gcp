@@ -10,6 +10,7 @@ from paper_review_queue import claim_next, complete, heartbeat, retry_or_needs_r
 from workers import generate_paper_background, generate_diagrams_background
 from queue_wakeup import QueueWakeup
 from usage_ledger import tracked
+from token_usage import install as install_token_usage
 
 POLL_SECONDS = float(os.environ.get("PAPER_REVIEW_POLL_SECONDS", "20"))
 HEARTBEAT_SECONDS = float(os.environ.get("PAPER_REVIEW_HEARTBEAT_SECONDS", "20"))
@@ -172,6 +173,14 @@ async def _process_job(job: dict, worker_id: str) -> None:
 
 async def run() -> None:
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
+    # This is a distinct process from FastAPI, so it does not execute
+    # server.py's startup hook. Install the same provider sinks here before
+    # claiming jobs; otherwise question-generation and Vertex diagram calls
+    # create usage operations with no individual provider calls or costs.
+    try:
+        install_token_usage()
+    except Exception as exc:  # accounting must not stop paper generation
+        logger.warning("Token usage tracking unavailable in paper worker: %s", exc)
     logger.info("paper review worker started as %s", worker_id)
     active: dict[asyncio.Task, str] = {}
     wakeup = QueueWakeup(os.environ["GCP_PROJECT_ID"], os.environ.get("FIRESTORE_DATABASE", "(default)"),

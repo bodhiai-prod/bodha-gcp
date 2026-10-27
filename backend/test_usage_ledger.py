@@ -23,6 +23,15 @@ def test_invalid_configuration_is_unknown(monkeypatch):
     assert price('model', 1, 1)['provenance'] == 'unknown'
 
 
+def test_unknown_model_keeps_exchange_rate_for_provider_reported_cost(monkeypatch):
+    monkeypatch.setenv('USAGE_MODEL_PRICING_JSON', '{}')
+    monkeypatch.setenv('USAGE_USD_INR', '85')
+    monkeypatch.setattr('usage_rates.public_rates', lambda: {})
+    result = price('model-not-in-public-catalogue', 1, 1)
+    assert result['cost_inr'] is None
+    assert result['fx_usd_inr'] == 85
+
+
 def test_vision_pdf_cost_uses_list_price(monkeypatch):
     monkeypatch.setenv('USAGE_MODEL_PRICING_JSON', '{}')
     monkeypatch.setenv('USAGE_USD_INR', '80')

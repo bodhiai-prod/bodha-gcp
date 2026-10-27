@@ -63,7 +63,18 @@ def price(model, inputs, outputs, images=0):
                     'note': 'List price estimate; monthly free tier and volume discounts excluded'}
         fx = fx or snapshot.get('fx', 0)
         if not isinstance(rate, dict) or fx <= 0 or (inputs and 'input_per_million' not in rate) or (outputs and 'output_per_million' not in rate) or (images and not outputs and 'per_image' not in rate):
-            return {'cost_inr': None, 'provenance': 'unknown'}
+            # OpenRouter may return an authoritative per-request USD amount
+            # even when its public model catalogue does not yet include the
+            # exact routed model. Preserve a usable FX quote so record_call()
+            # can convert that provider-reported amount instead of silently
+            # downgrading it to an unknown charge.
+            return {
+                'cost_inr': None,
+                'fx_usd_inr': fx or None,
+                'fx_date': snapshot.get('fx_date'),
+                'fx_source': snapshot.get('fx_source'),
+                'provenance': 'unknown',
+            }
         usd = (inputs * float(rate.get('input_per_million', 0)) + outputs * float(rate.get('output_per_million', 0))) / 1_000_000 + images * float(rate.get('per_image', 0)) + float(rate.get('per_request', 0))
         return {'cost_inr': usd * fx, 'cost_usd': usd, 'fx_usd_inr': fx,
                 'pricing': rate, 'fx_date': snapshot.get('fx_date'), 'fx_source': snapshot.get('fx_source'), 'provenance': 'estimated'}

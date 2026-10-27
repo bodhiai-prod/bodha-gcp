@@ -405,6 +405,10 @@ async def generate_diagrams_for_paper(paper_id: str, owner_id: str, sections: li
 @tracked('diagram')
 async def generate_diagrams_background(paper_id: str, owner_id: str) -> None:
     """Run diagram generation for a paper and update its sections in-place."""
+    # Diagram jobs execute in their own worker task, rather than below the
+    # question-generation tag. Give the token/usage sink the paper reference
+    # used by the durable operation and the CSV audit trail.
+    tag("diagram", paper_id)
     try:
         p = await db.papers.find_one(
             {"id": paper_id, "is_deleted": False}, {"_id": 0}
