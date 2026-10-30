@@ -260,17 +260,17 @@ export default function Textbooks() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="textbook-library-scroll">
                 {textbooks.map((tb) => (
                   <div
                     key={tb.id}
-                    className="border-2 border-black bg-white"
+                    className="border-b-2 border-black bg-white last:border-b-0"
                     data-testid={`textbook-${tb.id}`}
                   >
-                    <div className="grid min-h-[108px] gap-3 p-4 sm:grid-cols-[auto_minmax(0,1fr)] lg:grid-cols-[auto_minmax(0,1fr)_9rem_auto] lg:items-center">
+                    <div className="grid min-h-[84px] gap-x-4 gap-y-3 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center xl:grid-cols-[auto_minmax(0,1fr)_auto_auto]">
                       <button
                         onClick={() => toggleExpand(tb)}
-                        className="self-start pt-0.5 text-left lg:self-center"
+                        className="self-start pt-0.5 text-left sm:self-center"
                         data-testid={`textbook-toggle-${tb.id}`}
                         aria-label={`${expanded[tb.id] ? "Collapse" : "Expand"} ${tb.original_filename}`}
                       >
@@ -282,7 +282,7 @@ export default function Textbooks() {
                       </button>
                       <button
                         onClick={() => toggleExpand(tb)}
-                        className="min-w-0 self-start text-left lg:self-center"
+                        className="min-w-0 self-start text-left sm:self-center"
                         data-testid={`textbook-title-${tb.id}`}
                         title={`View topics for ${tb.original_filename}`}
                       >
@@ -293,13 +293,13 @@ export default function Textbooks() {
                           >
                             {tb.original_filename}
                           </div>
-                          <div className="mt-1 text-xs font-mono text-neutral-500">
+                          <div className="mt-0.5 text-xs font-mono text-neutral-500">
                             {tb.subject} · Class {tb.class_name}
                             {tb.is_shared && " · Shared library"}
                           </div>
                         </div>
                       </button>
-                      <div className="col-span-full flex min-w-0 flex-wrap items-center gap-1 sm:col-span-1 lg:w-36 lg:flex-col lg:items-start lg:justify-center">
+                      <div className="col-span-full flex min-w-0 flex-wrap items-center gap-1 sm:col-span-1 sm:justify-self-end sm:flex-col sm:items-end xl:col-span-1">
                         <span
                           className={`qp-badge whitespace-nowrap ${
                             tb.status === "topics_ready"
@@ -317,11 +317,11 @@ export default function Textbooks() {
                           </span>
                         )}
                       </div>
-                      <div className="col-span-full flex flex-wrap gap-2 sm:col-span-1 lg:col-span-1 lg:justify-self-end">
+                      <div className="col-span-full flex flex-wrap gap-2 sm:col-span-3 sm:justify-self-end xl:col-span-1 xl:flex-nowrap xl:items-center">
                         <button
                           onClick={() => extractTopics(tb.id)}
                           disabled={isTopicExtractionActive(tb) || tb.is_owned === false}
-                          className="qp-btn qp-btn-secondary min-w-40 flex-1 justify-center whitespace-nowrap text-xs sm:flex-none"
+                          className="qp-btn qp-btn-secondary min-w-36 flex-1 justify-center whitespace-nowrap text-xs sm:flex-none"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`extract-topics-${tb.id}`}
                         >
@@ -337,7 +337,7 @@ export default function Textbooks() {
                         <button
                           onClick={() => deleteTextbook(tb.id)}
                           disabled={tb.is_owned === false}
-                          className="qp-btn qp-btn-danger min-h-11 flex-1 justify-center whitespace-nowrap text-xs sm:flex-none"
+                          className="qp-btn qp-btn-danger min-h-10 flex-1 justify-center whitespace-nowrap text-xs sm:flex-none"
                           aria-label="Delete textbook"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`delete-textbook-${tb.id}`}

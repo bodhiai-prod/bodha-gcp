@@ -141,12 +141,12 @@ export default function Dashboard() {
 
         {/* Papers + textbooks */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
-          <div className="lg:col-span-2">
-            <div className="flex items-center justify-between mb-4">
+          <div className="lg:col-span-2 lg:-mt-2">
+            <div className="flex items-start justify-between mb-2.5">
               <div className="overline">// RECENT PAPERS</div>
               <Link
                 to="/papers"
-                className="qp-btn-ghost text-xs uppercase tracking-wider"
+                className="text-xs font-bold uppercase tracking-wider leading-none hover:text-[#002FA7]"
                 data-testid="link-view-all-papers"
               >
                 View all
@@ -169,28 +169,24 @@ export default function Dashboard() {
                     to={`/papers/${p.id}`}
                     key={p.id}
                     data-testid={`paper-row-${idx}`}
-                    className={`flex items-center justify-between p-4 hover:bg-neutral-50 ${
+                    className={`paper-list-row ${
                       idx !== papers.slice(0, 8).length - 1
                         ? "border-b border-neutral-200"
                         : ""
                     }`}
                   >
-                    <div className="flex items-center gap-4 min-w-0">
-                      <div className="w-10 h-10 border-2 border-black flex items-center justify-center shrink-0">
-                        <FileText size={18} weight="bold" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <div className="font-bold truncate">{p.title}</div>
-                          <PaperStatusBadge status={p.library_status} testid={`paper-status-${p.id}`} />
-                        </div>
-                        <div className="text-xs text-neutral-500 font-mono mt-0.5">
+                    <FileText size={18} weight="fill" className="paper-list-icon" aria-hidden="true" />
+                    <div className="paper-list-link">
+                      <div className="paper-list-title">{p.title}</div>
+                      <div className="paper-list-detail">
+                        <PaperStatusBadge status={p.library_status} testid={`paper-status-${p.id}`} />
+                        <span>
                           {p.subject} · Class {p.class_name} · {p.total_marks}{" "}
                           marks · {p.duration_minutes} min
-                        </div>
+                        </span>
                       </div>
                     </div>
-                    <ArrowRight size={18} weight="bold" className="shrink-0" />
+                    <ArrowRight size={28} weight="regular" className="paper-list-open" aria-hidden="true" />
                   </Link>
                 ))
               )}

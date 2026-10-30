@@ -32,7 +32,7 @@ export default function SectionBlueprintEditor({ blueprint, bookIds, details, al
   const [search, setSearch] = useState("");
   // The topic picker behaves as an accordion: keeping a single key prevents
   // several long subtopic lists from competing for space at once.
-  const [expandedUnit, setExpandedUnit] = useState(null);
+  const [expandedUnit, setExpandedUnit] = useState(() => new Set());
   useEffect(() => setActive(current => blueprint?.sections?.some(s => s.id === current) ? current : blueprint?.sections?.[0]?.id || ""), [blueprint]);
   useEffect(() => setActiveBook(current => bookIds.includes(current) ? current : bookIds[0] || ""), [bookIds]);
   useEffect(() => {
@@ -50,6 +50,24 @@ export default function SectionBlueprintEditor({ blueprint, bookIds, details, al
   const selectedDiagrams = countDiagramSelections(allocations);
   const diagramLimitReached = selectedDiagrams >= MAX_DIAGRAMS_PER_PAPER;
   const canAutoAssign = Boolean(blueprint) && catalogTopics(bookIds, details).length > 0;
+
+  const expandSelectedUnits = (rows) => {
+    const keys = rows.flatMap((row) => {
+      const catalog = details[row.textbook_id]?.topic_catalog || [];
+      const topic = catalog.find((item) => item.topic_id === row.topic_id);
+      const unit = topic?.parent_topic
+        ? catalog.find((item) => !item.parent_topic && item.name === topic.parent_topic)
+        : topic;
+      return unit ? [`${row.section_id}:${row.group_id}:${row.bucket_id}:${row.textbook_id}:${unit.topic_id}`] : [];
+    });
+    if (keys.length) setExpandedUnit((current) => new Set([...current, ...keys]));
+  };
+
+  const autoAssign = () => {
+    const next = generateBlueprintTopicAllocations(blueprint, bookIds, details);
+    onChange(next);
+    expandSelectedUnits(next);
+  };
 
   const topicRow = (topic, group, bucket, assigned, { parent, subtopics = [] } = {}) => {
     const inTarget = allocation => allocation.section_id === section.id && allocation.group_id === group.id && allocation.bucket_id === bucket.id;
@@ -88,7 +106,7 @@ export default function SectionBlueprintEditor({ blueprint, bookIds, details, al
   };
 
   return <section className="qp-card section-blueprint" data-testid="section-blueprint-editor">
-    <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold uppercase tracking-wide text-sm">Section-wise topic breakdown &amp; blueprint</h2>{blueprint && <button type="button" className="qp-btn qp-btn-secondary text-xs" disabled={!canAutoAssign} onClick={() => onChange(generateBlueprintTopicAllocations(blueprint, bookIds, details))} data-testid="blueprint-auto-assign">Auto assign</button>}</div>
+    <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold uppercase tracking-wide text-sm">Section-wise topic breakdown &amp; blueprint</h2>{blueprint && <button type="button" className="qp-btn qp-btn-secondary text-xs" disabled={!canAutoAssign} onClick={autoAssign} data-testid="blueprint-auto-assign">Auto assign</button>}</div>
     <p className="text-xs text-neutral-500 mt-2 mb-4">Choose topics once for each question type and mark range. The generator keeps the blueprint’s individual question numbering and format rules.</p>
     {blueprint && !canAutoAssign && bookIds.length > 0 && <p className="text-xs text-neutral-500 mb-3">Extract topics from a selected textbook before auto assigning.</p>}
     <p className={`diagram-selection-status ${diagramLimitReached ? "is-limit" : ""}`} role={diagramLimitReached ? "alert" : "status"}>
@@ -110,9 +128,10 @@ export default function SectionBlueprintEditor({ blueprint, bookIds, details, al
         {section.groups.flatMap(group => allocationBuckets(group).map(bucket => {
           const assigned = allocations.filter(allocation => allocation.section_id === section.id && allocation.group_id === group.id && allocation.bucket_id === bucket.id).reduce((total, allocation) => total + allocation.count, 0);
           const isComplete = assigned >= bucket.slots.length;
+          const bucketAllocations = allocations.filter(allocation => allocation.section_id === section.id && allocation.group_id === group.id && allocation.bucket_id === bucket.id);
           const heading = bucketHeading(group, bucket);
           const leadIn = bucket.slots[0]?.lead_in;
-          return <fieldset key={bucket.id} className={`section-topic-group ${isComplete ? "is-complete" : ""}`}><legend>{heading} · <span className="section-assignment-counter" aria-live="polite"><strong>{assigned}</strong><span>/{bucket.slots.length} assigned</span></span></legend>{leadIn && <p className="text-xs italic my-2">{leadIn}</p>}{isComplete && <p className="section-assignment-limit" role="status">Assignment target reached. Deselect a topic or reduce its question count to make another selection.</p>}<div className="chapter-selection-scroll blueprint-chapter-scroll" aria-label={`Chapters and subtopics for ${heading}`} data-testid={`blueprint-topic-scroll-${bucket.id}`}>{visibleUnits.map(unit => { const unitKey = `${section.id}:${group.id}:${bucket.id}:${activeBook}:${unit.topic_id}`; const expanded = Boolean(search) || expandedUnit === unitKey; return <div className="blueprint-unit" key={unit.topic_id}>{topicRow(unit, group, bucket, assigned, { subtopics: unit.subtopics })}{unit.subtopics.length > 0 && <><button type="button" className="blueprint-unit-toggle" aria-expanded={expanded} onClick={() => setExpandedUnit(current => current === unitKey ? null : unitKey)}><span>{expanded ? "Show less" : "Expand more"} · {unit.subtopics.length} subtopics</span><CaretDown size={16} className={expanded ? "rotate-180" : ""} /></button>{expanded && <div className="blueprint-subtopics">{unit.subtopics.map(topic => topicRow(topic, group, bucket, assigned, { parent: unit }))}</div>}</>}</div>; })}{!visibleUnits.length && <p className="text-sm p-3 text-neutral-500">No matching units or subtopics. Extract topics from the selected textbook above.</p>}</div></fieldset>;
+          return <fieldset key={bucket.id} className={`section-topic-group ${isComplete ? "is-complete" : ""}`}><legend>{heading} · <span className="section-assignment-counter" aria-live="polite"><strong>{assigned}</strong><span>/{bucket.slots.length} assigned</span></span></legend>{bucketAllocations.length > 0 && <p className="text-xs my-2" data-testid={`blueprint-selected-topics-${bucket.id}`}>Selected: {bucketAllocations.map(allocation => { const topic = details[allocation.textbook_id]?.topic_catalog?.find(item => item.topic_id === allocation.topic_id); return `${topic?.parent_topic ? `${topic.parent_topic} › ` : ""}${topic?.name || allocation.topic_id} (${allocation.count})`; }).join(", ")}</p>}{leadIn && <p className="text-xs italic my-2">{leadIn}</p>}{isComplete && <p className="section-assignment-limit" role="status">Assignment target reached. Deselect a topic or reduce its question count to make another selection.</p>}<div className="chapter-selection-scroll blueprint-chapter-scroll" aria-label={`Chapters and subtopics for ${heading}`} data-testid={`blueprint-topic-scroll-${bucket.id}`}>{visibleUnits.map(unit => { const unitKey = `${section.id}:${group.id}:${bucket.id}:${activeBook}:${unit.topic_id}`; const expanded = Boolean(search) || expandedUnit.has(unitKey); return <div className="blueprint-unit" key={unit.topic_id}>{topicRow(unit, group, bucket, assigned, { subtopics: unit.subtopics })}{unit.subtopics.length > 0 && <><button type="button" className="blueprint-unit-toggle" aria-expanded={expanded} onClick={() => setExpandedUnit(current => { const next = new Set(current); if (next.has(unitKey)) next.delete(unitKey); else next.add(unitKey); return next; })}><span>{expanded ? "Show less" : "Expand more"} · {unit.subtopics.length} subtopics</span><CaretDown size={16} className={expanded ? "rotate-180" : ""} /></button>{expanded && <div className="blueprint-subtopics">{unit.subtopics.map(topic => topicRow(topic, group, bucket, assigned, { parent: unit }))}</div>}</>}</div>; })}{!visibleUnits.length && <p className="text-sm p-3 text-neutral-500">No matching units or subtopics. Extract topics from the selected textbook above.</p>}</div></fieldset>;
         }))}
       </div>}
     </>}

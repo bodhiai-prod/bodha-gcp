@@ -19,6 +19,8 @@ export default function GeneratedPapers() {
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
   const [subjectFilter, setSubjectFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const papersPerPage = 15;
 
   const requestSequence = useRef(0);
   const loadPapers = () => {
@@ -55,8 +57,19 @@ export default function GeneratedPapers() {
         (p.title || "").toLowerCase().includes(needle) ||
         (p.subject || "").toLowerCase().includes(needle)
       );
+    }).sort((a, b) => {
+      const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return bCreated - aCreated;
     });
   }, [papers, q, subjectFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / papersPerPage));
+  const visiblePapers = filtered.slice((page - 1) * papersPerPage, page * papersPerPage);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
 
   const deletePaper = async (paper) => {
     if (!(await confirm({
@@ -113,7 +126,10 @@ export default function GeneratedPapers() {
             />
             <input
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setPage(1);
+              }}
               placeholder="Search by title or subject..."
               className="qp-input !pl-11"
               data-testid="generated-papers-search"
@@ -121,7 +137,10 @@ export default function GeneratedPapers() {
           </div>
           <select
             value={subjectFilter}
-            onChange={(e) => setSubjectFilter(e.target.value)}
+            onChange={(e) => {
+              setSubjectFilter(e.target.value);
+              setPage(1);
+            }}
             className="qp-input"
             data-testid="generated-papers-subject-filter"
           >
@@ -152,32 +171,30 @@ export default function GeneratedPapers() {
               No papers match your search.
             </div>
           ) : (
-            filtered.map((p, idx) => (
+            visiblePapers.map((p, idx) => (
               <div
                 key={p.id}
                 data-testid={`generated-paper-row-${idx}`}
-                className={`flex items-center justify-between gap-3 p-4 hover:bg-neutral-50 ${
-                  idx !== filtered.length - 1 ? "border-b border-neutral-200" : ""
+                className={`paper-list-row ${
+                  idx !== visiblePapers.length - 1 ? "border-b border-neutral-200" : ""
                 }`}
               >
-                <Link to={`/papers/${p.id}`} className="flex items-center gap-4 min-w-0 flex-1">
-                  <div className="w-10 h-10 border-2 border-black flex items-center justify-center shrink-0">
-                    <FileText size={18} weight="bold" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="font-bold truncate">{p.title}</div>
-                      <PaperStatusBadge status={p.library_status} testid={`generated-paper-status-${p.id}`} />
-                    </div>
-                    <div className="text-xs text-neutral-500 font-mono mt-0.5 break-words">
+                <FileText size={18} weight="fill" className="paper-list-icon" aria-hidden="true" />
+                <Link to={`/papers/${p.id}`} className="paper-list-link">
+                  <div className="paper-list-title">{p.title}</div>
+                  <div className="paper-list-detail">
+                    <PaperStatusBadge status={p.library_status} testid={`generated-paper-status-${p.id}`} />
+                    <span>
                       {p.subject} · Class {p.class_name} · {p.total_marks}{" "}
                       marks · {p.duration_minutes} min
                       {p.created_at
                         ? ` · ${new Date(p.created_at).toLocaleDateString()}`
                         : ""}
-                    </div>
+                    </span>
                   </div>
-                  <ArrowRight size={18} weight="bold" className="shrink-0" />
+                </Link>
+                <Link to={`/papers/${p.id}`} className="paper-list-open" aria-label={`Open ${p.title || "paper"}`}>
+                  <ArrowRight size={28} weight="regular" aria-hidden="true" />
                 </Link>
                 <button
                   type="button"
@@ -194,12 +211,33 @@ export default function GeneratedPapers() {
           )}
         </div>
 
-        {!loading && papers.length > 0 && (
-          <div
-            className="text-xs text-neutral-500 font-mono mt-3"
-            data-testid="generated-papers-count"
-          >
-            Showing {filtered.length} of {papers.length} papers
+        {!loading && papers.length > 0 && filtered.length > 0 && (
+          <div className="mt-4 flex flex-col gap-3 text-xs font-mono text-neutral-500 sm:flex-row sm:items-center sm:justify-between">
+            <div data-testid="generated-papers-count">
+              Showing {(page - 1) * papersPerPage + 1}–{Math.min(page * papersPerPage, filtered.length)} of {filtered.length} papers
+              {filtered.length !== papers.length ? ` (${papers.length} total)` : ""}
+            </div>
+            <div className="flex items-center gap-2" aria-label="Paper pagination">
+              <button
+                type="button"
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                disabled={page === 1}
+                className="qp-btn qp-btn-secondary !px-3 !py-1.5 text-xs"
+                data-testid="generated-papers-previous"
+              >
+                Previous
+              </button>
+              <span className="min-w-20 text-center">Page {page} of {totalPages}</span>
+              <button
+                type="button"
+                onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                disabled={page === totalPages}
+                className="qp-btn qp-btn-secondary !px-3 !py-1.5 text-xs"
+                data-testid="generated-papers-next"
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </main>
