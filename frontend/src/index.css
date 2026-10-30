@@ -222,7 +222,7 @@ body {
 .paper-list-detail > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .paper-list-detail .qp-badge { flex: none; padding: 3px 6px; border: 0; font-size: 10px; font-weight: 800; letter-spacing: 0.02em; }
 .paper-list-detail .qp-badge svg { display: none; }
-.paper-list-open { display: grid; place-items: center; width: 40px; height: 40px; color: #0a0a0a; }
+.paper-list-open { display: grid; place-items: center; width: 32px; height: 32px; color: #0a0a0a; }
 .paper-list-open:hover { color: var(--primary); }
 
 /* A book's identity gets the broad center column; processing state and actions

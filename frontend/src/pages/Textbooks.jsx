@@ -321,7 +321,7 @@ export default function Textbooks() {
                         <button
                           onClick={() => extractTopics(tb.id)}
                           disabled={isTopicExtractionActive(tb) || tb.is_owned === false}
-                          className="qp-btn qp-btn-secondary min-w-36 flex-1 justify-center whitespace-nowrap text-xs sm:flex-none"
+                          className="qp-btn qp-btn-secondary !px-3 !py-2 flex-1 justify-center whitespace-nowrap text-xs sm:flex-none"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`extract-topics-${tb.id}`}
                         >
@@ -337,13 +337,12 @@ export default function Textbooks() {
                         <button
                           onClick={() => deleteTextbook(tb.id)}
                           disabled={tb.is_owned === false}
-                          className="qp-btn qp-btn-danger min-h-10 flex-1 justify-center whitespace-nowrap text-xs sm:flex-none"
+                          className="qp-btn qp-btn-danger !min-h-0 h-10 w-10 !p-0 shrink-0"
                           aria-label="Delete textbook"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`delete-textbook-${tb.id}`}
                         >
                           <Trash size={16} weight="bold" />
-                          Delete
                         </button>
                       </div>
                     </div>

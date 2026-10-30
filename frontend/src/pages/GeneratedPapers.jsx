@@ -194,7 +194,7 @@ export default function GeneratedPapers() {
                   </div>
                 </Link>
                 <Link to={`/papers/${p.id}`} className="paper-list-open" aria-label={`Open ${p.title || "paper"}`}>
-                  <ArrowRight size={28} weight="regular" aria-hidden="true" />
+                  <ArrowRight size={20} weight="regular" aria-hidden="true" />
                 </Link>
                 <button
                   type="button"

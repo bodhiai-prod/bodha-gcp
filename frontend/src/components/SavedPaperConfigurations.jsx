@@ -73,14 +73,11 @@ export default function SavedPaperConfigurations({ currentConfiguration, onApply
   };
 
   return (
-    <section className="qp-card mb-6" data-testid="saved-paper-configurations">
+    <section className="qp-card mb-6 max-w-6xl" data-testid="saved-paper-configurations">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="overline text-neutral-500">// SAVED CONFIGURATIONS</div>
           <h2 className="font-bold uppercase tracking-wide text-sm mt-2">Reuse your setup</h2>
-          <p className="text-xs text-neutral-500 mt-2 max-w-2xl">
-            Save a reusable paper template, including its textbooks, topics, allocations, and generation settings. Paper title and branding remain specific to each paper.
-          </p>
         </div>
         <div className="flex w-full sm:w-auto gap-2">
           <input

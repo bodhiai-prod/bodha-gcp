@@ -4,8 +4,6 @@ import { api } from "@/lib/api";
 import Header from "@/components/Header";
 import PaperStatusBadge from "@/components/PaperStatusBadge";
 import { useAuth } from "@/context/AuthContext";
-import { toast } from "sonner";
-import { useConfirmation } from "@/context/ConfirmationContext";
 import {
   Plus,
   FileText,
@@ -13,7 +11,6 @@ import {
   Bookmark,
   Clock,
   ArrowRight,
-  CheckCircle,
 } from "@phosphor-icons/react";
 
 const StatCard = ({ label, value, testid }) => (
@@ -27,14 +24,12 @@ const StatCard = ({ label, value, testid }) => (
 );
 
 export default function Dashboard() {
-  const confirm = useConfirmation();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [papers, setPapers] = useState([]);
   const [textbooks, setTextbooks] = useState([]);
   const [qbankCount, setQbankCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [bulkBusy, setBulkBusy] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -53,25 +48,6 @@ export default function Dashboard() {
     }, 3000);
     return () => window.clearInterval(interval);
   }, [papers]);
-
-  const bulkGenerateSolutions = async () => {
-    if (!(await confirm({
-      title: "Generate missing solutions?",
-      description: "Generate solutions for all papers without one? This may take a while.",
-      confirmLabel: "Generate solutions",
-    }))) {
-      return;
-    }
-    setBulkBusy(true);
-    try {
-      const { data } = await api.post("/papers/solutions/bulk-generate");
-      toast.success(`Generated ${data.succeeded} solutions (${data.failed} failed)`);
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || "Bulk generation failed");
-    } finally {
-      setBulkBusy(false);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-[#FAFAFA]">
@@ -102,22 +78,6 @@ export default function Dashboard() {
               Generate New Paper
             </Link>
           </div>
-          {papers.some((p) => !p.has_solution) && false /* placeholder */}
-          {papers.length > 0 && (
-            <div className="mt-6">
-              <button
-                onClick={bulkGenerateSolutions}
-                disabled={bulkBusy}
-                className="qp-btn qp-btn-secondary text-xs"
-                data-testid="bulk-generate-solutions-button"
-              >
-                <CheckCircle size={14} weight="bold" />
-                {bulkBusy
-                  ? "Generating solutions..."
-                  : "Generate solutions for all papers without one"}
-              </button>
-            </div>
-          )}
         </section>
 
         {/* Stats */}
@@ -186,7 +146,7 @@ export default function Dashboard() {
                         </span>
                       </div>
                     </div>
-                    <ArrowRight size={28} weight="regular" className="paper-list-open" aria-hidden="true" />
+                    <ArrowRight size={20} weight="regular" className="paper-list-open" aria-hidden="true" />
                   </Link>
                 ))
               )}

@@ -587,6 +587,25 @@ export default function NewPaper() {
                 </div>
               </div>
 
+              <div className="mt-4 border-t border-neutral-200 pt-4">
+                <label className="qp-label">Difficulty</label>
+                <div className="grid grid-cols-3 border-2 border-black">
+                  {DIFFICULTIES.map((d, i) => (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setDifficulty(d)}
+                      data-testid={`difficulty-${d}-button`}
+                      className={`py-3 font-bold uppercase tracking-wider text-sm transition-colors ${
+                        difficulty === d ? "bg-black text-white" : "bg-white hover:bg-neutral-100"
+                      } ${i !== 2 ? "border-r-2 border-black" : ""}`}
+                    >
+                      {DIFFICULTY_LABELS[d]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
                 <div>
                   <label className="qp-label" htmlFor="question-count">Questions</label>
@@ -895,12 +914,6 @@ Make Q23 as hard as possible`}
 
           {/* Right: Topics + submit */}
           <div className="lg:col-span-2 space-y-6">
-            {step !== 2 && <section className="qp-card" data-testid="persistent-difficulty-card">
-              <h2 className="font-bold uppercase text-sm tracking-wide mb-4">Difficulty</h2>
-              <div className="grid grid-cols-3 border-2 border-black">
-                {DIFFICULTIES.map((d, i) => <button key={d} type="button" onClick={() => setDifficulty(d)} data-testid={`difficulty-${d}-button`} className={`py-3 font-bold uppercase tracking-wider text-sm transition-colors ${difficulty === d ? "bg-black text-white" : "bg-white hover:bg-neutral-100"} ${i !== 2 ? "border-r-2 border-black" : ""}`}>{DIFFICULTY_LABELS[d]}</button>)}
-              </div>
-            </section>}
             <ConfigurationSummary preview={preview?.requestKey === requestKey ? preview : null} loading={previewLoading} error={previewError} />
             {false && !blueprint && <ExpandableCard id="topics" title="Topic selection (no blueprint)" summary={`${selectedTopics.length} selected · Default: ${DIFFICULTY_LABELS[difficulty]}`} defaultOpen>
 

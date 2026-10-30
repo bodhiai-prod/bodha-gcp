@@ -3,7 +3,7 @@ import React from "react";
 export default function ConfigurationSummary({ preview, loading, error }) {
   const summary = preview?.summary;
   return <section className="qp-card" data-testid="configuration-summary" aria-live="polite" aria-busy={loading}>
-    <h2 className="font-bold uppercase text-sm tracking-wide mb-4">Topics &amp; difficulty</h2>
+    <h2 className="font-bold uppercase text-sm tracking-wide mb-4">Paper overview</h2>
     {loading && <p className="text-xs text-neutral-500">Updating backend summary…</p>}
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
     {summary && <dl className="blueprint-summary-facts">
