@@ -57,3 +57,53 @@ test("shows the five-diagram warning and blocks another diagram selection", asyn
   act(() => root.unmount());
   container.remove();
 });
+
+test("auto assign replaces manual rows with a complete allocation", async () => {
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const onChange = jest.fn();
+  await act(async () => root.render(<FormatTopicAllocator
+    formats={[{ key: "mcq", label: "MCQ", count: 2 }]}
+    allocations={[{ format: "mcq", textbook_id: "book", topic_id: "old", name: "Old", count: 2 }]}
+    onChange={onChange}
+    bookIds={["book"]}
+    details={{ book: { topic_catalog: [
+      { textbook_id: "book", topic_id: "one", name: "One", parent_topic: "" },
+      { textbook_id: "book", topic_id: "two", name: "Two", parent_topic: "" },
+    ] } }}
+    difficulty="medium"
+    onExtract={jest.fn()}
+    onBack={jest.fn()}
+    onConfirm={jest.fn()}
+  />));
+  await act(async () => container.querySelector('[data-testid="format-auto-assign"]').click());
+  const rows = onChange.mock.calls.at(-1)[0];
+  expect(rows.reduce((total, row) => total + row.count, 0)).toBe(2);
+  expect(rows.some((row) => row.topic_id === "old")).toBe(false);
+  act(() => root.unmount());
+  container.remove();
+});
+
+test("auto assign remains unavailable until topics are extracted", async () => {
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<FormatTopicAllocator
+    formats={[{ key: "mcq", label: "MCQ", count: 1 }]}
+    allocations={[]}
+    onChange={jest.fn()}
+    bookIds={["book"]}
+    details={{ book: { topic_catalog: [] } }}
+    difficulty="medium"
+    onExtract={jest.fn()}
+    onBack={jest.fn()}
+    onConfirm={jest.fn()}
+  />));
+  expect(container.querySelector('[data-testid="format-auto-assign"]').disabled).toBe(true);
+  expect(container.textContent).toContain("Extract topics from a selected textbook before auto assigning.");
+  act(() => root.unmount());
+  container.remove();
+});

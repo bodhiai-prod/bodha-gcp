@@ -3,6 +3,7 @@ import { CaretDown } from "@phosphor-icons/react";
 import { allocationBuckets, groupSlots, normalizeBucketAllocations, updateAllocation } from "@/lib/sectionBlueprint";
 import QuestionCountStepper from "@/components/QuestionCountStepper";
 import { countDiagramSelections, MAX_DIAGRAMS_PER_PAPER } from "@/lib/diagramSelection";
+import { catalogTopics, generateBlueprintTopicAllocations } from "@/lib/autoTopicAllocation";
 
 const labels = { easy: "Simple", medium: "Moderate", hard: "Challenging" };
 const formatLabels = { mcq: "Multiple choice", short_answer: "Short answer", long_answer: "Long answer", fill_blank: "Fill in the blank", true_false: "True / false" };
@@ -48,6 +49,7 @@ export default function SectionBlueprintEditor({ blueprint, bookIds, details, al
     .filter(unit => matchesSearch(unit) || unit.subtopics.length);
   const selectedDiagrams = countDiagramSelections(allocations);
   const diagramLimitReached = selectedDiagrams >= MAX_DIAGRAMS_PER_PAPER;
+  const canAutoAssign = Boolean(blueprint) && catalogTopics(bookIds, details).length > 0;
 
   const topicRow = (topic, group, bucket, assigned, { parent, subtopics = [] } = {}) => {
     const inTarget = allocation => allocation.section_id === section.id && allocation.group_id === group.id && allocation.bucket_id === bucket.id;
@@ -86,8 +88,9 @@ export default function SectionBlueprintEditor({ blueprint, bookIds, details, al
   };
 
   return <section className="qp-card section-blueprint" data-testid="section-blueprint-editor">
-    <h2 className="font-bold uppercase tracking-wide text-sm">Section-wise topic breakdown &amp; blueprint</h2>
+    <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold uppercase tracking-wide text-sm">Section-wise topic breakdown &amp; blueprint</h2>{blueprint && <button type="button" className="qp-btn qp-btn-secondary text-xs" disabled={!canAutoAssign} onClick={() => onChange(generateBlueprintTopicAllocations(blueprint, bookIds, details))} data-testid="blueprint-auto-assign">Auto assign</button>}</div>
     <p className="text-xs text-neutral-500 mt-2 mb-4">Choose topics once for each question type and mark range. The generator keeps the blueprint’s individual question numbering and format rules.</p>
+    {blueprint && !canAutoAssign && bookIds.length > 0 && <p className="text-xs text-neutral-500 mb-3">Extract topics from a selected textbook before auto assigning.</p>}
     <p className={`diagram-selection-status ${diagramLimitReached ? "is-limit" : ""}`} role={diagramLimitReached ? "alert" : "status"}>
       {selectedDiagrams} diagram{selectedDiagrams === 1 ? "" : "s"} selected{diagramLimitReached ? " — maximum reached" : ""}
     </p>

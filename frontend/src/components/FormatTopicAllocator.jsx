@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { CaretDown } from "@phosphor-icons/react";
 import QuestionCountStepper from "@/components/QuestionCountStepper";
 import { countDiagramSelections, MAX_DIAGRAMS_PER_PAPER } from "@/lib/diagramSelection";
+import { catalogTopics, generateFormatTopicAllocations } from "@/lib/autoTopicAllocation";
 
 const DIFFICULTY_LABELS = { easy: "Simple", medium: "Moderate", hard: "Challenging" };
 
@@ -37,6 +38,7 @@ export default function FormatTopicAllocator({ formats, allocations, onChange, b
   const assigned = status.actual[format?.key] || 0;
   const remaining = Math.max(0, (format?.count || 0) - assigned);
   const units = useMemo(() => unitsFor(details[activeBook]), [activeBook, details]);
+  const canAutoAssign = catalogTopics(bookIds, details).length > 0;
   const matches = (row) => `${row.name} ${row.parent_topic || ""}`.toLowerCase().includes(search.toLowerCase());
   const visible = units.map((unit) => ({ ...unit, subtopics: unit.subtopics.filter(matches) }))
     .filter((unit) => matches(unit) || unit.subtopics.length);
@@ -81,8 +83,9 @@ export default function FormatTopicAllocator({ formats, allocations, onChange, b
   return <div data-testid="format-topic-allocator">
     <div className="flex items-start justify-between gap-3 mb-3">
       <div><div className="overline">// ASSIGN TOPICS BY FORMAT</div><strong className="block mt-1">{format.label}</strong></div>
-      <span className={`qp-badge ${assigned === format.count ? "qp-badge-success" : "qp-badge-red"}`}>{format.label}: {assigned}/{format.count} filled</span>
+      <div className="flex items-center gap-2"><button type="button" className="qp-btn qp-btn-secondary text-xs" disabled={!canAutoAssign} onClick={() => onChange(generateFormatTopicAllocations(formats, bookIds, details))} data-testid="format-auto-assign">Auto assign</button><span className={`qp-badge ${assigned === format.count ? "qp-badge-success" : "qp-badge-red"}`}>{format.label}: {assigned}/{format.count} filled</span></div>
     </div>
+    {!canAutoAssign && bookIds.length > 0 && <p className="text-xs text-neutral-500 mb-3">Extract topics from a selected textbook before auto assigning.</p>}
     <p className={`diagram-selection-status ${diagramLimitReached ? "is-limit" : ""}`} role={diagramLimitReached ? "alert" : "status"}>
       {selectedDiagrams} diagram{selectedDiagrams === 1 ? "" : "s"} selected{diagramLimitReached ? " — maximum reached" : ""}
     </p>
