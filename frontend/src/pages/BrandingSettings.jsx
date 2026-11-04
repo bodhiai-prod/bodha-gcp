@@ -141,7 +141,7 @@ export default function BrandingSettings() {
                 <button key={preset.id} type="button" onClick={() => setDraft({ ...emptyPreset, ...preset })}
                   className={`w-full border-2 p-3 text-left ${draft.id === preset.id ? "border-black bg-neutral-100" : "border-neutral-200 bg-white"}`}
                   data-testid={`branding-preset-${preset.id}`}>
-                  <strong className="block">{preset.name}</strong>
+                  <span className="block font-normal">{preset.name}</span>
                   <span className="text-xs text-neutral-500">{preset.school_name || "No school name"}</span>
                 </button>
               ))}

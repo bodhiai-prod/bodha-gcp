@@ -8,7 +8,7 @@ export default function PaperSummary({ paper, editing }) {
     <details open className="qp-card">
       <summary className="font-medium text-sm">Paper summary</summary>
       {!s ? <p className="text-sm mt-4">Summary unavailable. Reload the paper to retry.</p> : <>
-        <p className="text-xs text-neutral-500 mt-3">{s.blueprint ? `${s.blueprint.label} · v${s.blueprint.version}` : "No structured blueprint"}</p>
+        <p className="text-xs text-neutral-500 mt-3">{s.blueprint ? `${s.blueprint.label} · v${s.blueprint.version}` : "Custom paper"}</p>
         {editing && <p className="text-xs text-amber-700 mt-2">Values describe the saved paper. Save edits to refresh.</p>}
         <div className="paper-summary-totals"><div><small>Attemptable marks</small><strong>{s.offered_marks}</strong><small>Target: {s.target_marks}</small></div><div><small>Questions</small><strong>{s.question_count}</strong><small>Target: {s.target_question_count || "Unknown"}</small></div><div><small>Minutes</small><strong>{s.duration_minutes}</strong></div></div>
         {s.printed_marks !== s.offered_marks && <p className="text-xs mb-4">Printed marks: {s.printed_marks} (includes alternative sections)</p>}

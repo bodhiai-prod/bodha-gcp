@@ -6,7 +6,6 @@ import PaperSummary from "@/components/PaperSummary";
 import { toast } from "sonner";
 import { useConfirmation } from "@/context/ConfirmationContext";
 import {
-  Star,
   ArrowLeft,
   Download,
   CaretDown,
@@ -105,7 +104,6 @@ export default function PaperView() {
   const [ignoringExportWarning, setIgnoringExportWarning] = useState(false);
   const [brandingApplying, setBrandingApplying] = useState(false);
   const [brandingPresets, setBrandingPresets] = useState([]);
-  const [selectedBrandingId, setSelectedBrandingId] = useState("");
 
   const loadSequence = useRef(0);
   const load = async () => {
@@ -352,18 +350,6 @@ export default function PaperView() {
     setDraft(next);
   };
 
-  const toggleImportant = async (qid) => {
-    try {
-      const { data } = await api.patch(
-        `/papers/${id}/question/${qid}/toggle-important`
-      );
-      ++loadSequence.current;
-      setPaper({ ...paper, sections: data.sections });
-    } catch {
-      toast.error("Failed");
-    }
-  };
-
   const saveToBank = async (qid) => {
     try {
       await api.post(`/qbank/save-from-paper/${id}/${qid}`);
@@ -423,36 +409,17 @@ export default function PaperView() {
     }
   };
 
-  const applyBranding = async () => {
-    if (!selectedBrandingId) {
-      toast.error("Choose a branding preset first");
-      return;
-    }
+  const changeBranding = async (brandingId) => {
     setBrandingApplying(true);
     try {
-      const { data } = await api.post(`/papers/${id}/branding/apply`, {
-        branding_id: selectedBrandingId,
-      });
+      const { data } = brandingId
+        ? await api.post(`/papers/${id}/branding/apply`, { branding_id: brandingId })
+        : await api.delete(`/papers/${id}/branding`);
       ++loadSequence.current;
       setPaper(data);
-      setSelectedBrandingId("");
-      toast.success("Current branding applied to this paper");
+      toast.success(brandingId ? "Branding applied to this paper" : "Branding removed from this paper");
     } catch (err) {
-      toast.error(err?.response?.data?.detail || "Could not apply branding");
-    } finally {
-      setBrandingApplying(false);
-    }
-  };
-
-  const removeBranding = async () => {
-    setBrandingApplying(true);
-    try {
-      const { data } = await api.delete(`/papers/${id}/branding`);
-      ++loadSequence.current;
-      setPaper(data);
-      toast.success("Branding removed from this paper");
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || "Could not remove branding");
+      toast.error(err?.response?.data?.detail || (brandingId ? "Could not apply branding" : "Could not remove branding"));
     } finally {
       setBrandingApplying(false);
     }
@@ -630,6 +597,8 @@ export default function PaperView() {
     paper.branding_id || paper.school_name || paper.header_image_path
     || paper.branding_tagline || paper.branding_footer || paper.branding_watermark
   );
+  const brandingSelection = hasAppliedBranding ? (paper.branding_id || "__saved_branding__") : "";
+  const selectedPresetMissing = hasAppliedBranding && !brandingPresets.some(preset => preset.id === paper.branding_id);
   let counter = 1;
 
   return (
@@ -877,17 +846,21 @@ export default function PaperView() {
                 >
                   <CheckCircle size={16} weight="bold" /> Solution
                 </Link>
-                <div className="flex items-center gap-1 border-2 border-black px-2" data-testid="paper-branding-status">
-                  <span className="text-xs font-medium whitespace-nowrap">{hasAppliedBranding ? `Applied: ${paper.branding_name || "Legacy branding"}` : "No branding applied"}</span>
-                  <select value={selectedBrandingId} onChange={(event) => setSelectedBrandingId(event.target.value)} className="text-xs bg-white py-1 max-w-36" aria-label="Branding preset">
-                    <option value="">Choose preset</option>
+                <div className="flex items-center gap-2 border-2 border-black px-3" data-testid="paper-branding-status">
+                  <label htmlFor="paper-branding-select" className="text-sm font-medium whitespace-nowrap">Branding</label>
+                  <select
+                    id="paper-branding-select"
+                    value={brandingSelection}
+                    onChange={(event) => changeBranding(event.target.value)}
+                    disabled={brandingApplying}
+                    className="min-h-9 max-w-40 bg-white text-sm"
+                    data-testid="paper-branding-select"
+                  >
+                    <option value="">None</option>
                     {brandingPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                    {selectedPresetMissing && <option value={brandingSelection}>{paper.branding_name || "Saved branding"}</option>}
                   </select>
                 </div>
-                <button onClick={applyBranding} disabled={brandingApplying || !selectedBrandingId} className="qp-btn qp-btn-secondary" data-testid="apply-paper-branding">
-                  {brandingApplying ? "Applying..." : hasAppliedBranding ? "Replace branding" : "Apply branding"}
-                </button>
-                {hasAppliedBranding && <button onClick={removeBranding} disabled={brandingApplying} className="qp-btn qp-btn-secondary" data-testid="remove-paper-branding">Remove</button>}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button className="qp-btn qp-btn-primary" disabled={qualityReviewBlocked} title={qualityReviewBlocked ? "Downloads unlock after final checks pass" : undefined} data-testid="download-menu-button">
@@ -1170,14 +1143,6 @@ export default function PaperView() {
                         {firstPart && q.parent_lead_in && <p className="text-sm italic mb-2"><MathText text={q.parent_lead_in} /></p>}
                         <div className="flex items-start gap-2">
                           <span className="font-bold">{questionDisplayLabel(qNum, q.part_label)}</span>
-                          {q.important && (
-                            <Star
-                              size={16}
-                              weight="fill"
-                              color="#FFC300"
-                              className="mt-1"
-                            />
-                          )}
                           <div className="flex-1 min-w-0">
                             <MatchTheFollowing text={q.question} />
                           </div>
@@ -1241,19 +1206,6 @@ export default function PaperView() {
                         <QuestionDiagram paperId={id} question={q} />
                       </div>
                       <div className="no-print flex gap-1 pl-6 md:pl-0">
-                        <button
-                          onClick={() => toggleImportant(q.id)}
-                          className={`qp-btn ${
-                            q.important ? "qp-btn-primary" : "qp-btn-secondary"
-                          } text-xs`}
-                          data-testid={`toggle-important-${q.id}`}
-                          title="Mark important"
-                        >
-                          <Star
-                            size={14}
-                            weight={q.important ? "fill" : "bold"}
-                          />
-                        </button>
                         <button
                           onClick={() => saveToBank(q.id)}
                           className="qp-btn qp-btn-secondary text-xs"

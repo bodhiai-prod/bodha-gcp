@@ -6,7 +6,6 @@ import { useConfirmation } from "@/context/ConfirmationContext";
 import {
   UploadSimple,
   FolderOpen,
-  Sparkle,
   Trash,
   CheckCircle,
   CaretRight,
@@ -323,7 +322,6 @@ export default function Textbooks() {
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`extract-topics-${tb.id}`}
                         >
-                          <Sparkle size={14} weight="bold" />
                           {tb.topic_extraction?.status === "queued"
                             ? "Queued"
                             : tb.topic_extraction?.status === "running"
@@ -335,7 +333,7 @@ export default function Textbooks() {
                         <button
                           onClick={() => deleteTextbook(tb.id)}
                           disabled={tb.is_owned === false}
-                          className="qp-btn qp-btn-danger !min-h-0 h-10 w-10 !p-0 shrink-0"
+                          className="qp-btn qp-btn-secondary h-9 w-9 !p-0 shrink-0"
                           aria-label="Delete textbook"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`delete-textbook-${tb.id}`}

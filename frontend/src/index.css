@@ -201,7 +201,7 @@ body { font-weight: 400; }
 }
 .textbook-topic-badges { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:7px; }
 .textbook-topic-badges .qp-badge { padding:2px 6px; font-size:10px; }
-.textbook-row-extract { min-height:32px; height:32px; padding:0 10px; gap:5px; font-size:10px; }
+.textbook-row-extract { min-height:36px; height:36px; padding:0 12px; font-size:14px; }
 
 /* Dense library rows keep the title, state, and supporting metadata together.
    The same pattern is used for dashboard and full paper-library listings. */
@@ -286,7 +286,7 @@ body { font-weight: 400; }
 .textbook-picker-row[data-selected="true"] { background:#eef2ff; }
 .textbook-picker-row .peer { pointer-events:none; border-color:#0a0a0a; border-radius:0; }
 .textbook-picker-copy { min-width:0; flex:1; display:flex; flex-direction:column; gap:3px; }
-.textbook-picker-copy strong,.selected-textbook-card strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.textbook-filename { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:400; }
 .textbook-picker-copy span,.selected-textbook-card span { color:#525252; font-size:11px; }
 .textbook-status { display:flex; flex:0 0 auto; align-items:center; gap:4px; color:#525252; font-size:11px; white-space:nowrap; }
 .textbook-status svg { width:15px; height:15px; }
@@ -567,7 +567,7 @@ pre.math-fallback {
 @media (max-width:800px) {
   .saved-config-row { grid-template-columns:1fr; }
 }
-.new-paper-steps button { border:1px solid #a3a3a3; padding:9px 14px; background:#fff; font-size:12px; font-weight:500; }
+.new-paper-steps button { border:1px solid #a3a3a3; padding:10px 14px; background:#fff; font-size:14px; font-weight:500; }
 .new-paper-steps button.is-active { border-color:#002fa7; background:#002fa7; color:#fff; }
 .section-tabs button { flex:1 1 110px; text-align:left; padding:10px; border:1px solid #d4d4d4; font-size:11px; }
 .section-tabs button small { display:block; margin-top:4px; }

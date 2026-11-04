@@ -4,7 +4,7 @@ import PaperView, { questionDisplayLabel } from "./PaperView";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 
-jest.mock("@/lib/api", () => ({ api: { get: jest.fn(), post: jest.fn() } }));
+jest.mock("@/lib/api", () => ({ api: { get: jest.fn(), post: jest.fn(), delete: jest.fn() } }));
 jest.mock("react-router-dom", () => ({ useParams: () => ({ id: "paper" }), Link: ({ children }) => <a>{children}</a> }));
 jest.mock("@/components/Header", () => () => null);
 jest.mock("@/components/PaperSummary", () => () => null);
@@ -42,6 +42,36 @@ test("question labels retain the first compound part without changing ordinary n
   expect(questionDisplayLabel(null, "(2)")).toBe("(2)");
   expect(questionDisplayLabel(4, "")).toBe("Q4.");
   expect(questionDisplayLabel(5, undefined)).toBe("Q5.");
+});
+
+test("branding dropdown applies a preset and None removes it", async () => {
+  const unbranded = paper();
+  const branded = paper({ branding_id: "preset-1", branding_name: "School preset", school_name: "School" });
+  api.get.mockImplementation(url => Promise.resolve({ data: url === "/branding-presets"
+    ? [{ id: "preset-1", name: "School preset" }]
+    : unbranded }));
+  await act(async () => root.render(<PaperView />));
+
+  const select = container.querySelector('[data-testid="paper-branding-select"]');
+  expect(select.value).toBe("");
+  expect(select.options[0].textContent).toBe("None");
+  expect(container.querySelector('label[for="paper-branding-select"]').textContent).toBe("Branding");
+  expect(container.querySelector('[data-testid="apply-paper-branding"]')).toBeNull();
+  api.post.mockResolvedValue({ data: branded });
+  await act(async () => {
+    select.value = "preset-1";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(api.post).toHaveBeenCalledWith("/papers/paper/branding/apply", { branding_id: "preset-1" });
+  expect(select.value).toBe("preset-1");
+
+  api.delete.mockResolvedValue({ data: unbranded });
+  await act(async () => {
+    select.value = "";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(api.delete).toHaveBeenCalledWith("/papers/paper/branding");
+  expect(select.value).toBe("");
 });
 
 test("compound labels render consistently in paper and edit views", async () => {

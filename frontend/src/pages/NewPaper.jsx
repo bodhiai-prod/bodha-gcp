@@ -537,7 +537,7 @@ export default function NewPaper() {
           {/* Left: Metadata + distribution */}
           <div className="lg:col-span-3 space-y-6">
             {step === 0 && <>
-            <ExpandableCard id="metadata" title="Paper details" summary={`${selectedTbIds.length} textbooks · ${totalMarks} marks · ${duration} minutes`} defaultOpen>
+            <ExpandableCard id="metadata" title="Paper details" titleClassName="text-base" summary={`${selectedTbIds.length} textbooks · ${totalMarks} marks · ${duration} minutes`} defaultOpen>
               <div className="mb-4">
                 <label className="qp-label">Paper title</label>
                 <input
@@ -646,27 +646,11 @@ export default function NewPaper() {
             </ExpandableCard>
 
             <ExpandableCard id="distribution" title="Question distribution" summary={promptOverride ? "Controlled by paper blueprint" : `${info}% direct · ${concept}% concept · ${application}% application`} disabled={promptOverride}>
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                {promptOverride ? (
-                  <span
-                    className="qp-badge qp-badge-yellow"
-                    data-testid="distribution-overridden"
-                  >
-                    OVERRIDDEN BY PROMPT
-                  </span>
-                ) : (
-                  <span
-                    className={`qp-badge ${
-                      info + concept + application === 100
-                        ? "qp-badge-success"
-                        : "qp-badge-red"
-                    }`}
-                    data-testid="distribution-total"
-                  >
-                    {info + concept + application}%
-                  </span>
-                )}
-              </div>
+              {promptOverride && (
+                <span className="qp-badge qp-badge-yellow mb-4" data-testid="distribution-overridden">
+                  OVERRIDDEN BY PROMPT
+                </span>
+              )}
 
               <SliderRow
                 label="Information / direct"
@@ -686,12 +670,11 @@ export default function NewPaper() {
                 label="Application"
                 value={application}
                 readOnly
-                color="#E63946"
                 testid="dist-app"
                 count={typeQuestionCounts.application || 0}
               />
               <p className="text-xs text-neutral-500 font-mono mt-3">
-                Application is auto-adjusted so total stays at 100%.
+                Application uses the remaining share automatically.
               </p>
             </ExpandableCard>
             </>}
@@ -858,7 +841,7 @@ Make Q23 as hard as possible`}
             </>}
 
             {step === 2 && <section className="qp-card" data-testid="paper-review">
-              <h2 className="font-medium text-sm">Paper overview</h2>
+              <h2 className="font-medium text-base">Paper overview</h2>
               <p className="text-xs text-neutral-500 mt-2 mb-4">Review the overall composition before generating the paper.</p>
               <dl className="blueprint-summary-facts">
                 <div><dt>Title</dt><dd>{title || "Untitled paper"}</dd></div>
@@ -1113,7 +1096,7 @@ Make Q23 as hard as possible`}
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v)));
 
-function ExpandableCard({ id, title, summary, defaultOpen = false, disabled = false, children }) {
+function ExpandableCard({ id, title, titleClassName = "text-sm", summary, defaultOpen = false, disabled = false, children }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="qp-card" data-testid={`${id}-card`}>
@@ -1126,7 +1109,7 @@ function ExpandableCard({ id, title, summary, defaultOpen = false, disabled = fa
         data-testid={`${id}-expand`}
       >
         <span className="min-w-0">
-          <span className="block font-medium text-sm ">{title}</span>
+          <span className={`block font-medium ${titleClassName}`}>{title}</span>
           <span className="mt-2 block text-xs text-neutral-500 break-words line-clamp-2">{summary}</span>
         </span>
         <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-[#002FA7]">
@@ -1174,7 +1157,7 @@ const distributeFormatValues = (formats, targetTotal) => {
   return formats.map((format, index) => ({ ...format, value: values[index] }));
 };
 
-const SliderRow = ({ label, value, count, onChange, readOnly, color, testid }) => (
+const SliderRow = ({ label, value, count, onChange, readOnly, testid }) => (
   <div className="mb-4 last:mb-0" data-testid={testid}>
     <div className="flex items-center justify-between mb-2">
       <div className="font-medium text-sm ">{label}</div>
@@ -1182,10 +1165,7 @@ const SliderRow = ({ label, value, count, onChange, readOnly, color, testid }) =
     </div>
     {readOnly ? (
       <div className="relative h-2 bg-neutral-200" aria-label={`${label} progress`}>
-        <div
-          className="absolute top-0 left-0 h-full"
-          style={{ width: `${value}%`, background: color }}
-        />
+        <div className="absolute top-0 left-0 h-full bg-[#3b82f6]" style={{ width: `${value}%` }} />
       </div>
     ) : (
       <input
@@ -1194,7 +1174,7 @@ const SliderRow = ({ label, value, count, onChange, readOnly, color, testid }) =
         max={100}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full mt-1"
+        className="w-full mt-1 accent-[#3b82f6]"
         data-testid={`${testid}-slider`}
       />
     )}

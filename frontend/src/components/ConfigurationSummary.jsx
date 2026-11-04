@@ -4,7 +4,7 @@ export default function ConfigurationSummary({ preview, loading, error, current 
   const summary = preview?.summary;
   return <section className="qp-card" data-testid="configuration-summary" aria-live="polite" aria-busy={loading}>
     <div className="flex items-center justify-between gap-3 mb-4">
-      <h2 className="font-medium text-sm">Paper overview</h2>
+      <h2 className="font-medium text-base">Paper overview</h2>
       <span className="text-xs text-neutral-500" role="status">{loading ? "Updating…" : summary && !current ? "Last valid overview" : ""}</span>
     </div>
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}

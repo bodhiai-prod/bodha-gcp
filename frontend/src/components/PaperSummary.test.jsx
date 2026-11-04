@@ -40,6 +40,7 @@ test("marks long textbook filenames as wrap-safe", async () => {
 
   await act(async () => root.render(<PaperSummary paper={paper} editing={false} />));
 
+  expect(container.textContent).toContain("Custom paper");
   const book = container.querySelector(".paper-summary-book");
   expect(book).not.toBeNull();
   expect(book.textContent).toBe(filename);

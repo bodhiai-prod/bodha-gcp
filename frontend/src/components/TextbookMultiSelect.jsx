@@ -90,7 +90,7 @@ export default function TextbookMultiSelect({ textbooks, selectedIds, onChange }
                   >
                     <Checkbox checked={checked} tabIndex={-1} aria-hidden="true" />
                     <div className="textbook-picker-copy">
-                      <strong title={book.original_filename}>{book.original_filename}</strong>
+                      <div className="textbook-filename" title={book.original_filename}>{book.original_filename}</div>
                       <span>{book.subject || "Uncategorised"} · Class {book.class_name || "—"}</span>
                     </div>
                     <span className={`textbook-status textbook-status-${book.status || "unknown"}`} title={statusLabel(book)}>
@@ -111,7 +111,7 @@ export default function TextbookMultiSelect({ textbooks, selectedIds, onChange }
             <li key={book.id} className="selected-textbook-card" data-testid={`textbook-chip-${book.id}`}>
               <Books size={18} weight="duotone" aria-hidden="true" />
               <div>
-                <strong title={book.original_filename}>{book.original_filename}</strong>
+                <div className="textbook-filename" title={book.original_filename}>{book.original_filename}</div>
                 <span>{book.subject || "Uncategorised"} · Class {book.class_name || "—"}</span>
               </div>
               <button
