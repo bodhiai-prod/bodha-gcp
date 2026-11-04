@@ -39,4 +39,9 @@ test("recent papers view-all link opens the generated papers route", async () =>
   const link = container.querySelector('[data-testid="link-view-all-papers"]');
   expect(link.textContent).toBe("View all");
   expect(link.getAttribute("href")).toBe("/papers");
+  expect([...container.querySelectorAll("h2")].map((heading) => heading.textContent)).toEqual([
+    "Recent papers",
+    "Quick access",
+  ]);
+  expect(container.textContent).not.toContain("//");
 });

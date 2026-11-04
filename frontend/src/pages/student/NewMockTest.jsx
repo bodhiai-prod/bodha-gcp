@@ -106,7 +106,6 @@ export default function NewMockTest() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-3xl mx-auto p-6 md:p-12">
-        <div className="overline text-neutral-500 mb-2">// New mock test</div>
         <h1 className="font-display text-5xl mb-2">Design your practice.</h1>
         <p className="text-neutral-600 mb-8">
           Pick a textbook and topics, choose difficulty and duration. We'll

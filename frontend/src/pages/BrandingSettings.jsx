@@ -125,7 +125,6 @@ export default function BrandingSettings() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-6xl mx-auto p-6 md:p-12">
-        <div className="overline text-neutral-500 mb-2">// Settings / branding</div>
         <h1 className="font-display text-4xl md:text-5xl mb-3">Saved branding presets</h1>
         <p className="text-neutral-600 max-w-3xl mb-8">
           Save multiple school identities and choose one while creating or viewing a paper.
@@ -153,7 +152,7 @@ export default function BrandingSettings() {
           <form onSubmit={save} className="lg:col-span-3 space-y-6">
             <section className="qp-card">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-                <div className="overline text-neutral-500">// {draft.id ? "Edit preset" : "New preset"}</div>
+                <h2 className="font-display text-2xl">{draft.id ? "Edit preset" : "New preset"}</h2>
                 {draft.id && <button type="button" onClick={removePreset} className="qp-btn qp-btn-secondary text-xs" data-testid="delete-branding-preset"><Trash size={14} weight="bold" /> Delete preset</button>}
               </div>
               <label className="qp-label" htmlFor="branding-name">Preset name</label>
@@ -170,7 +169,7 @@ export default function BrandingSettings() {
             </section>
 
             <section className="qp-card">
-              <div className="overline text-neutral-500 mb-5">// School logo</div>
+              <h2 className="font-display text-2xl mb-5">School logo</h2>
               <div className="branding-crest-preview">
                 {crestUrl ? <img src={crestUrl} alt="School logo" /> : <><ImageSquare size={34} /><span>No logo uploaded</span></>}
               </div>
@@ -185,7 +184,7 @@ export default function BrandingSettings() {
             </section>
 
             <section className="qp-card">
-              <div className="overline text-neutral-500 mb-5">// Preview on paper</div>
+              <h2 className="font-display text-2xl mb-5">Preview on paper</h2>
               <div className="branding-paper-preview">
                 <div className="branding-paper-header">
                   {crestUrl && <img src={crestUrl} alt="" />}

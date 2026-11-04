@@ -45,7 +45,6 @@ export function ConfirmationProvider({ children }) {
       >
         <AlertDialogContent className="w-[calc(100%-2rem)] max-w-md gap-5 rounded-none border-2 border-black bg-white p-6 hard-shadow-static">
           <AlertDialogHeader className="space-y-3 text-left">
-            <div className="overline text-neutral-500">// CONFIRM ACTION</div>
             <AlertDialogTitle className="font-display text-3xl leading-none">
               {request?.title}
             </AlertDialogTitle>

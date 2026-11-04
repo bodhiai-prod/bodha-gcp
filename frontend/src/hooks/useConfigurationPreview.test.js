@@ -31,9 +31,27 @@ test("debounces changes and ignores a stale backend response", async () => {
   expect(state.preview.summary.question_count).toBe(20);
   expect(state.loading).toBe(false);
 });
-test("failed previews replace prior values with a visible error", async () => {
+test("failed initial previews show a visible error", async () => {
   api.post.mockRejectedValue({ response: { data: { detail: "Invalid allocation" } } });
   await act(async () => { root.render(<Harness request={{ total_marks: 10 }} />); });
   await act(async () => { jest.advanceTimersByTime(650); });
   expect(JSON.parse(container.textContent)).toEqual({ preview: null, loading: false, error: "Invalid allocation" });
+});
+test("keeps the previous overview visible while a changed configuration refreshes", async () => {
+  const resolvers = [];
+  api.post.mockImplementation(() => new Promise(resolve => resolvers.push(resolve)));
+  await act(async () => { root.render(<Harness request={{ total_marks: 10 }} />); });
+  await act(async () => { jest.advanceTimersByTime(650); });
+  await act(async () => { resolvers[0]({ data: { valid: true, summary: { question_count: 10 } } }); });
+
+  await act(async () => { root.render(<Harness request={{ total_marks: 20 }} />); });
+  expect(JSON.parse(container.textContent)).toMatchObject({
+    preview: { summary: { question_count: 10 } }, loading: true,
+  });
+
+  await act(async () => { jest.advanceTimersByTime(650); });
+  await act(async () => { resolvers[1]({ data: { valid: true, summary: { question_count: 20 } } }); });
+  expect(JSON.parse(container.textContent)).toMatchObject({
+    preview: { summary: { question_count: 20 } }, loading: false,
+  });
 });

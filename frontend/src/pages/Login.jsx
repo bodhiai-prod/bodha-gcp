@@ -63,12 +63,11 @@ export default function Login({ mode = "login" }) {
       <div className="absolute inset-0 bg-white/75" />
       <div className="absolute inset-0 p-12 flex flex-col justify-between">
         <div className="flex items-center gap-3"><img src="/assets/bodhaai-app-icon-512.png" alt="Bodha AI" className="w-12 h-12 rounded-xl" /><div><div className="brand-mark text-2xl leading-none">Bodha <span className="accent">AI</span></div><div className="overline text-neutral-700 mt-1">Question paper studio</div></div></div>
-        <div className="max-w-md"><div className="overline text-neutral-700 mb-4">// Volume 01</div><h1 className="font-display text-5xl lg:text-6xl leading-[0.9] text-black">Design exams<br /><span className="text-[#002FA7]">algorithmically.</span></h1><p className="mt-6 text-neutral-700 max-w-sm">Upload any textbook. Extract topics automatically. Generate original, calibrated question papers — with multi-provider AI fallback built-in.</p></div>
+        <div className="max-w-md"><h1 className="font-display text-5xl lg:text-6xl leading-[0.9] text-black">Design exams<br /><span className="text-[#002FA7]">algorithmically.</span></h1><p className="mt-6 text-neutral-700 max-w-sm">Upload any textbook. Extract topics automatically. Generate original, calibrated question papers — with multi-provider AI fallback built-in.</p></div>
         <div className="overline text-neutral-600">© Bodha AI — Academic control room</div>
       </div>
     </div>
     <div className="flex min-h-screen items-start justify-center p-4 lg:items-center lg:p-6"><section data-testid="login-form" className="w-full max-w-md qp-card hard-shadow-static lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
-      <div className="overline text-neutral-500 mb-2">// Auth / {isRegister ? "02" : "01"}</div>
       <h2 className="font-display text-3xl mb-2">{isRegister ? "Create account." : "Sign in."}</h2>
       <p className="text-neutral-600 mb-4 text-sm">{isRegister ? "Use your email and password, or continue with Google." : "Sign in with your email and password, or continue with Google."}</p>
       {error && <p className="mb-3 border-2 border-red-700 bg-red-50 p-2 text-sm text-red-800" role="alert">{error}</p>}

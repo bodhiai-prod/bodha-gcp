@@ -73,15 +73,33 @@ export default function SavedPaperConfigurations({ currentConfiguration, onApply
   };
 
   return (
-    <section className="qp-card mb-6 max-w-6xl" data-testid="saved-paper-configurations">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <section className="qp-card mb-6" data-testid="saved-paper-configurations">
+      <div className="saved-config-row">
         <div>
-          <div className="overline text-neutral-500">// Saved configurations</div>
-          <h2 className="font-medium text-sm mt-2">Reuse your setup</h2>
+          <h2 className="font-display text-2xl">Saved configurations</h2>
+          <p className="text-sm text-neutral-600 mt-1">Reuse your setup</p>
         </div>
-        <div className="flex w-full sm:w-auto gap-2">
+        <div className="relative min-w-0">
+          <label className="sr-only" htmlFor="saved-configuration-select">Choose a saved configuration</label>
+          <select
+            id="saved-configuration-select"
+            className="qp-input w-full appearance-none pr-10"
+            value={selected?.id || ""}
+            onChange={(event) => setSelected(configurations.find((config) => config.id === event.target.value) || null)}
+            disabled={loading || configurations.length === 0}
+            data-testid="saved-configuration-select"
+          >
+            <option value="">{loading ? "Loading configurations…" : configurations.length ? "Choose a saved configuration" : "No saved configurations yet"}</option>
+            {configurations.map((config) => (
+              <option key={config.id} value={config.id}>{config.name} — {describe(config)}</option>
+            ))}
+          </select>
+          <CaretDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" size={16} aria-hidden="true" />
+        </div>
+        <div className="flex min-w-0 gap-2">
           <input
             className="qp-input min-w-0"
+            aria-label="Configuration name"
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="Configuration name"
@@ -95,51 +113,26 @@ export default function SavedPaperConfigurations({ currentConfiguration, onApply
         </div>
       </div>
 
-      {loading && <p className="text-xs text-neutral-500 mt-5">Loading saved configurations…</p>}
-      {!loading && configurations.length === 0 && <p className="text-xs text-neutral-500 mt-5">No saved configurations yet.</p>}
-      {configurations.length > 0 && (
-        <div className="mt-5">
-          <label className="block text-xs font-medium " htmlFor="saved-configuration-select">
-            Choose a saved configuration
-          </label>
-          <div className="relative mt-2 max-w-xl">
-            <select
-              id="saved-configuration-select"
-              className="qp-input w-full appearance-none pr-10"
-              value={selected?.id || ""}
-              onChange={(event) => setSelected(configurations.find((config) => config.id === event.target.value) || null)}
-              data-testid="saved-configuration-select"
-            >
-              <option value="">Select a configuration</option>
-              {configurations.map((config) => (
-                <option key={config.id} value={config.id}>{config.name} — {describe(config)}</option>
-              ))}
-            </select>
-            <CaretDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" size={16} aria-hidden="true" />
-          </div>
-
-          {selected && (
-            <div className="mt-3 border-2 border-[#002FA7] bg-blue-50 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <strong className="block truncate text-sm">{selected.name}</strong>
-                  <span className="text-xs text-neutral-500">{describe(selected)}</span>
-                </div>
-                <div className="flex gap-1">
-                  <button type="button" className="p-2 hover:bg-neutral-100" onClick={() => beginEdit(selected)} aria-label={`Edit ${selected.name}`}><PencilSimple size={16} /></button>
-                  <button type="button" className="p-2 hover:bg-red-50 hover:text-red-700" onClick={() => remove(selected)} aria-label={`Delete ${selected.name}`}><Trash size={16} /></button>
-                </div>
-              </div>
-              <div className="mt-3 border-t border-neutral-200 pt-3">
-                <p className="text-xs text-neutral-600">
-                  Applying this template restores its sources and generation settings. Unavailable textbooks or topics will be flagged for review; title and branding stay unchanged.
-                </p>
-                <button type="button" className="qp-btn qp-btn-primary mt-3" onClick={() => { onApply(selected); setSelected(null); }}>
-                  <Check size={16} weight="bold" /> Confirm and apply
-                </button>
-              </div>
+      {selected && (
+        <div className="mt-4 border-2 border-[#002FA7] bg-blue-50 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <strong className="block truncate text-sm">{selected.name}</strong>
+              <span className="text-xs text-neutral-500">{describe(selected)}</span>
             </div>
-          )}
+            <div className="flex gap-1">
+              <button type="button" className="p-2 hover:bg-neutral-100" onClick={() => beginEdit(selected)} aria-label={`Edit ${selected.name}`}><PencilSimple size={16} /></button>
+              <button type="button" className="p-2 hover:bg-red-50 hover:text-red-700" onClick={() => remove(selected)} aria-label={`Delete ${selected.name}`}><Trash size={16} /></button>
+            </div>
+          </div>
+          <div className="mt-3 border-t border-neutral-200 pt-3">
+            <p className="text-xs text-neutral-600">
+              Applying this template restores its sources and generation settings. Unavailable textbooks or topics will be flagged for review; title and branding stay unchanged.
+            </p>
+            <button type="button" className="qp-btn qp-btn-primary mt-3" onClick={() => { onApply(selected); setSelected(null); }}>
+              <Check size={16} weight="bold" /> Confirm and apply
+            </button>
+          </div>
         </div>
       )}
     </section>

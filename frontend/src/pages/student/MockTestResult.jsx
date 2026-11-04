@@ -121,7 +121,7 @@ export default function MockTestResult() {
         <div className="border-2 border-black bg-white p-8 hard-shadow mb-8">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <div className="overline text-neutral-500 mb-2">// Result</div>
+              <p className="text-sm font-medium text-neutral-700 mb-2">Result</p>
               <h1 className="font-display text-4xl mb-1">{paper?.title}</h1>
               <p className="text-neutral-600 text-sm">
                 {paper?.subject} · Class {paper?.class_name}
@@ -146,7 +146,7 @@ export default function MockTestResult() {
           </div>
         </div>
 
-        <h2 className="overline text-neutral-500 mb-3">// Topic breakdown</h2>
+        <h2 className="font-display text-2xl mb-3">Topic breakdown</h2>
         <div className="grid sm:grid-cols-2 gap-3 mb-8" data-testid="result-topic-breakdown">
           {Object.entries(score?.by_topic || {}).map(([name, stats]) => (
             <TopicRow key={name} name={name} stats={stats} />
@@ -181,7 +181,7 @@ export default function MockTestResult() {
           </div>
         )}
 
-        <h2 className="overline text-neutral-500 mb-3">// Question review</h2>
+        <h2 className="font-display text-2xl mb-3">Question review</h2>
         <div className="space-y-4">
           {allQs.map((q, idx) => {
             const ans = (answers || {})[q.id] || {};

@@ -6,7 +6,7 @@ export default function useConfigurationPreview(requestKey) {
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
-    setState({ preview: null, loading: true, error: "" });
+    setState(current => ({ ...current, loading: true, error: "" }));
     const timer = setTimeout(async () => {
       try {
         const { data } = await api.post("/papers/configuration-preview", JSON.parse(requestKey), { signal: controller.signal });
@@ -14,7 +14,7 @@ export default function useConfigurationPreview(requestKey) {
       } catch (err) {
         if (!cancelled) {
           const detail = err?.response?.data?.detail;
-          setState({ preview: null, loading: false, error: typeof detail === "string" ? detail : "Complete valid paper settings to refresh the backend summary." });
+          setState(current => ({ ...current, loading: false, error: typeof detail === "string" ? detail : "Complete valid paper settings to refresh the backend summary." }));
         }
       }
     }, 650);

@@ -165,7 +165,6 @@ export default function Textbooks() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="textbooks-page">
-        <div className="overline text-neutral-500 mb-3">// Textbook index</div>
         <h1 className="font-display text-5xl md:text-6xl mb-10">
           Textbooks &<br />
           <span className="text-[#002FA7]">Topic extraction.</span>
@@ -178,7 +177,6 @@ export default function Textbooks() {
             className="lg:col-span-2 qp-card hard-shadow-static"
             data-testid="textbook-upload-form"
           >
-            <div className="overline text-neutral-500 mb-3">// New upload</div>
             <h2 className="font-display text-3xl mb-6">Upload PDF</h2>
 
             <div className="mb-4">
@@ -246,9 +244,9 @@ export default function Textbooks() {
 
           {/* List */}
           <div className="lg:col-span-3 min-w-0">
-            <div className="overline text-neutral-500 mb-3">
-              // Indexed ({textbooks.length})
-            </div>
+            <h2 className="font-display text-2xl mb-3">
+              Indexed textbooks <span className="text-base text-neutral-600">({textbooks.length})</span>
+            </h2>
             {textbooks.length === 0 ? (
               <div className="border-2 border-black bg-white p-10 text-center">
                 <FolderOpen size={40} weight="duotone" className="mx-auto" />

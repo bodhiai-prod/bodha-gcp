@@ -911,7 +911,7 @@ export default function PaperView() {
         <div className="paper-with-summary">
         {/* Paper */}
         <div
-          className="bg-white border-2 border-black p-8 md:p-12 hard-shadow-static-lg"
+          className="bg-white border-2 border-black p-8 md:p-12"
           data-testid="paper-preview"
         >
           {view.branding_watermark && <div className="paper-branding-watermark text-center text-xs uppercase tracking-[0.35em] text-neutral-300 mb-2" aria-hidden="true">{view.branding_watermark}</div>}
@@ -1111,7 +1111,7 @@ export default function PaperView() {
                           q.options.length > 0 && (
                             <div className="mt-3 pl-6 space-y-1.5">
                               <div className="overline text-neutral-500">
-                                // MCQ OPTIONS — pick the correct one
+                                MCQ options — pick the correct one
                               </div>
                               {q.options.slice(0, 4).map((opt, oi) => {
                                 const label = ["(a)", "(b)", "(c)", "(d)"][oi] || `(${oi + 1})`;

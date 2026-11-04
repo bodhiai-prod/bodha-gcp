@@ -90,9 +90,6 @@ body { font-weight: 400; }
 .hard-shadow-static {
     box-shadow: 4px 4px 0 0 #0a0a0a;
 }
-.hard-shadow-static-lg {
-    box-shadow: 8px 8px 0 0 rgba(10, 10, 10, 0.15);
-}
 
 /* Input + card resets */
 .qp-input {
@@ -565,7 +562,11 @@ pre.math-fallback {
 }
 /* Section allocation and backend summary panels. */
 .section-tabs { display:flex; flex-wrap:wrap; gap:4px; border-bottom:2px solid #111; }
-.new-paper-steps { display:flex; flex-wrap:wrap; gap:6px; margin:-20px 0 28px; }
+.new-paper-steps { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 18px; }
+.saved-config-row { display:grid; grid-template-columns:minmax(130px,.9fr) minmax(210px,1.7fr) minmax(220px,1.2fr); align-items:center; gap:12px; }
+@media (max-width:800px) {
+  .saved-config-row { grid-template-columns:1fr; }
+}
 .new-paper-steps button { border:1px solid #a3a3a3; padding:9px 14px; background:#fff; font-size:12px; font-weight:500; }
 .new-paper-steps button.is-active { border-color:#002fa7; background:#002fa7; color:#fff; }
 .section-tabs button { flex:1 1 110px; text-align:left; padding:10px; border:1px solid #d4d4d4; font-size:11px; }
@@ -637,10 +638,12 @@ pre.math-fallback {
 .paper-summary-books.is-multiple { list-style:decimal; }
 .paper-summary-books li + li { margin-top:5px; }
 .paper-summary-book { min-width:0; overflow-wrap:anywhere; }
-.paper-summary-totals { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:18px 0; text-align:center; }
+.paper-summary-totals { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:18px 0; text-align:center; }
+.paper-summary-totals > div { display:grid; grid-template-rows:28px 32px 16px; align-items:center; justify-items:center; min-width:0; }
 .paper-summary-totals strong,.paper-summary-totals small { display:block; }
-.paper-summary-totals strong { font-size:24px; }
-.paper-summary-totals small { font-size:10px; color:#737373; }
+.paper-summary-totals > div > small:first-child { align-self:start; }
+.paper-summary-totals strong { font-size:24px; line-height:1; font-variant-numeric:tabular-nums; }
+.paper-summary-totals small { font-size:10px; line-height:1.2; color:#737373; }
 .summary-meter { margin:12px 0; }
 .summary-meter>div { display:flex; justify-content:space-between; gap:8px; font-size:11px; }
 .summary-meter strong { white-space:nowrap; }

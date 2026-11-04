@@ -168,7 +168,6 @@ export default function Admin() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="admin-page">
-        <div className="overline text-neutral-500 mb-3">// Admin console</div>
         <h1 className="font-display text-5xl md:text-6xl mb-10">
           School
           <br />
@@ -598,7 +597,7 @@ const UserDetailDrawer = ({ detail, onClose }) => {
     <div className="fixed inset-0 z-50 bg-black/40 flex justify-end" role="dialog" aria-modal="true">
       <aside className="w-full max-w-2xl h-full overflow-y-auto bg-[#FAFAFA] border-l-4 border-black p-6 md:p-8">
         <div className="flex justify-between gap-4 mb-7">
-          <div className="min-w-0"><div className="overline text-neutral-500">// User record</div><h2 className="font-display text-4xl mt-2 break-words">{user.full_name || user.email}</h2><div className="text-sm text-neutral-600 break-all">{user.email}</div></div>
+          <div className="min-w-0"><h2 className="font-display text-4xl break-words">{user.full_name || user.email}</h2><div className="text-sm text-neutral-600 break-all">{user.email}</div></div>
           <button type="button" className="qp-btn-ghost h-fit" onClick={onClose} aria-label="Close user details"><X size={20} /></button>
         </div>
         <div className="grid grid-cols-1 min-[420px]:grid-cols-2 md:grid-cols-4 gap-3 mb-6"><Metric label="Textbooks" value={user.textbook_count} /><Metric label="Papers" value={user.paper_count} /><Metric label="Questions" value={user.question_count} /><Metric label="Tests" value={user.test_count} /></div>
@@ -677,7 +676,7 @@ const BulkUploadTab = ({ onDone }) => {
 
   return (
     <div className="qp-card max-w-3xl" data-testid="upload-tab">
-      <div className="overline mb-3">// Bulk upload</div>
+      <h2 className="font-display text-2xl mb-3">Bulk upload</h2>
       <p className="text-sm text-neutral-600 font-mono mb-5">
         Drop multiple PDFs at once. Each book will be indexed and (optionally)
         added straight to the shared library so all teachers can use it.

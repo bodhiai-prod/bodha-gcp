@@ -35,7 +35,7 @@ export default function ResetPassword() {
   };
 
   return <main className="min-h-screen flex items-center justify-center bg-[#FAFAFA] p-6"><section className="w-full max-w-md qp-card hard-shadow-static">
-    <div className="overline text-neutral-500 mb-2">// Auth / reset</div><h1 className="font-display text-4xl mb-2">Choose a password.</h1>
+    <h1 className="font-display text-4xl mb-2">Choose a password.</h1>
     {status === "checking" && <p className="text-neutral-600">Verifying your reset link…</p>}
     {status === "invalid" && <><p className="text-neutral-700">This reset link is invalid, expired, or has already been used.</p><p className="mt-6 text-sm"><Link to="/forgot-password" className="font-medium text-[#002FA7] underline">Request another reset link</Link></p></>}
     {status === "complete" && <p className="text-neutral-700">Your password has been reset. Redirecting you to sign in…</p>}

@@ -235,7 +235,7 @@ export default function MockTestExam() {
         <Header />
         <main className="max-w-2xl mx-auto p-6 md:p-12">
           <div className="qp-card hard-shadow-static" data-testid="mock-test-start-card">
-            <div className="overline text-neutral-500 mb-2">// Ready to start</div>
+            <p className="text-sm font-medium text-neutral-700 mb-2">Ready to start</p>
             <h1 className="font-display text-4xl mb-2">
               {test.paper?.title || "Mock test"}
             </h1>
@@ -398,7 +398,7 @@ export default function MockTestExam() {
             className="border-2 border-black bg-white p-4 h-fit hard-shadow-static"
             data-testid="mock-test-navigator"
           >
-            <div className="overline text-neutral-500 mb-3">// Navigator</div>
+            <h2 className="font-display text-xl mb-3">Questions</h2>
             <div className="grid grid-cols-4 min-[420px]:grid-cols-5 gap-2">
               {allQs.map((qq, idx) => {
                 const answered =

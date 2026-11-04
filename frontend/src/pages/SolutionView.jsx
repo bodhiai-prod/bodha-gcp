@@ -346,7 +346,7 @@ export default function SolutionView() {
             className="bg-white border-2 border-black p-10 md:p-16 text-center hard-shadow-static"
             data-testid="solution-empty-state"
           >
-            <div className="overline text-neutral-500 mb-3">// Answer key</div>
+            <p className="text-sm font-medium text-neutral-700 mb-3">Answer key</p>
             <h1 className="font-display text-4xl md:text-5xl mb-3">
               No solution yet.
             </h1>
@@ -379,7 +379,7 @@ export default function SolutionView() {
               <BrandingLogo paperId={id} hasLogo={Boolean(paper.header_image_path)} className="mx-auto mb-3 max-h-24 max-w-32 object-contain" />
               {paper.school_name && <div className="font-bold text-lg uppercase tracking-wide mb-2">{paper.school_name}</div>}
               <div className="overline text-neutral-500 mb-2">
-                // Answer key
+                Answer key
               </div>
               <h1 className="font-display text-3xl md:text-4xl">
                 {paper.title}
@@ -545,7 +545,7 @@ export default function SolutionView() {
 
                         <div className="mt-4 pl-6 min-w-0">
                           <div className="overline text-neutral-500 mb-2">
-                            // ANSWER
+                            Answer
                           </div>
                           {editing && solSection && aIdx >= 0 ? (
                             <textarea

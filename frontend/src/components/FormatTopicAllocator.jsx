@@ -101,7 +101,7 @@ export default function FormatTopicAllocator({ formats, allocations, onChange, b
 
   return <div data-testid="format-topic-allocator">
     <div className="flex items-start justify-between gap-3 mb-3">
-      <div><div className="overline">// Assign topics by format</div><strong className="block mt-1">{format.label}</strong></div>
+      <div><div className="text-sm text-neutral-700">Assign topics by format</div><strong className="block mt-1">{format.label}</strong></div>
       <div className="flex items-center gap-2"><button type="button" className="qp-btn qp-btn-secondary text-xs" disabled={!canAutoAssign} onClick={autoAssign} data-testid="format-auto-assign">Auto assign</button><span className={`qp-badge ${assigned === format.count ? "qp-badge-success" : "qp-badge-red"}`}>{format.label}: {assigned}/{format.count} filled</span></div>
     </div>
     {!canAutoAssign && bookIds.length > 0 && <p className="text-xs text-neutral-500 mb-3">Extract topics from a selected textbook before auto assigning.</p>}

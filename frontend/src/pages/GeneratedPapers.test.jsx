@@ -46,10 +46,25 @@ test("shows the latest 15 papers first and lets the teacher page through the rem
   expect(container.textContent).toContain("Paper 18");
   expect(container.textContent).not.toContain("Paper 3");
   expect(container.querySelector('[data-testid="generated-papers-count"]').textContent).toContain("Showing 1–15 of 18 papers");
+  expect(container.querySelector('[data-testid="generated-papers-total"]').textContent).toBe("18 papers total");
 
   await act(async () => container.querySelector('[data-testid="generated-papers-next"]').click());
 
   expect(container.querySelectorAll('[data-testid^="generated-paper-row-"]')).toHaveLength(3);
   expect(container.textContent).toContain("Paper 3");
   expect(container.querySelector('[data-testid="generated-papers-count"]').textContent).toContain("Showing 16–18 of 18 papers");
+  expect(container.querySelector('[data-testid="generated-papers-total"]').textContent).toBe("18 papers total");
+});
+
+test("keeps the total while the result summary reflects filters", async () => {
+  api.get.mockResolvedValue({ data: papers.map((paper, index) => index === 17 ? { ...paper, subject: "Maths" } : paper) });
+  await act(async () => root.render(<GeneratedPapers />));
+  const subjectFilter = container.querySelector('[data-testid="generated-papers-subject-filter"]');
+  await act(async () => {
+    subjectFilter.value = "Maths";
+    subjectFilter.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
+  expect(container.querySelector('[data-testid="generated-papers-total"]').textContent).toBe("18 papers total");
+  expect(container.querySelector('[data-testid="generated-papers-count"]').textContent).toContain("of 1 paper (18 total)");
 });

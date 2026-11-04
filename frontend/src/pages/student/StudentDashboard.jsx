@@ -70,7 +70,6 @@ export default function StudentDashboard() {
       >
         <div className="flex items-end justify-between flex-wrap gap-4 mb-10">
           <div>
-            <div className="overline text-neutral-500 mb-2">// Student</div>
             <h1 className="font-display text-5xl">
               Welcome back, <span className="text-[#002FA7]">{user?.full_name?.split(" ")[0] || "learner"}.</span>
             </h1>
@@ -104,7 +103,7 @@ export default function StudentDashboard() {
           </div>
         </div>
 
-        <div className="overline text-neutral-500 mb-3">// Your tests</div>
+        <h2 className="font-display text-2xl mb-3">Your tests</h2>
         {loading ? (
           <div className="text-neutral-500 text-sm">Loading…</div>
         ) : tests.length === 0 ? (

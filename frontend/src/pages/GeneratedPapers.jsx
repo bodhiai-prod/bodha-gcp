@@ -96,15 +96,19 @@ export default function GeneratedPapers() {
         className="max-w-7xl mx-auto p-6 md:p-12"
         data-testid="generated-papers-page"
       >
-        <div className="overline text-neutral-500 mb-3">
-          // All generated papers ({papers.length})
-        </div>
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-10">
-          <h1 className="font-display text-5xl md:text-6xl leading-[0.9]">
-            Generated
-            <br />
-            <span className="text-[#002FA7]">papers.</span>
-          </h1>
+          <div>
+            <h1 className="font-display text-5xl md:text-6xl leading-[0.9]">
+              Generated
+              <br />
+              <span className="text-[#002FA7]">papers.</span>
+            </h1>
+            {!loading && (
+              <p className="text-sm text-neutral-600 mt-3" data-testid="generated-papers-total">
+                {papers.length} {papers.length === 1 ? "paper" : "papers"} total
+              </p>
+            )}
+          </div>
           <Link
             to="/papers/new"
             data-testid="generated-papers-new"
@@ -210,7 +214,7 @@ export default function GeneratedPapers() {
         {!loading && papers.length > 0 && filtered.length > 0 && (
           <div className="mt-4 flex flex-col gap-3 text-xs font-mono text-neutral-500 sm:flex-row sm:items-center sm:justify-between">
             <div data-testid="generated-papers-count">
-              Showing {(page - 1) * papersPerPage + 1}–{Math.min(page * papersPerPage, filtered.length)} of {filtered.length} papers
+              Showing {(page - 1) * papersPerPage + 1}–{Math.min(page * papersPerPage, filtered.length)} of {filtered.length} {filtered.length === 1 ? "paper" : "papers"}
               {filtered.length !== papers.length ? ` (${papers.length} total)` : ""}
             </div>
             <div className="flex items-center gap-2" aria-label="Paper pagination">

@@ -85,17 +85,19 @@ export default function Header() {
           <div className="hidden 2xl:block whitespace-nowrap text-right">
             <div className="text-sm font-medium">{user?.full_name}</div>
             <div className="overline text-neutral-500 text-[10px]">
-              {user?.role}
+              {user?.role && user.role.charAt(0).toUpperCase() + user.role.slice(1)}
             </div>
           </div>
-          <Link to="/account" data-testid="nav-account" className="qp-btn qp-btn-secondary px-3 sm:px-4" aria-label="Account"><UserCircle size={18} weight="bold" /><span className="hidden sm:inline">Account</span></Link>
+          <Link to="/account" data-testid="nav-account" className="qp-btn qp-btn-secondary h-10 w-10 !p-0" aria-label="Account" title="Account"><UserCircle size={18} weight="bold" /></Link>
           <button
+            type="button"
             onClick={handleLogout}
             data-testid="logout-button"
-            className="qp-btn qp-btn-secondary px-3 sm:px-4"
+            className="qp-btn qp-btn-secondary h-10 w-10 !p-0"
+            aria-label="Log out"
+            title="Log out"
           >
-            <SignOut size={16} weight="bold" />
-            <span className="hidden sm:inline">Log out</span>
+            <SignOut size={18} weight="bold" />
           </button>
           <Sheet>
             <SheetTrigger asChild>

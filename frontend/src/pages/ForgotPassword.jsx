@@ -25,7 +25,6 @@ export default function ForgotPassword() {
   };
 
   return <main className="min-h-screen flex items-center justify-center bg-[#FAFAFA] p-6"><section className="w-full max-w-md qp-card hard-shadow-static">
-    <div className="overline text-neutral-500 mb-2">// Auth / reset</div>
     <h1 className="font-display text-4xl mb-2">Reset password.</h1>
     {submitted ? <p className="text-neutral-700">If an account uses this email, a password-reset link is on its way. Check your inbox and spam folder.</p> : <>
       <p className="text-neutral-600 mb-6 text-sm">Enter your email and we’ll send a secure reset link.</p>

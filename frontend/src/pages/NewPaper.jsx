@@ -523,7 +523,6 @@ export default function NewPaper() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="new-paper-page">
-        <div className="overline text-neutral-500 mb-3">// New paper</div>
         <h1 className="font-display text-5xl md:text-6xl mb-10">
           Tune the
           <br />
@@ -700,33 +699,6 @@ export default function NewPaper() {
             {step === 1 && <>
             <ExpandableCard id="format-mix" title="Question format mix" summary={promptOverride ? "Controlled by paper blueprint" : formatTopicStage === "mix" ? `${effectiveQuestionCount} questions · ${formats.filter(f => (formatQuestionCounts[f.key] || 0) > 0).length} active formats` : `${assignedFormatTopicCount}/${effectiveQuestionCount} topic slots filled · ${activeFormats.length} question types`} disabled={promptOverride}>
               {formatTopicStage === "mix" ? <>
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <div className="overline">// Question format mix</div>
-                {promptOverride ? (
-                  <span
-                    className="qp-badge qp-badge-yellow"
-                    data-testid="format-overridden"
-                  >
-                    OVERRIDDEN BY PROMPT
-                  </span>
-                ) : (
-                  <span
-                    className={`qp-badge ${
-                      formatTotal === 100
-                        ? "qp-badge-success"
-                        : "qp-badge-red"
-                    }`}
-                    data-testid="format-total"
-                  >
-                    {formatTotal}%
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-neutral-500 font-mono mb-4">
-                MCQ, Short / Long Answer, Fill-in-the-blanks, True / False, or
-                add your own. Set the percentage mix; it is converted to the
-                whole-question counts shown below.
-              </p>
               {formats.map((f) => (
                 <div
                   key={f.key}
@@ -913,7 +885,7 @@ Make Q23 as hard as possible`}
 
           {/* Right: Topics + submit */}
           <div className="lg:col-span-2 space-y-6">
-            <ConfigurationSummary preview={preview?.requestKey === requestKey ? preview : null} loading={previewLoading} error={previewError} />
+            <ConfigurationSummary preview={preview} loading={previewLoading} error={previewError} current={preview?.requestKey === requestKey} />
             {false && !blueprint && <ExpandableCard id="topics" title="Topic selection (no blueprint)" summary={`${selectedTopics.length} selected · Default: ${DIFFICULTY_LABELS[difficulty]}`} defaultOpen>
 
               {selectedTbIds.length === 0 && (

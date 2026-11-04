@@ -56,7 +56,7 @@ export default function Dashboard() {
         {/* Hero */}
         <section className="mb-12">
           <div className="overline text-neutral-500 mb-3">
-            // Control room / {new Date().toLocaleDateString("en-US", {
+            {new Date().toLocaleDateString("en-US", {
               weekday: "long",
               year: "numeric",
               month: "long",
@@ -103,7 +103,7 @@ export default function Dashboard() {
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
           <div className="lg:col-span-2">
             <div className="flex items-start justify-between mb-4">
-              <div className="overline">// Recent papers</div>
+              <h2 className="font-display text-2xl">Recent papers</h2>
               <Link
                 to="/papers"
                 className="text-xs font-medium leading-none hover:text-[#002FA7]"
@@ -154,7 +154,7 @@ export default function Dashboard() {
           </div>
 
           <div>
-            <div className="overline mb-4">// Textbooks</div>
+            <h2 className="font-display text-2xl mb-4">Quick access</h2>
             <div className="space-y-3">
               <Link
                 to="/textbooks"

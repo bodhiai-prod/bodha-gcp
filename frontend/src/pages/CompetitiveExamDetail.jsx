@@ -192,7 +192,6 @@ export default function CompetitiveExamDetail() {
 
         <div className="flex items-end justify-between flex-wrap gap-4 mb-8">
           <div>
-            <div className="overline text-neutral-500 mb-2">// Exam library</div>
             <h1 className="font-display text-5xl">{exam.name}</h1>
             {exam.description && (
               <p className="text-neutral-600 mt-2">{exam.description}</p>
@@ -218,7 +217,7 @@ export default function CompetitiveExamDetail() {
         <div className="grid lg:grid-cols-[1fr_1fr] gap-6">
           {/* Upload + past papers */}
           <div>
-            <div className="overline text-neutral-500 mb-3">// Past papers</div>
+            <h2 className="font-display text-2xl mb-3">Past papers</h2>
             <form
               onSubmit={onUpload}
               className="qp-card hard-shadow-static mb-5"
@@ -295,7 +294,7 @@ export default function CompetitiveExamDetail() {
 
           {/* Generate new paper */}
           <div>
-            <div className="overline text-neutral-500 mb-3">// New practice paper</div>
+            <h2 className="font-display text-2xl mb-3">New practice paper</h2>
             <div className="qp-card hard-shadow-static space-y-4">
               <div>
                 <label className="qp-label">
@@ -333,9 +332,7 @@ export default function CompetitiveExamDetail() {
                   className="border-2 border-black bg-neutral-50 p-3"
                   data-testid="locked-format-card"
                 >
-                  <div className="overline text-neutral-500 mb-2">
-                    // Official format (locked)
-                  </div>
+                  <h3 className="font-display text-lg mb-2">Official format <span className="text-sm font-medium text-neutral-600">(locked)</span></h3>
                   <div className="font-display text-lg mb-1">
                     {lockedFormat.label}
                   </div>

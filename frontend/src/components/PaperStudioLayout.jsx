@@ -36,7 +36,7 @@ export default function PaperStudioLayout({ children }) {
         </nav>
         <div className="studio-account">
           <div className="studio-avatar">{(user?.full_name || "B").charAt(0).toUpperCase()}</div>
-          <div><strong>{user?.full_name || "Your workspace"}</strong><small>{user?.role || "Teacher"}</small></div>
+          <div><strong>{user?.full_name || "Your workspace"}</strong><small>{user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : "Teacher"}</small></div>
         </div>
         <button type="button" className="studio-logout" data-testid="logout-button" onClick={() => { logout(); navigate("/login"); }}>
           <SignOut size={17} /> Log out
