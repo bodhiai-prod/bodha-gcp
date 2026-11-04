@@ -224,9 +224,7 @@ body { font-weight: 400; }
 .paper-list-detail .qp-badge { flex: none; padding: 3px 6px; border: 0; font-size: 10px; font-weight: 400; letter-spacing: normal; }
 
 /* Generated paper and answer-key typography retain their document styling. */
-.paper-preview .font-display,
-[data-testid="solution-body"] .font-display { font-weight: 900; }
-.paper-preview .overline,
+[data-testid="paper-preview"] .overline,
 [data-testid="solution-body"] .overline { text-transform: uppercase; letter-spacing: 0.12em; font-weight: 700; }
 .paper-list-detail .qp-badge svg { display: none; }
 .paper-list-open { display: grid; place-items: center; width: 32px; height: 32px; color: #0a0a0a; }

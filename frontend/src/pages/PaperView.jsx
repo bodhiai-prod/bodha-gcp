@@ -2,7 +2,8 @@ import React, { useEffect, useState, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
-import PaperSummary from "@/components/PaperSummary";
+import PaperBrandingSelector from "@/components/PaperBrandingSelector";
+import { PaperWorkspaceMain, PaperWorkspaceToolbar, PaperWorkspaceContent } from "@/components/PaperWorkspace";
 import { toast } from "sonner";
 import { useConfirmation } from "@/context/ConfirmationContext";
 import {
@@ -102,8 +103,6 @@ export default function PaperView() {
   const [cancellingGeneration, setCancellingGeneration] = useState(false);
   const [docxDownloading, setDocxDownloading] = useState(false);
   const [ignoringExportWarning, setIgnoringExportWarning] = useState(false);
-  const [brandingApplying, setBrandingApplying] = useState(false);
-  const [brandingPresets, setBrandingPresets] = useState([]);
 
   const loadSequence = useRef(0);
   const load = async () => {
@@ -118,9 +117,6 @@ export default function PaperView() {
 
   useEffect(() => {
     load();
-    api.get("/branding-presets")
-      .then(({ data }) => setBrandingPresets(data))
-      .catch(() => {});
   }, [id]); // eslint-disable-line
 
   // Poll for diagram completion when any are still pending.
@@ -409,22 +405,6 @@ export default function PaperView() {
     }
   };
 
-  const changeBranding = async (brandingId) => {
-    setBrandingApplying(true);
-    try {
-      const { data } = brandingId
-        ? await api.post(`/papers/${id}/branding/apply`, { branding_id: brandingId })
-        : await api.delete(`/papers/${id}/branding`);
-      ++loadSequence.current;
-      setPaper(data);
-      toast.success(brandingId ? "Branding applied to this paper" : "Branding removed from this paper");
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || (brandingId ? "Could not apply branding" : "Could not remove branding"));
-    } finally {
-      setBrandingApplying(false);
-    }
-  };
-
   if (!paper) {
     return (
       <div className="min-h-screen bg-[#FAFAFA]">
@@ -593,18 +573,12 @@ export default function PaperView() {
   const topupValue = topupCount || missingCount || 1;
 
   const view = editing ? draft : paper;
-  const hasAppliedBranding = Boolean(
-    paper.branding_id || paper.school_name || paper.header_image_path
-    || paper.branding_tagline || paper.branding_footer || paper.branding_watermark
-  );
-  const brandingSelection = hasAppliedBranding ? (paper.branding_id || "__saved_branding__") : "";
-  const selectedPresetMissing = hasAppliedBranding && !brandingPresets.some(preset => preset.id === paper.branding_id);
   let counter = 1;
 
   return (
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
-      <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="paper-view-page">
+      <PaperWorkspaceMain testId="paper-view-page">
         {completionLive && (
           <div className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4" data-testid="paper-quality-running-banner">
             <div className="font-medium text-sm">Checking and completing</div>
@@ -801,15 +775,7 @@ export default function PaperView() {
           </div>
         )}
         {/* Toolbar */}
-        <div className="no-print flex items-center justify-between mb-8 flex-wrap gap-3">
-          <Link
-            to="/"
-            className="qp-btn-ghost inline-flex items-center gap-2"
-            data-testid="back-to-dashboard"
-          >
-            <ArrowLeft size={16} weight="bold" /> Dashboard
-          </Link>
-          <div className="flex flex-wrap gap-2">
+        <PaperWorkspaceToolbar backTo="/" backLabel="Dashboard" backTestId="back-to-dashboard">
             {editing ? (
               <>
                 <button
@@ -846,21 +812,10 @@ export default function PaperView() {
                 >
                   <CheckCircle size={16} weight="bold" /> Solution
                 </Link>
-                <div className="flex items-center gap-2 border-2 border-black px-3" data-testid="paper-branding-status">
-                  <label htmlFor="paper-branding-select" className="text-sm font-medium whitespace-nowrap">Branding</label>
-                  <select
-                    id="paper-branding-select"
-                    value={brandingSelection}
-                    onChange={(event) => changeBranding(event.target.value)}
-                    disabled={brandingApplying}
-                    className="min-h-9 max-w-40 bg-white text-sm"
-                    data-testid="paper-branding-select"
-                  >
-                    <option value="">None</option>
-                    {brandingPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
-                    {selectedPresetMissing && <option value={brandingSelection}>{paper.branding_name || "Saved branding"}</option>}
-                  </select>
-                </div>
+                <PaperBrandingSelector paper={paper} onPaperChange={(updated) => {
+                  ++loadSequence.current;
+                  setPaper(updated);
+                }} />
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button className="qp-btn qp-btn-primary" disabled={qualityReviewBlocked} title={qualityReviewBlocked ? "Downloads unlock after final checks pass" : undefined} data-testid="download-menu-button">
@@ -878,10 +833,9 @@ export default function PaperView() {
                 </DropdownMenu>
               </>
             )}
-          </div>
-        </div>
+        </PaperWorkspaceToolbar>
 
-        <div className="paper-with-summary">
+        <PaperWorkspaceContent paper={paper} editing={editing}>
         {/* Paper */}
         <div
           className="bg-white border-2 border-black p-8 md:p-12"
@@ -1253,9 +1207,8 @@ export default function PaperView() {
           </div>
           {view.branding_footer && <div className="paper-branding-footer text-center mt-3 font-mono text-xs">{view.branding_footer}</div>}
         </div>
-        <PaperSummary paper={paper} editing={editing} />
-        </div>
-      </main>
+        </PaperWorkspaceContent>
+      </PaperWorkspaceMain>
     </div>
   );
 }

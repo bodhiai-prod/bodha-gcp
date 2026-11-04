@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import React, { useEffect, useState, useRef } from "react";
+import { useParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import Header from "@/components/Header";
+import PaperBrandingSelector from "@/components/PaperBrandingSelector";
+import { PaperWorkspaceMain, PaperWorkspaceToolbar, PaperWorkspaceContent } from "@/components/PaperWorkspace";
 import { toast } from "sonner";
 import { useConfirmation } from "@/context/ConfirmationContext";
 import {
-  ArrowLeft,
   Download,
   CaretDown,
   PencilSimple,
@@ -46,9 +47,12 @@ export default function SolutionView() {
   // null | "all" | a question_id — which retry button is mid-request.
   const [filling, setFilling] = useState(null);
   const [docxDownloading, setDocxDownloading] = useState(false);
+  const loadSequence = useRef(0);
 
   const load = async () => {
+    const sequence = ++loadSequence.current;
     const { data } = await api.get(`/papers/${id}`);
+    if (sequence !== loadSequence.current) return;
     setPaper(data);
   };
 
@@ -263,27 +267,25 @@ export default function SolutionView() {
   return (
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
-      <main className="max-w-5xl mx-auto p-6 md:p-12" data-testid="solution-view-page">
+      <PaperWorkspaceMain testId="solution-view-page">
         {/* Toolbar */}
-        <div className="no-print flex items-center justify-between mb-8 flex-wrap gap-3">
-          <Link
-            to={`/papers/${id}`}
-            className="qp-btn-ghost inline-flex items-center gap-2"
-            data-testid="back-to-paper"
-          >
-            <ArrowLeft size={16} weight="bold" /> Back to paper
-          </Link>
-          <div className="flex gap-2">
+        <PaperWorkspaceToolbar backTo={`/papers/${id}`} backLabel="Back to paper" backTestId="back-to-paper">
             {!solution ? (
-              <button
-                onClick={regenerate}
-                disabled={regenerating}
-                className="qp-btn qp-btn-primary"
-                data-testid="generate-solution-button"
-              >
-                <CheckCircle size={16} weight="bold" />
-                {regenerating ? "Generating..." : "Generate solution"}
-              </button>
+              <>
+                <button
+                  onClick={regenerate}
+                  disabled={regenerating}
+                  className="qp-btn qp-btn-primary"
+                  data-testid="generate-solution-button"
+                >
+                  <CheckCircle size={16} weight="bold" />
+                  {regenerating ? "Generating..." : "Generate solution"}
+                </button>
+                <PaperBrandingSelector paper={paper} onPaperChange={(updated) => {
+                  ++loadSequence.current;
+                  setPaper(updated);
+                }} />
+              </>
             ) : editing ? (
               <>
                 <button
@@ -320,6 +322,10 @@ export default function SolutionView() {
                 >
                   <PencilSimple size={16} weight="bold" /> Edit
                 </button>
+                <PaperBrandingSelector paper={paper} onPaperChange={(updated) => {
+                  ++loadSequence.current;
+                  setPaper(updated);
+                }} />
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button className="qp-btn qp-btn-primary" data-testid="download-solution-menu-button">
@@ -337,8 +343,9 @@ export default function SolutionView() {
                 </DropdownMenu>
               </>
             )}
-          </div>
-        </div>
+        </PaperWorkspaceToolbar>
+
+        <PaperWorkspaceContent paper={paper} editing={editing}>
 
         {/* Empty state */}
         {!solution && (
@@ -371,7 +378,7 @@ export default function SolutionView() {
         {/* Solution body */}
         {solution && (
           <div
-            className="bg-white border-2 border-black p-8 md:p-12 hard-shadow-static-lg"
+            className="bg-white border-2 border-black p-8 md:p-12"
             data-testid="solution-body"
           >
             {paper.branding_watermark && <div className="paper-branding-watermark text-center text-xs uppercase tracking-[0.35em] text-neutral-300 mb-2" aria-hidden="true">{paper.branding_watermark}</div>}
@@ -509,7 +516,7 @@ export default function SolutionView() {
                 <h2 className="font-display text-xl md:text-2xl text-[#002FA7] mb-4 border-b border-neutral-300 pb-2">
                   {section.title}
                 </h2>
-                <ol className="space-y-6">
+                <ol className="space-y-4">
                   {(section.questions || []).map((q, qi) => {
                     const qNum = counter++;
                     const solSection = solution.sections?.[si];
@@ -519,7 +526,7 @@ export default function SolutionView() {
                     return (
                       <li
                         key={q.id}
-                        className="border-b border-dashed border-neutral-200 pb-6 last:border-0"
+                        className="border-b border-dashed border-neutral-200 pb-4 last:border-0"
                         data-testid={`solution-item-${q.id}`}
                       >
                         <div className="flex items-start gap-2">
@@ -604,7 +611,8 @@ export default function SolutionView() {
             {paper.branding_footer && <div className="paper-branding-footer text-center mt-3 font-mono text-xs">{paper.branding_footer}</div>}
           </div>
         )}
-      </main>
+        </PaperWorkspaceContent>
+      </PaperWorkspaceMain>
     </div>
   );
 }
