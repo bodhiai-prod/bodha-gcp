@@ -354,16 +354,16 @@ body { font-weight: 400; }
     }
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+/* Keep page scrolling available without reserving or showing a browser gutter. */
+html,
+body {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
 }
-::-webkit-scrollbar-track {
-    background: var(--bg);
-}
-::-webkit-scrollbar-thumb {
-    background: var(--ink);
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+    display: none;
 }
 
 /* ---------------------------------------------------------------------------
