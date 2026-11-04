@@ -201,6 +201,9 @@ body {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.textbook-topic-badges { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:7px; }
+.textbook-topic-badges .qp-badge { padding:2px 6px; font-size:10px; }
+.textbook-row-extract { min-height:32px; height:32px; padding:0 10px; gap:5px; font-size:10px; }
 
 /* Dense library rows keep the title, state, and supporting metadata together.
    The same pattern is used for dashboard and full paper-library listings. */

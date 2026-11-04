@@ -267,7 +267,7 @@ export default function Textbooks() {
                     className="border-b-2 border-black bg-white last:border-b-0"
                     data-testid={`textbook-${tb.id}`}
                   >
-                    <div className="grid min-h-[84px] gap-x-4 gap-y-3 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center xl:grid-cols-[auto_minmax(0,1fr)_auto_auto]">
+                    <div className="grid min-h-[84px] gap-x-4 gap-y-3 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center xl:grid-cols-[auto_minmax(0,1fr)_auto]">
                       <button
                         onClick={() => toggleExpand(tb)}
                         className="self-start pt-0.5 text-left sm:self-center"
@@ -297,31 +297,31 @@ export default function Textbooks() {
                             {tb.subject} · Class {tb.class_name}
                             {tb.is_shared && " · Shared library"}
                           </div>
+                          <div className="textbook-topic-badges">
+                            <span
+                              className={`qp-badge whitespace-nowrap ${
+                                tb.status === "topics_ready"
+                                  ? "qp-badge-success"
+                                  : tb.status === "indexed"
+                                  ? "qp-badge-blue"
+                                  : "qp-badge-red"
+                              }`}
+                            >
+                              {tb.status.replace("_", " ")}
+                            </span>
+                            {tb.topic_count > 0 && (
+                              <span className="qp-badge whitespace-nowrap">
+                                {tb.topic_count} topics
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </button>
-                      <div className="col-span-full flex min-w-0 flex-wrap items-center gap-1 sm:col-span-1 sm:justify-self-end sm:flex-col sm:items-end xl:col-span-1">
-                        <span
-                          className={`qp-badge whitespace-nowrap ${
-                            tb.status === "topics_ready"
-                              ? "qp-badge-success"
-                              : tb.status === "indexed"
-                              ? "qp-badge-blue"
-                              : "qp-badge-red"
-                          }`}
-                        >
-                          {tb.status.replace("_", " ")}
-                        </span>
-                        {tb.topic_count > 0 && (
-                          <span className="qp-badge whitespace-nowrap">
-                            {tb.topic_count} topics
-                          </span>
-                        )}
-                      </div>
                       <div className="col-span-full flex flex-wrap gap-2 sm:col-span-3 sm:justify-self-end xl:col-span-1 xl:flex-nowrap xl:items-center">
                         <button
                           onClick={() => extractTopics(tb.id)}
                           disabled={isTopicExtractionActive(tb) || tb.is_owned === false}
-                          className="qp-btn qp-btn-secondary !px-3 !py-2 flex-1 justify-center whitespace-nowrap text-xs sm:flex-none"
+                          className="qp-btn qp-btn-secondary textbook-row-extract flex-1 justify-center whitespace-nowrap sm:flex-none"
                           title={tb.is_owned === false ? "Shared library — read-only" : undefined}
                           data-testid={`extract-topics-${tb.id}`}
                         >

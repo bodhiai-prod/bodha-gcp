@@ -101,8 +101,8 @@ export default function Dashboard() {
 
         {/* Papers + textbooks */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
-          <div className="lg:col-span-2 lg:-mt-2">
-            <div className="flex items-start justify-between mb-2.5">
+          <div className="lg:col-span-2">
+            <div className="flex items-start justify-between mb-4">
               <div className="overline">// RECENT PAPERS</div>
               <Link
                 to="/papers"

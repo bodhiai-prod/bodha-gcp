@@ -587,25 +587,6 @@ export default function NewPaper() {
                 </div>
               </div>
 
-              <div className="mt-4 border-t border-neutral-200 pt-4">
-                <label className="qp-label">Difficulty</label>
-                <div className="grid grid-cols-3 border-2 border-black">
-                  {DIFFICULTIES.map((d, i) => (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => setDifficulty(d)}
-                      data-testid={`difficulty-${d}-button`}
-                      className={`py-3 font-bold uppercase tracking-wider text-sm transition-colors ${
-                        difficulty === d ? "bg-black text-white" : "bg-white hover:bg-neutral-100"
-                      } ${i !== 2 ? "border-r-2 border-black" : ""}`}
-                    >
-                      {DIFFICULTY_LABELS[d]}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
                 <div>
                   <label className="qp-label" htmlFor="question-count">Questions</label>
@@ -641,6 +622,25 @@ export default function NewPaper() {
                   <p id="diagram-count-help" className={`text-xs mt-1 ${diagramCountError ? "text-red-700 font-semibold" : "text-neutral-500"}`} role={diagramCountError ? "alert" : undefined}>
                     {diagramCountError || "Leave blank for automatic, or 0 for none. (Max 5 diagrams)"}
                   </p>
+                </div>
+              </div>
+
+              <div className="mt-4 border-t border-neutral-200 pt-4">
+                <label className="qp-label">Difficulty</label>
+                <div className="grid grid-cols-3 border-2 border-black">
+                  {DIFFICULTIES.map((d, i) => (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setDifficulty(d)}
+                      data-testid={`difficulty-${d}-button`}
+                      className={`py-3 font-bold uppercase tracking-wider text-sm transition-colors ${
+                        difficulty === d ? "bg-black text-white" : "bg-white hover:bg-neutral-100"
+                      } ${i !== 2 ? "border-r-2 border-black" : ""}`}
+                    >
+                      {DIFFICULTY_LABELS[d]}
+                    </button>
+                  ))}
                 </div>
               </div>
 
