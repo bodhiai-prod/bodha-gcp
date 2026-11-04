@@ -76,8 +76,8 @@ export default function SavedPaperConfigurations({ currentConfiguration, onApply
     <section className="qp-card mb-6 max-w-6xl" data-testid="saved-paper-configurations">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <div className="overline text-neutral-500">// SAVED CONFIGURATIONS</div>
-          <h2 className="font-bold uppercase tracking-wide text-sm mt-2">Reuse your setup</h2>
+          <div className="overline text-neutral-500">// Saved configurations</div>
+          <h2 className="font-medium text-sm mt-2">Reuse your setup</h2>
         </div>
         <div className="flex w-full sm:w-auto gap-2">
           <input
@@ -99,7 +99,7 @@ export default function SavedPaperConfigurations({ currentConfiguration, onApply
       {!loading && configurations.length === 0 && <p className="text-xs text-neutral-500 mt-5">No saved configurations yet.</p>}
       {configurations.length > 0 && (
         <div className="mt-5">
-          <label className="block text-xs font-bold uppercase tracking-wide" htmlFor="saved-configuration-select">
+          <label className="block text-xs font-medium " htmlFor="saved-configuration-select">
             Choose a saved configuration
           </label>
           <div className="relative mt-2 max-w-xl">

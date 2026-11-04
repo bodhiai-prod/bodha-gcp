@@ -93,7 +93,7 @@ export default function QBank() {
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-10">
           <div>
             <div className="overline text-neutral-500 mb-3">
-              // QUESTION BANK
+              // Question bank
             </div>
             <h1 className="font-display text-5xl md:text-6xl">
               Saved
@@ -118,7 +118,7 @@ export default function QBank() {
             data-testid="upload-qpaper-form"
           >
             <div className="overline text-neutral-500 mb-3">
-              // UPLOAD EXISTING PAPER
+              // Upload existing paper
             </div>
             <p className="text-sm text-neutral-600 mb-4">
               Upload a PDF of an existing question paper. The AI will extract

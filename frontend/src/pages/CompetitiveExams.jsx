@@ -66,11 +66,11 @@ export default function CompetitiveExams() {
       <main className="max-w-6xl mx-auto p-6 md:p-12" data-testid="competitive-exams-page">
         <div className="flex items-end justify-between flex-wrap gap-4 mb-10">
           <div>
-            <div className="overline text-neutral-500 mb-2">// COMPETITIVE EXAMS</div>
+            <div className="overline text-neutral-500 mb-2">// Competitive exams</div>
             <h1 className="font-display text-5xl">
               Train against <span className="text-[#002FA7]">past papers.</span>
             </h1>
-            <p className="mt-2 max-w-xl font-bold text-red-700">
+            <p className="mt-2 max-w-xl font-medium text-red-700">
               in progress, stay tuned
             </p>
           </div>
@@ -118,7 +118,7 @@ export default function CompetitiveExams() {
 
         <div className="grid lg:grid-cols-[1fr_360px] gap-6">
           <div>
-            <div className="overline text-neutral-500 mb-3">// YOUR LIBRARY</div>
+            <div className="overline text-neutral-500 mb-3">// Your library</div>
             {loading ? (
               <div className="text-neutral-500 text-sm">Loading…</div>
             ) : exams.length === 0 ? (
@@ -142,7 +142,7 @@ export default function CompetitiveExams() {
                           <h3 className="font-display text-2xl leading-tight">{e.name}</h3>
                           {e.exam_type && e.exam_type !== "GENERIC" && (
                             <span
-                              className="px-2 py-0.5 text-[10px] font-bold uppercase bg-black text-white"
+                              className="px-2 py-0.5 text-[10px] font-medium bg-black text-white"
                               data-testid={`exam-type-${e.exam_type}`}
                             >
                               {e.exam_type.replace("_", " ")}
@@ -172,7 +172,7 @@ export default function CompetitiveExams() {
               data-testid="new-exam-form"
             >
               <fieldset disabled className="opacity-45 cursor-not-allowed">
-                <div className="overline text-neutral-500 mb-2">// NEW EXAM</div>
+                <div className="overline text-neutral-500 mb-2">// New exam</div>
                 <h3 className="font-display text-2xl mb-3">Create exam</h3>
                 <div className="mb-3">
                   <label className="qp-label">Name</label>

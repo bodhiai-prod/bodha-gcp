@@ -56,7 +56,7 @@ export default function Dashboard() {
         {/* Hero */}
         <section className="mb-12">
           <div className="overline text-neutral-500 mb-3">
-            // CONTROL ROOM / {new Date().toLocaleDateString("en-US", {
+            // Control room / {new Date().toLocaleDateString("en-US", {
               weekday: "long",
               year: "numeric",
               month: "long",
@@ -75,7 +75,7 @@ export default function Dashboard() {
               className="qp-btn qp-btn-primary text-base py-3 px-5 self-start md:self-end"
             >
               <Plus size={18} weight="bold" />
-              Generate New Paper
+              Generate new paper
             </Link>
           </div>
         </section>
@@ -83,17 +83,17 @@ export default function Dashboard() {
         {/* Stats */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-8 mb-12">
           <StatCard
-            label="Textbooks Indexed"
+            label="Textbooks indexed"
             value={textbooks.length}
             testid="stat-textbooks"
           />
           <StatCard
-            label="Papers Generated"
+            label="Papers generated"
             value={papers.length}
             testid="stat-papers"
           />
           <StatCard
-            label="Questions Saved"
+            label="Questions saved"
             value={qbankCount}
             testid="stat-qbank"
           />
@@ -103,10 +103,10 @@ export default function Dashboard() {
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
           <div className="lg:col-span-2">
             <div className="flex items-start justify-between mb-4">
-              <div className="overline">// RECENT PAPERS</div>
+              <div className="overline">// Recent papers</div>
               <Link
                 to="/papers"
-                className="text-xs font-bold uppercase tracking-wider leading-none hover:text-[#002FA7]"
+                className="text-xs font-medium leading-none hover:text-[#002FA7]"
                 data-testid="link-view-all-papers"
               >
                 View all
@@ -119,7 +119,7 @@ export default function Dashboard() {
                 <EmptyState
                   title="No papers yet"
                   description="Generate your first AI-powered question paper to see it here."
-                  actionLabel="Generate Paper"
+                  actionLabel="Generate paper"
                   onAction={() => navigate("/papers/new")}
                   testid="papers-empty"
                 />
@@ -135,7 +135,7 @@ export default function Dashboard() {
                         : ""
                     }`}
                   >
-                    <FileText size={18} weight="fill" className="paper-list-icon" aria-hidden="true" />
+                    <FileText size={18} weight="regular" className="paper-list-icon" aria-hidden="true" />
                     <div className="paper-list-link">
                       <div className="paper-list-title">{p.title}</div>
                       <div className="paper-list-detail">
@@ -154,7 +154,7 @@ export default function Dashboard() {
           </div>
 
           <div>
-            <div className="overline mb-4">// TEXTBOOKS</div>
+            <div className="overline mb-4">// Textbooks</div>
             <div className="space-y-3">
               <Link
                 to="/textbooks"
@@ -164,7 +164,7 @@ export default function Dashboard() {
                 <div className="flex items-center gap-3">
                   <BookOpen size={22} weight="bold" />
                   <div className="flex-1">
-                    <div className="font-bold uppercase text-sm">
+                    <div className="font-medium text-sm">
                       Manage textbooks
                     </div>
                     <div className="text-xs text-neutral-500 font-mono">
@@ -182,7 +182,7 @@ export default function Dashboard() {
                 <div className="flex items-center gap-3">
                   <Bookmark size={22} weight="bold" />
                   <div className="flex-1">
-                    <div className="font-bold uppercase text-sm">
+                    <div className="font-medium text-sm">
                       Question Bank
                     </div>
                     <div className="text-xs text-neutral-500 font-mono">

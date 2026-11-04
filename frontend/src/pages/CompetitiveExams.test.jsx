@@ -28,7 +28,7 @@ test("locks competitive-page creation controls and shows the in-progress message
 
   const status = [...container.querySelectorAll("p")].find((element) => element.textContent === "in progress, stay tuned");
   expect(status).not.toBeNull();
-  expect(status.className).toContain("font-bold");
+  expect(status.className).toContain("font-medium");
   expect(status.className).toContain("text-red-700");
   expect(container.textContent).toContain("Create your first test");
   expect([...container.querySelectorAll('[data-testid^="preset-"]')]).toHaveLength(5);

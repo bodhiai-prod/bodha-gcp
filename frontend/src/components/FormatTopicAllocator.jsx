@@ -101,7 +101,7 @@ export default function FormatTopicAllocator({ formats, allocations, onChange, b
 
   return <div data-testid="format-topic-allocator">
     <div className="flex items-start justify-between gap-3 mb-3">
-      <div><div className="overline">// ASSIGN TOPICS BY FORMAT</div><strong className="block mt-1">{format.label}</strong></div>
+      <div><div className="overline">// Assign topics by format</div><strong className="block mt-1">{format.label}</strong></div>
       <div className="flex items-center gap-2"><button type="button" className="qp-btn qp-btn-secondary text-xs" disabled={!canAutoAssign} onClick={autoAssign} data-testid="format-auto-assign">Auto assign</button><span className={`qp-badge ${assigned === format.count ? "qp-badge-success" : "qp-badge-red"}`}>{format.label}: {assigned}/{format.count} filled</span></div>
     </div>
     {!canAutoAssign && bookIds.length > 0 && <p className="text-xs text-neutral-500 mb-3">Extract topics from a selected textbook before auto assigning.</p>}
@@ -127,7 +127,7 @@ export default function FormatTopicAllocator({ formats, allocations, onChange, b
     {assigned > format.count && <p role="alert" className="text-sm text-red-700 mt-3">Reduce this format by {assigned - format.count} question{assigned - format.count === 1 ? "" : "s"}.</p>}
     <div className="section-navigation mt-4">
       <button type="button" className="qp-btn qp-btn-secondary" onClick={formatIndex === 0 ? onBack : () => setFormatIndex(formatIndex - 1)}>{formatIndex === 0 ? "Back to mix" : "Previous format"}</button>
-      <span className="text-xs font-bold">Format {formatIndex + 1} of {formats.length}</span>
+      <span className="text-xs font-medium">Format {formatIndex + 1} of {formats.length}</span>
       {formatIndex < formats.length - 1
         ? <button type="button" className="qp-btn qp-btn-primary" disabled={assigned !== format.count} onClick={() => setFormatIndex(formatIndex + 1)}>Next format</button>
         : <button type="button" className="qp-btn qp-btn-primary" disabled={!status.complete} onClick={onConfirm}>Confirm topics</button>}

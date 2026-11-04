@@ -24,9 +24,9 @@ export default function PaperStudioLayout({ children }) {
       <aside className="studio-sidebar no-print">
         <Link to={user?.role === "student" ? "/student" : "/"} className="studio-brand" aria-label="Bodha AI home">
           <span className="studio-brand-icon"><Stack size={24} weight="fill" /></span>
-          <span>Bodha<span className="studio-accent"> AI</span><small>Question Paper Studio</small></span>
+          <span>Bodha<span className="studio-accent"> AI</span><small>Question paper studio</small></span>
         </Link>
-        <div className="studio-nav-caption">WORKSPACE</div>
+        <div className="studio-nav-caption">Workspace</div>
         <nav aria-label="Workspace navigation" className="studio-nav">
           {links.map(({ to, label, icon: Icon }) => (
             <NavLink key={to} to={to} end className={({ isActive }) => `studio-nav-link ${isActive ? "is-active" : ""}`}>

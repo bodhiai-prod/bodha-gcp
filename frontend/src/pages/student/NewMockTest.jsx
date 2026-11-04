@@ -106,7 +106,7 @@ export default function NewMockTest() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-3xl mx-auto p-6 md:p-12">
-        <div className="overline text-neutral-500 mb-2">// NEW MOCK TEST</div>
+        <div className="overline text-neutral-500 mb-2">// New mock test</div>
         <h1 className="font-display text-5xl mb-2">Design your practice.</h1>
         <p className="text-neutral-600 mb-8">
           Pick a textbook and topics, choose difficulty and duration. We'll
@@ -175,7 +175,7 @@ export default function NewMockTest() {
                     key={d}
                     onClick={() => setDifficulty(d)}
                     data-testid={`mock-diff-${d}`}
-                    className={`flex-1 py-2 text-xs font-bold uppercase ${
+                    className={`flex-1 py-2 text-xs font-medium ${
                       difficulty === d
                         ? "bg-black text-white"
                         : "bg-white text-black"

@@ -192,7 +192,7 @@ export default function CompetitiveExamDetail() {
 
         <div className="flex items-end justify-between flex-wrap gap-4 mb-8">
           <div>
-            <div className="overline text-neutral-500 mb-2">// EXAM LIBRARY</div>
+            <div className="overline text-neutral-500 mb-2">// Exam library</div>
             <h1 className="font-display text-5xl">{exam.name}</h1>
             {exam.description && (
               <p className="text-neutral-600 mt-2">{exam.description}</p>
@@ -200,7 +200,7 @@ export default function CompetitiveExamDetail() {
             <div className="text-xs text-neutral-500 mt-2">
               {exam.exam_type && exam.exam_type !== "GENERIC" && (
                 <span
-                  className="mr-2 px-2 py-0.5 text-[10px] font-bold uppercase bg-black text-white"
+                  className="mr-2 px-2 py-0.5 text-[10px] font-medium bg-black text-white"
                   data-testid={`detail-exam-type-${exam.exam_type}`}
                 >
                   {exam.exam_type.replace("_", " ")}
@@ -218,7 +218,7 @@ export default function CompetitiveExamDetail() {
         <div className="grid lg:grid-cols-[1fr_1fr] gap-6">
           {/* Upload + past papers */}
           <div>
-            <div className="overline text-neutral-500 mb-3">// PAST PAPERS</div>
+            <div className="overline text-neutral-500 mb-3">// Past papers</div>
             <form
               onSubmit={onUpload}
               className="qp-card hard-shadow-static mb-5"
@@ -266,7 +266,7 @@ export default function CompetitiveExamDetail() {
                     >
                       <FileText size={20} weight="fill" className="text-neutral-700" />
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-bold truncate">
+                        <div className="text-sm font-medium truncate">
                           {p.original_filename}
                         </div>
                         <div className="text-xs text-neutral-500">
@@ -275,7 +275,7 @@ export default function CompetitiveExamDetail() {
                         </div>
                       </div>
                       <span
-                        className={`px-2 py-0.5 text-[10px] font-bold uppercase ${pill.cls}`}
+                        className={`px-2 py-0.5 text-[10px] font-medium ${pill.cls}`}
                       >
                         {pill.label}
                       </span>
@@ -295,7 +295,7 @@ export default function CompetitiveExamDetail() {
 
           {/* Generate new paper */}
           <div>
-            <div className="overline text-neutral-500 mb-3">// NEW PRACTICE PAPER</div>
+            <div className="overline text-neutral-500 mb-3">// New practice paper</div>
             <div className="qp-card hard-shadow-static space-y-4">
               <div>
                 <label className="qp-label">
@@ -314,7 +314,7 @@ export default function CompetitiveExamDetail() {
                           key={t}
                           onClick={() => togglePill(t)}
                           data-testid={`topic-pill-${t}`}
-                          className={`px-3 py-1 text-xs font-bold border-2 transition-colors ${
+                          className={`px-3 py-1 text-xs font-medium border-2 transition-colors ${
                             active
                               ? "border-[#002FA7] bg-[#002FA7] text-white"
                               : "border-black bg-white"
@@ -334,7 +334,7 @@ export default function CompetitiveExamDetail() {
                   data-testid="locked-format-card"
                 >
                   <div className="overline text-neutral-500 mb-2">
-                    // OFFICIAL FORMAT (LOCKED)
+                    // Official format (locked)
                   </div>
                   <div className="font-display text-lg mb-1">
                     {lockedFormat.label}
@@ -404,7 +404,7 @@ export default function CompetitiveExamDetail() {
                       key={d}
                       onClick={() => setDifficulty(d)}
                       data-testid={`comp-diff-${d}`}
-                      className={`flex-1 py-2 text-xs font-bold uppercase ${
+                      className={`flex-1 py-2 text-xs font-medium ${
                         difficulty === d
                           ? "bg-black text-white"
                           : "bg-white text-black"
@@ -455,7 +455,7 @@ export default function CompetitiveExamDetail() {
                   className="border-2 border-[#002FA7] bg-[#EEF2FF] p-3 text-xs"
                   data-testid="rag-preview-card"
                 >
-                  <div className="font-bold mb-1">
+                  <div className="font-medium mb-1">
                     Anchors for "{ragPreview.topic}" — easy{" "}
                     {ragPreview.distribution.easy} · medium{" "}
                     {ragPreview.distribution.medium} · hard{" "}
@@ -469,7 +469,7 @@ export default function CompetitiveExamDetail() {
                     <ul className="space-y-1 mt-1 list-disc pl-4">
                       {ragPreview.anchors.map((a) => (
                         <li key={a.id}>
-                          <span className="font-bold uppercase mr-1">
+                          <span className="font-medium mr-1">
                             [{a.difficulty}]
                           </span>
                           {(a.text || "").slice(0, 110)}…

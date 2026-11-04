@@ -497,11 +497,11 @@ export default function PaperView() {
             data-testid="paper-generating-card"
           >
             <div className="inline-flex h-12 w-12 rounded-full border-2 border-[#002FA7] border-t-transparent animate-spin mb-6" />
-            <h1 className="text-2xl font-semibold text-neutral-900 mb-2">
+            <h1 className="text-2xl font-medium text-neutral-900 mb-2">
               {paper.title || "Generating paper…"}
             </h1>
             <p className="text-neutral-600">
-              {paper.generation_status === "reviewing" ? "We are validating and completing the remaining questions." : <>Our Engine is drafting questions for <b>{paper.subject}</b> · Class <b>{paper.class_name}</b>.</>}
+              {paper.generation_status === "reviewing" ? "We are validating and completing the remaining questions." : <>Our engine is drafting questions for <b>{paper.subject}</b> · Class <b>{paper.class_name}</b>.</>}
             </p>
             <p className="text-sm text-neutral-500 mt-4">
               Progress updates automatically through each generation phase.
@@ -520,11 +520,11 @@ export default function PaperView() {
   }
 
   if (paper.generation_status === "cancelled" && !(paper.sections || []).some(section => section.questions?.length)) {
-    return <div className="min-h-screen bg-[#FAFAFA]"><Header /><main className="max-w-3xl mx-auto p-6 md:p-12" data-testid="paper-cancelled-page"><Link to="/" className="qp-btn-ghost inline-flex items-center gap-2 mb-8"><ArrowLeft size={16} weight="bold" /> Dashboard</Link><div className="border border-neutral-200 bg-white rounded-2xl p-10 text-center"><h1 className="text-2xl font-semibold text-neutral-900 mb-2">Generation cancelled</h1><p className="text-neutral-600">Generation has stopped. Saved progress is retained for your next completion attempt.</p><button type="button" onClick={regenerateAll} className="qp-btn qp-btn-primary mt-6"><ArrowClockwise size={16} weight="bold" /> Restart generation</button></div></main></div>;
+    return <div className="min-h-screen bg-[#FAFAFA]"><Header /><main className="max-w-3xl mx-auto p-6 md:p-12" data-testid="paper-cancelled-page"><Link to="/" className="qp-btn-ghost inline-flex items-center gap-2 mb-8"><ArrowLeft size={16} weight="bold" /> Dashboard</Link><div className="border border-neutral-200 bg-white rounded-2xl p-10 text-center"><h1 className="text-2xl font-medium text-neutral-900 mb-2">Generation cancelled</h1><p className="text-neutral-600">Generation has stopped. Saved progress is retained for your next completion attempt.</p><button type="button" onClick={regenerateAll} className="qp-btn qp-btn-primary mt-6"><ArrowClockwise size={16} weight="bold" /> Restart generation</button></div></main></div>;
   }
 
   if (paper.generation_status === "needs_review" && !hasSavedQuestions) {
-    return <div className="min-h-screen bg-[#FAFAFA]"><Header /><main className="max-w-3xl mx-auto p-6 md:p-12"><Link to="/" className="qp-btn-ghost inline-flex items-center gap-2 mb-8"><ArrowLeft size={16} weight="bold" /> Dashboard</Link><div className="border border-amber-200 bg-amber-50 rounded-2xl p-10 text-center"><WarningCircle size={36} className="mx-auto text-amber-700 mb-4" /><h1 className="text-2xl font-semibold text-amber-900 mb-2">Generation could not complete</h1><p className="text-amber-800">{paper.presentation?.message || "Generation needs another completion attempt. Saved progress is retained."}</p><button type="button" onClick={() => generateMissing(null)} className="qp-btn qp-btn-primary mt-6"><ArrowClockwise size={16} weight="bold" /> Finish remaining items</button></div></main></div>;
+    return <div className="min-h-screen bg-[#FAFAFA]"><Header /><main className="max-w-3xl mx-auto p-6 md:p-12"><Link to="/" className="qp-btn-ghost inline-flex items-center gap-2 mb-8"><ArrowLeft size={16} weight="bold" /> Dashboard</Link><div className="border border-amber-200 bg-amber-50 rounded-2xl p-10 text-center"><WarningCircle size={36} className="mx-auto text-amber-700 mb-4" /><h1 className="text-2xl font-medium text-amber-900 mb-2">Generation could not complete</h1><p className="text-amber-800">{paper.presentation?.message || "Generation needs another completion attempt. Saved progress is retained."}</p><button type="button" onClick={() => generateMissing(null)} className="qp-btn qp-btn-primary mt-6"><ArrowClockwise size={16} weight="bold" /> Finish remaining items</button></div></main></div>;
   }
 
   if (paper.generation_status === "failed" && !hasSavedQuestions) {
@@ -555,7 +555,7 @@ export default function PaperView() {
             className="border border-red-200 bg-red-50 rounded-2xl p-10"
             data-testid="paper-failed-card"
           >
-            <h1 className="text-2xl font-semibold text-red-900 mb-2">
+            <h1 className="text-2xl font-medium text-red-900 mb-2">
               Generation failed
             </h1>
             <p className="text-red-800 mb-2 text-sm font-mono break-words">
@@ -638,7 +638,7 @@ export default function PaperView() {
       <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="paper-view-page">
         {completionLive && (
           <div className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4" data-testid="paper-quality-running-banner">
-            <div className="font-bold uppercase tracking-wider text-sm">Checking and completing</div>
+            <div className="font-medium text-sm">Checking and completing</div>
             <p className="text-sm text-neutral-700 mt-1">
               We are completing the remaining questions and alternatives. Downloads unlock when the full paper is ready.
               {paper.completion && ` ${paper.completion.actual_scored_parts || 0}/${paper.completion.target_scored_parts || 0} parts drafted; ${paper.completion.pending_alternatives || 0} alternatives pending. ${paper.completion.actual_printed_questions || 0}/${paper.completion.target_printed_questions || 0} printed questions.`}
@@ -649,13 +649,13 @@ export default function PaperView() {
         )}
         {!isPartial && !completionLive && !templateRecovery && !choiceRecovery && paper.quality_review?.status === "needs_review" && (
           <div className="no-print mb-6 border-2 border-amber-300 bg-amber-50 p-4" data-testid="paper-quality-review-banner">
-            <div className="font-bold uppercase tracking-wider text-sm text-amber-900">Completion needs another attempt</div>
+            <div className="font-medium text-sm text-amber-900">Completion needs another attempt</div>
             <p className="text-sm text-amber-800 mt-1">{paper.presentation?.message || "The safe questions remain available while the affected content is reviewed."}</p>
           </div>
         )}
         {!completionLive && templateRecovery && (
           <div className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4" data-testid="template-recovery-banner">
-            <div className="font-bold uppercase tracking-wider text-sm">
+            <div className="font-medium text-sm">
               {recoveryLive ? "Template recovery in progress" : "Template recovery needs review"}
             </div>
             <p className="text-sm text-neutral-700 mt-1">
@@ -668,7 +668,7 @@ export default function PaperView() {
         )}
         {!completionLive && !templateRecovery && choiceRecovery && (
           <div className="no-print mb-6 border-2 border-[#FFC300] bg-yellow-50 p-4" data-testid="internal-choice-recovery-banner">
-            <div className="font-bold uppercase tracking-wider text-sm">
+            <div className="font-medium text-sm">
               {choiceRepairLive ? "Repairing internal OR choices" : "Internal OR choices need repair"}
             </div>
             <p className="text-sm text-neutral-700 mt-1">
@@ -695,7 +695,7 @@ export default function PaperView() {
           >
             <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin shrink-0" />
             <div className="text-sm">
-              <span className="font-bold uppercase tracking-wider">
+              <span className="font-medium ">
                 Adding {topup.requested} question
                 {topup.requested === 1 ? "" : "s"}
               </span>
@@ -711,7 +711,7 @@ export default function PaperView() {
             className="no-print mb-6 border-2 border-[#E63946] bg-red-50 p-4"
             data-testid="topup-failed-banner"
           >
-            <div className="font-bold uppercase tracking-wider text-sm text-red-900">
+            <div className="font-medium text-sm text-red-900">
               Could not add the missing questions
             </div>
             <p className="text-sm text-red-800 mt-1 break-words">
@@ -731,7 +731,7 @@ export default function PaperView() {
             className="no-print mb-6 border-2 border-[#E63946] bg-red-50 p-4"
             data-testid="regen-failed-banner"
           >
-            <div className="font-bold uppercase tracking-wider text-sm text-red-900">
+            <div className="font-medium text-sm text-red-900">
               Could not regenerate that question
             </div>
             <p className="text-sm text-red-800 mt-1 font-mono break-words">
@@ -756,7 +756,7 @@ export default function PaperView() {
               className="shrink-0"
             />
             <div className="flex-1">
-              <div className="font-bold uppercase tracking-wider text-sm">
+              <div className="font-medium text-sm">
                 {missingCount > 0
                   ? `${missingCount} question${missingCount === 1 ? "" : "s"} missing`
                   : paper.presentation?.action === "review_placement" ? "Review question placement" : "Questions or alternatives pending"}
@@ -767,7 +767,7 @@ export default function PaperView() {
                   : "The AI's response was cut off before this paper was finished. "}
                 {paper.presentation?.message || "Complete missing questions and OR alternatives while keeping unaffected questions."}
               </div>
-              {!completionPending && !paper.completion && <label className="flex items-center gap-2 mt-3 text-xs font-bold uppercase tracking-wider">
+              {!completionPending && !paper.completion && <label className="flex items-center gap-2 mt-3 text-xs font-medium ">
                 How many to add
                 <input
                   type="number"
@@ -824,7 +824,7 @@ export default function PaperView() {
         {!exportWarningIgnored && !isPartial && paper.quality_review?.status !== "needs_review" && paper.instruction_check?.honoured === false && !busy && !templateRecovery && !choiceRecovery && (
           <div className="no-print mb-6 border border-amber-300 bg-amber-50 p-4"
             data-testid="paper-requirements-check">
-            <p className="font-bold text-sm">Some requested settings need review</p>
+            <p className="font-medium text-sm">Some requested settings need review</p>
             <p className="mt-2 text-sm">
               {"Review the requested topics, marks and alternatives before downloading."}
             </p>
@@ -878,14 +878,14 @@ export default function PaperView() {
                   <CheckCircle size={16} weight="bold" /> Solution
                 </Link>
                 <div className="flex items-center gap-1 border-2 border-black px-2" data-testid="paper-branding-status">
-                  <span className="text-xs font-bold whitespace-nowrap">{hasAppliedBranding ? `Applied: ${paper.branding_name || "Legacy branding"}` : "No branding applied"}</span>
+                  <span className="text-xs font-medium whitespace-nowrap">{hasAppliedBranding ? `Applied: ${paper.branding_name || "Legacy branding"}` : "No branding applied"}</span>
                   <select value={selectedBrandingId} onChange={(event) => setSelectedBrandingId(event.target.value)} className="text-xs bg-white py-1 max-w-36" aria-label="Branding preset">
                     <option value="">Choose preset</option>
                     {brandingPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
                   </select>
                 </div>
                 <button onClick={applyBranding} disabled={brandingApplying || !selectedBrandingId} className="qp-btn qp-btn-secondary" data-testid="apply-paper-branding">
-                  {brandingApplying ? "Applying..." : hasAppliedBranding ? "Replace Branding" : "Apply Branding"}
+                  {brandingApplying ? "Applying..." : hasAppliedBranding ? "Replace branding" : "Apply branding"}
                 </button>
                 {hasAppliedBranding && <button onClick={removeBranding} disabled={brandingApplying} className="qp-btn qp-btn-secondary" data-testid="remove-paper-branding">Remove</button>}
                 <DropdownMenu>
@@ -895,10 +895,10 @@ export default function PaperView() {
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="z-50 min-w-36 rounded-none border-2 border-black bg-white p-1 shadow-none">
-                    <DropdownMenuItem onSelect={download} className="cursor-pointer rounded-none px-3 py-2 font-bold focus:bg-neutral-100" data-testid="download-pdf-button">
+                    <DropdownMenuItem onSelect={download} className="cursor-pointer rounded-none px-3 py-2 font-medium focus:bg-neutral-100" data-testid="download-pdf-button">
                       <Download size={16} weight="bold" /> PDF
                     </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={downloadDocx} disabled={docxDownloading} className="cursor-pointer rounded-none px-3 py-2 font-bold focus:bg-neutral-100" data-testid="download-docx-button">
+                    <DropdownMenuItem onSelect={downloadDocx} disabled={docxDownloading} className="cursor-pointer rounded-none px-3 py-2 font-medium focus:bg-neutral-100" data-testid="download-docx-button">
                       <Download size={16} weight="bold" /> {docxDownloading ? "Preparing..." : "DOCX"}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
@@ -1128,7 +1128,7 @@ export default function PaperView() {
                                         updateQ(si, qi, { correct_option: oi })
                                       }
                                       data-testid={`edit-q-correct-${q.id}-${oi}`}
-                                      className={`w-7 h-7 border-2 text-xs font-bold shrink-0 ${
+                                      className={`w-7 h-7 border-2 text-xs font-medium shrink-0 ${
                                         isCorrect
                                           ? "border-green-700 bg-green-700 text-white"
                                           : "border-black bg-white"
@@ -1209,7 +1209,7 @@ export default function PaperView() {
                                     </span>
                                     {isCorrect && (
                                       <span
-                                        className="no-print text-[10px] uppercase tracking-wider font-bold text-green-700 bg-green-50 px-1.5 py-0.5"
+                                        className="no-print text-[10px] font-medium text-green-700 bg-green-50 px-1.5 py-0.5"
                                         data-testid={`mcq-correct-${q.id}`}
                                       >
                                         Correct

@@ -86,7 +86,7 @@ test("queued continuation keeps saved paper on screen", async () => {
 test("generation screen identifies the drafting engine", async () => {
   await render(paper({ generation_status: "generating", sections: [] }));
   expect(container.querySelector('[data-testid="paper-generating-page"]')).not.toBeNull();
-  expect(container.textContent).toContain("Our Engine is drafting questions for");
+  expect(container.textContent).toContain("Our engine is drafting questions for");
   expect(container.textContent).not.toContain("The AI is drafting questions for");
 });
 test("OR-only shortfall still offers generate pending", async () => {

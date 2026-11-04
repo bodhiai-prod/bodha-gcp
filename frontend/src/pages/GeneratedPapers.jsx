@@ -5,7 +5,6 @@ import Header from "@/components/Header";
 import PaperStatusBadge from "@/components/PaperStatusBadge";
 import {
   FileText,
-  ArrowRight,
   MagnifyingGlass,
   Plus,
   Trash,
@@ -98,7 +97,7 @@ export default function GeneratedPapers() {
         data-testid="generated-papers-page"
       >
         <div className="overline text-neutral-500 mb-3">
-          // ALL GENERATED PAPERS ({papers.length})
+          // All generated papers ({papers.length})
         </div>
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-10">
           <h1 className="font-display text-5xl md:text-6xl leading-[0.9]">
@@ -179,7 +178,7 @@ export default function GeneratedPapers() {
                   idx !== visiblePapers.length - 1 ? "border-b border-neutral-200" : ""
                 }`}
               >
-                <FileText size={18} weight="fill" className="paper-list-icon" aria-hidden="true" />
+                <FileText size={18} weight="regular" className="paper-list-icon" aria-hidden="true" />
                 <Link to={`/papers/${p.id}`} className="paper-list-link">
                   <div className="paper-list-title">{p.title}</div>
                   <div className="paper-list-detail">
@@ -192,9 +191,6 @@ export default function GeneratedPapers() {
                         : ""}
                     </span>
                   </div>
-                </Link>
-                <Link to={`/papers/${p.id}`} className="paper-list-open" aria-label={`Open ${p.title || "paper"}`}>
-                  <ArrowRight size={20} weight="regular" aria-hidden="true" />
                 </Link>
                 <button
                   type="button"

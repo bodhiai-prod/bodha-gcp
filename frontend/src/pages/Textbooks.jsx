@@ -165,10 +165,10 @@ export default function Textbooks() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="textbooks-page">
-        <div className="overline text-neutral-500 mb-3">// TEXTBOOK INDEX</div>
+        <div className="overline text-neutral-500 mb-3">// Textbook index</div>
         <h1 className="font-display text-5xl md:text-6xl mb-10">
           Textbooks &<br />
-          <span className="text-[#002FA7]">Topic Extraction.</span>
+          <span className="text-[#002FA7]">Topic extraction.</span>
         </h1>
 
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 md:gap-8 min-w-0">
@@ -178,7 +178,7 @@ export default function Textbooks() {
             className="lg:col-span-2 qp-card hard-shadow-static"
             data-testid="textbook-upload-form"
           >
-            <div className="overline text-neutral-500 mb-3">// NEW UPLOAD</div>
+            <div className="overline text-neutral-500 mb-3">// New upload</div>
             <h2 className="font-display text-3xl mb-6">Upload PDF</h2>
 
             <div className="mb-4">
@@ -216,7 +216,7 @@ export default function Textbooks() {
             >
               <UploadSimple size={32} weight="bold" />
               <div
-                className="mt-3 max-w-full break-all text-center text-sm font-bold uppercase tracking-wider line-clamp-2"
+                className="mt-3 max-w-full break-all text-center text-sm font-medium line-clamp-2"
                 title={file?.name}
                 aria-label={file ? `Selected PDF: ${file.name}` : undefined}
               >
@@ -247,7 +247,7 @@ export default function Textbooks() {
           {/* List */}
           <div className="lg:col-span-3 min-w-0">
             <div className="overline text-neutral-500 mb-3">
-              // INDEXED ({textbooks.length})
+              // Indexed ({textbooks.length})
             </div>
             {textbooks.length === 0 ? (
               <div className="border-2 border-black bg-white p-10 text-center">
@@ -288,7 +288,7 @@ export default function Textbooks() {
                       >
                         <div className="flex-1 min-w-0">
                           <div
-                            className="textbook-filename font-bold leading-snug"
+                            className="textbook-filename font-medium leading-snug"
                             title={tb.original_filename}
                           >
                             {tb.original_filename}
@@ -356,7 +356,7 @@ export default function Textbooks() {
                                 key={i}
                                 data-testid={`topic-${tb.id}-${i}`}
                               >
-                                <div className="flex items-center gap-2 font-bold">
+                                <div className="flex items-center gap-2 font-medium">
                                   <CheckCircle
                                     size={14}
                                     weight="fill"

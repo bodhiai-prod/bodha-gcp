@@ -29,8 +29,8 @@ const TopicRow = ({ name, stats }) => {
       data-testid={`result-topic-${name}`}
     >
       <div className="flex items-center justify-between mb-1">
-        <div className="text-sm font-bold">{name}</div>
-        <div className="text-xs font-bold">
+        <div className="text-sm font-medium">{name}</div>
+        <div className="text-xs font-medium">
           {stats.correct}/{stats.count} correct · {pct}%
         </div>
       </div>
@@ -121,7 +121,7 @@ export default function MockTestResult() {
         <div className="border-2 border-black bg-white p-8 hard-shadow mb-8">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <div className="overline text-neutral-500 mb-2">// RESULT</div>
+              <div className="overline text-neutral-500 mb-2">// Result</div>
               <h1 className="font-display text-4xl mb-1">{paper?.title}</h1>
               <p className="text-neutral-600 text-sm">
                 {paper?.subject} · Class {paper?.class_name}
@@ -135,7 +135,7 @@ export default function MockTestResult() {
                   <span className="text-2xl">%</span>
                 </div>
               </div>
-              <div className={`text-sm font-bold mt-1 ${band.color}`}>
+              <div className={`text-sm font-medium mt-1 ${band.color}`}>
                 {band.label} ·{" "}
                 <span data-testid="result-marks">
                   {score?.obtained}/{score?.total} marks
@@ -146,7 +146,7 @@ export default function MockTestResult() {
           </div>
         </div>
 
-        <h2 className="overline text-neutral-500 mb-3">// TOPIC BREAKDOWN</h2>
+        <h2 className="overline text-neutral-500 mb-3">// Topic breakdown</h2>
         <div className="grid sm:grid-cols-2 gap-3 mb-8" data-testid="result-topic-breakdown">
           {Object.entries(score?.by_topic || {}).map(([name, stats]) => (
             <TopicRow key={name} name={name} stats={stats} />
@@ -159,14 +159,14 @@ export default function MockTestResult() {
             data-testid="result-practice-cta"
           >
             <div>
-              <div className="font-bold mb-1 flex items-center gap-2">
+              <div className="font-medium mb-1 flex items-center gap-2">
                 <Sparkle size={18} weight="fill" className="text-[#002FA7]" />
                 Practice recommendation
               </div>
               <div className="text-sm text-neutral-700">
                 You're below 50% on {weakTopics.length} topic
                 {weakTopics.length === 1 ? "" : "s"}:{" "}
-                <span className="font-bold">{weakTopics.join(", ")}</span>. Drill them
+                <span className="font-medium">{weakTopics.join(", ")}</span>. Drill them
                 with a focused practice set?
               </div>
             </div>
@@ -181,7 +181,7 @@ export default function MockTestResult() {
           </div>
         )}
 
-        <h2 className="overline text-neutral-500 mb-3">// QUESTION REVIEW</h2>
+        <h2 className="overline text-neutral-500 mb-3">// Question review</h2>
         <div className="space-y-4">
           {allQs.map((q, idx) => {
             const ans = (answers || {})[q.id] || {};
@@ -203,7 +203,7 @@ export default function MockTestResult() {
                   ) : (
                     <XCircle size={22} weight="fill" className="text-red-500 shrink-0 mt-1" />
                   )}
-                  <div className="text-base font-bold flex-1 min-w-0">
+                  <div className="text-base font-medium flex-1 min-w-0">
                     Q{idx + 1}. <MathText text={q.question || ""} />
                   </div>
                 </div>
@@ -223,19 +223,19 @@ export default function MockTestResult() {
                               : "border-neutral-200"
                           }`}
                         >
-                          <span className="font-bold w-5">
+                          <span className="font-medium w-5">
                             {String.fromCharCode(65 + oi)}.
                           </span>
                           <span className="flex-1 min-w-0">
                             <MathText text={String(opt)} />
                           </span>
                           {isAns && (
-                            <span className="text-xs font-bold text-green-700 uppercase">
+                            <span className="text-xs font-medium text-green-700 ">
                               Correct
                             </span>
                           )}
                           {isPick && !isAns && (
-                            <span className="text-xs font-bold text-red-600 uppercase">
+                            <span className="text-xs font-medium text-red-600 ">
                               Your pick
                             </span>
                           )}

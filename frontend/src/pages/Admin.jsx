@@ -24,13 +24,13 @@ import {
 } from "@phosphor-icons/react";
 
 const TABS = [
-  { key: "usage", label: "Usage & Reliability" },
-  { key: "library", label: "Shared Library" },
-  { key: "textbooks", label: "All Textbooks" },
-  { key: "papers", label: "All Papers" },
+  { key: "usage", label: "Usage & reliability" },
+  { key: "library", label: "Shared library" },
+  { key: "textbooks", label: "All textbooks" },
+  { key: "papers", label: "All papers" },
   { key: "users", label: "Users" },
   { key: "activity", label: "Activity" },
-  { key: "upload", label: "Bulk Upload" },
+  { key: "upload", label: "Bulk upload" },
 ];
 
 export default function Admin() {
@@ -168,7 +168,7 @@ export default function Admin() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="admin-page">
-        <div className="overline text-neutral-500 mb-3">// ADMIN CONSOLE</div>
+        <div className="overline text-neutral-500 mb-3">// Admin console</div>
         <h1 className="font-display text-5xl md:text-6xl mb-10">
           School
           <br />
@@ -195,7 +195,7 @@ export default function Admin() {
             />
             <StatCard
               icon={<ShareNetwork size={20} weight="bold" />}
-              label="Shared Library"
+              label="Shared library"
               value={overview.textbooks_shared}
               accent
               testid="stat-shared"
@@ -208,7 +208,7 @@ export default function Admin() {
             />
             <StatCard
               icon={<Sparkle size={20} weight="bold" />}
-              label="In Progress"
+              label="In progress"
               value={overview.papers_pending}
               testid="stat-pending"
               warn={overview.papers_pending > 0}
@@ -227,7 +227,7 @@ export default function Admin() {
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`px-4 py-2 font-bold uppercase text-xs tracking-wider transition-colors ${
+              className={`px-4 py-2 font-medium text-xs transition-colors ${
                 tab === t.key
                   ? "bg-black text-white"
                   : "bg-white hover:bg-neutral-100"
@@ -314,7 +314,7 @@ const SharedLibraryTab = ({ textbooks, allTextbooks, loading, onToggleShare }) =
       {allTextbooks.length > textbooks.length && (
         <div className="mt-6 text-xs text-neutral-500 font-mono">
           {allTextbooks.length - textbooks.length} more textbook(s) available in{" "}
-          <b>All Textbooks</b> tab.
+          <b>All textbooks</b> tab.
         </div>
       )}
     </div>
@@ -391,7 +391,7 @@ const TextbookRow = ({
     data-testid={`admin-tb-${tb.id}`}
   >
     <div className="flex-1 min-w-0">
-      <div className="font-bold truncate">{tb.original_filename}</div>
+      <div className="font-medium truncate">{tb.original_filename}</div>
       <div className="text-xs font-mono text-neutral-500 mt-0.5">
         {tb.subject} · Class {tb.class_name} · {tb.chunk_count} chunks ·{" "}
         <span className="text-neutral-700">{tb.owner_email}</span>
@@ -466,7 +466,7 @@ const AllPapersTab = ({ papers, loading }) => {
           data-testid={`admin-paper-${p.id}`}
         >
           <div className="flex-1 min-w-0">
-            <div className="font-bold truncate">{p.title || "(untitled)"}</div>
+            <div className="font-medium truncate">{p.title || "(untitled)"}</div>
             <div className="text-xs font-mono text-neutral-500 mt-0.5">
               {p.subject} · Class {p.class_name} · {p.total_marks} marks ·{" "}
               <span className="text-neutral-700">{p.owner_email}</span>
@@ -504,7 +504,7 @@ const OperationalOverview = ({ overview }) => {
   return (
     <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-10" data-testid="admin-operational-overview">
       <div className="border-2 border-black bg-white p-5">
-        <div className="flex items-center gap-2 font-bold"><ChartBar size={20} weight="bold" /> User pulse</div>
+        <div className="flex items-center gap-2 font-medium"><ChartBar size={20} weight="bold" /> User pulse</div>
         <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
           <Metric label="New (7 days)" value={overview.new_users_7d} />
           <Metric label="Active (30 days)" value={overview.active_users_30d} />
@@ -513,12 +513,12 @@ const OperationalOverview = ({ overview }) => {
         </div>
       </div>
       <div className="border-2 border-black bg-white p-5">
-        <div className="flex items-center gap-2 font-bold"><GraduationCap size={20} weight="bold" /> School coverage</div>
+        <div className="flex items-center gap-2 font-medium"><GraduationCap size={20} weight="bold" /> School coverage</div>
         <div className="text-3xl font-display mt-3">{overview.schools_total}</div><div className="text-xs font-mono text-neutral-500">schools registered</div>
         <div className="mt-3 flex flex-wrap gap-1">{(overview.board_breakdown || []).map((item) => <span key={item.label} className="qp-badge qp-badge-blue">{item.label} · {item.count}</span>)}</div>
       </div>
       <div className={`border-2 border-black p-5 ${attentionCount ? "bg-[#FFF4C7]" : "bg-white"}`}>
-        <div className="flex items-center gap-2 font-bold"><WarningCircle size={20} weight="bold" /> Needs attention</div>
+        <div className="flex items-center gap-2 font-medium"><WarningCircle size={20} weight="bold" /> Needs attention</div>
         <div className="text-3xl font-display mt-3">{attentionCount}</div>
         <div className="text-xs font-mono text-neutral-700">{overview.profiles_incomplete} incomplete profiles · {attention.failed_textbooks?.length || 0} failed books · {attention.failed_papers?.length || 0} failed papers · {attention.stuck_papers?.length || 0} stuck papers</div>
       </div>
@@ -548,7 +548,7 @@ const UsersTab = ({ users, total, filters, onFiltersChange, onOpen, loading }) =
           data-testid={`admin-user-${u.id}`}
         >
           <div className="flex-1 min-w-0">
-            <div className="font-bold truncate">
+            <div className="font-medium truncate">
               {u.full_name || u.email}{" "}
               <span className="text-xs text-neutral-500 ml-2">{u.email}</span>
             </div>
@@ -582,7 +582,7 @@ const ActivityTab = ({ activity, loading }) => {
       {activity.map((event) => (
         <div key={event.id} className="border-2 border-black bg-white p-3 flex justify-between gap-3 flex-wrap">
           <div>
-            <div className="font-bold">{eventLabel(event.event_type)}</div>
+            <div className="font-medium">{eventLabel(event.event_type)}</div>
             <div className="text-xs font-mono text-neutral-500">{event.user?.full_name || event.user?.email || "Deleted user"} · {event.user?.email || ""}</div>
           </div>
           <div className="text-xs font-mono text-neutral-500">{formatDate(event.occurred_at)}</div>
@@ -598,11 +598,11 @@ const UserDetailDrawer = ({ detail, onClose }) => {
     <div className="fixed inset-0 z-50 bg-black/40 flex justify-end" role="dialog" aria-modal="true">
       <aside className="w-full max-w-2xl h-full overflow-y-auto bg-[#FAFAFA] border-l-4 border-black p-6 md:p-8">
         <div className="flex justify-between gap-4 mb-7">
-          <div className="min-w-0"><div className="overline text-neutral-500">// USER RECORD</div><h2 className="font-display text-4xl mt-2 break-words">{user.full_name || user.email}</h2><div className="text-sm text-neutral-600 break-all">{user.email}</div></div>
+          <div className="min-w-0"><div className="overline text-neutral-500">// User record</div><h2 className="font-display text-4xl mt-2 break-words">{user.full_name || user.email}</h2><div className="text-sm text-neutral-600 break-all">{user.email}</div></div>
           <button type="button" className="qp-btn-ghost h-fit" onClick={onClose} aria-label="Close user details"><X size={20} /></button>
         </div>
         <div className="grid grid-cols-1 min-[420px]:grid-cols-2 md:grid-cols-4 gap-3 mb-6"><Metric label="Textbooks" value={user.textbook_count} /><Metric label="Papers" value={user.paper_count} /><Metric label="Questions" value={user.question_count} /><Metric label="Tests" value={user.test_count} /></div>
-        <section className="border-2 border-black bg-white p-4 mb-5"><div className="font-bold mb-2">Profile</div><dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm"><Detail label="Role" value={user.role} /><Detail label="Provider" value={user.auth_provider} /><Detail label="School" value={user.school_name || "Not provided"} /><Detail label="Board" value={user.board === "Other" ? user.board_other_name : user.board || "Not provided"} /><Detail label="Created" value={formatDate(user.created_at)} /><Detail label="Last active" value={formatDate(user.last_active_at) || "Not active yet"} /></dl></section>
+        <section className="border-2 border-black bg-white p-4 mb-5"><div className="font-medium mb-2">Profile</div><dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm"><Detail label="Role" value={user.role} /><Detail label="Provider" value={user.auth_provider} /><Detail label="School" value={user.school_name || "Not provided"} /><Detail label="Board" value={user.board === "Other" ? user.board_other_name : user.board || "Not provided"} /><Detail label="Created" value={formatDate(user.created_at)} /><Detail label="Last active" value={formatDate(user.last_active_at) || "Not active yet"} /></dl></section>
         <ActivitySection title="Recent activity" items={activity} primary={(item) => eventLabel(item.event_type)} secondary={(item) => formatDate(item.occurred_at)} />
         <ActivitySection title="Recent papers" items={papers} primary={(item) => item.title || item.subject || "Untitled paper"} secondary={(item) => `${item.generation_status || "ready"} · ${formatDate(item.created_at)}`} />
         <ActivitySection title="Recent textbooks" items={textbooks} primary={(item) => item.original_filename} secondary={(item) => `${item.status} · ${formatDate(item.created_at)}`} />
@@ -616,7 +616,7 @@ const UserDetailDrawer = ({ detail, onClose }) => {
 const Detail = ({ label, value }) => <div><dt className="text-xs font-mono text-neutral-500">{label}</dt><dd>{value}</dd></div>;
 const ActivitySection = ({ title, items, primary, secondary }) => (
   <section className="mb-5">
-    <h3 className="font-bold mb-2">{title}</h3>
+    <h3 className="font-medium mb-2">{title}</h3>
     {items?.length ? <div className="space-y-2">{items.map((item) => <div key={item.id} className="border border-neutral-300 bg-white p-3 text-sm flex flex-col gap-1 sm:flex-row sm:justify-between sm:gap-3"><span className="min-w-0 break-words font-medium">{primary(item)}</span><span className="text-neutral-500 sm:text-right sm:shrink-0">{secondary(item)}</span></div>)}</div> : <div className="text-sm text-neutral-500 border border-dashed border-neutral-400 p-3">None yet.</div>}
   </section>
 );
@@ -677,7 +677,7 @@ const BulkUploadTab = ({ onDone }) => {
 
   return (
     <div className="qp-card max-w-3xl" data-testid="upload-tab">
-      <div className="overline mb-3">// BULK UPLOAD</div>
+      <div className="overline mb-3">// Bulk upload</div>
       <p className="text-sm text-neutral-600 font-mono mb-5">
         Drop multiple PDFs at once. Each book will be indexed and (optionally)
         added straight to the shared library so all teachers can use it.
@@ -714,7 +714,7 @@ const BulkUploadTab = ({ onDone }) => {
           data-testid="bulk-share-checkbox"
         />
         <span className="text-sm">
-          Add uploaded books to the <b>Shared Library</b> automatically
+          Add uploaded books to the <b>Shared library</b> automatically
         </span>
       </label>
 
@@ -728,7 +728,7 @@ const BulkUploadTab = ({ onDone }) => {
         data-testid="bulk-drop-zone"
       >
         <UploadSimple size={32} weight="bold" />
-        <div className="mt-3 font-bold uppercase tracking-wider text-sm">
+        <div className="mt-3 font-medium text-sm">
           {files.length > 0
             ? `${files.length} file(s) selected`
             : "Drop PDFs or click to browse"}

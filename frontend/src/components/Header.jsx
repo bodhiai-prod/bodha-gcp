@@ -18,7 +18,7 @@ const NavItem = ({ to, label, testid, onClick, drawer = false }) => (
     data-testid={testid}
     onClick={onClick}
     className={({ isActive }) =>
-      `${drawer ? "block w-full border-2 border-black px-4 py-3 text-left text-sm" : "whitespace-nowrap px-3 py-2 text-sm tracking-wider"} font-bold uppercase tracking-wide transition-colors ${
+      `${drawer ? "block w-full border-2 border-black px-4 py-3 text-left text-sm" : "whitespace-nowrap px-3 py-2 text-sm "} font-medium   transition-colors ${
         isActive
           ? "bg-black text-white"
           : "text-black hover:bg-neutral-100"
@@ -40,16 +40,16 @@ export default function Header() {
 
   const navItems = user?.role === "student"
     ? [
-        { to: "/student", label: "My Tests", testid: "nav-student-dashboard" },
-        { to: "/student/mock-tests/new", label: "New Mock Test", testid: "nav-new-mock-test" },
+        { to: "/student", label: "My tests", testid: "nav-student-dashboard" },
+        { to: "/student/mock-tests/new", label: "New mock test", testid: "nav-new-mock-test" },
       ]
     : [
         { to: "/", label: "Dashboard", testid: "nav-dashboard" },
         { to: "/textbooks", label: "Textbooks", testid: "nav-textbooks" },
-        { to: "/papers/new", label: "New Paper", testid: "nav-new-paper" },
+        { to: "/papers/new", label: "New paper", testid: "nav-new-paper" },
         { to: "/papers", label: "Papers", testid: "nav-papers" },
         { to: "/competitive-exams", label: "Competitive", testid: "nav-competitive" },
-        { to: "/qbank", label: "Question Bank", testid: "nav-qbank" },
+        { to: "/qbank", label: "Question bank", testid: "nav-qbank" },
         { to: "/settings/branding", label: "Branding", testid: "nav-branding" },
         ...(user?.role === "admin" ? [{ to: "/admin", label: "Admin", testid: "nav-admin" }] : []),
       ];
@@ -72,7 +72,7 @@ export default function Header() {
               Bodha <span className="accent">AI</span>
             </div>
             <div className="overline mt-0.5 hidden text-[10px] text-neutral-500 sm:block">
-              Question Paper Studio
+              Question paper studio
             </div>
           </div>
         </Link>
@@ -83,7 +83,7 @@ export default function Header() {
 
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2 2xl:ml-0 2xl:gap-3">
           <div className="hidden 2xl:block whitespace-nowrap text-right">
-            <div className="text-sm font-bold">{user?.full_name}</div>
+            <div className="text-sm font-medium">{user?.full_name}</div>
             <div className="overline text-neutral-500 text-[10px]">
               {user?.role}
             </div>
@@ -95,7 +95,7 @@ export default function Header() {
             className="qp-btn qp-btn-secondary px-3 sm:px-4"
           >
             <SignOut size={16} weight="bold" />
-            <span className="hidden sm:inline">Logout</span>
+            <span className="hidden sm:inline">Log out</span>
           </button>
           <Sheet>
             <SheetTrigger asChild>
@@ -121,7 +121,7 @@ export default function Header() {
                   </Link>
                 </SheetClose>
                 <button onClick={handleLogout} className="qp-btn qp-btn-secondary w-full" data-testid="drawer-logout">
-                  <SignOut size={16} weight="bold" /> Logout
+                  <SignOut size={16} weight="bold" /> Log out
                 </button>
               </div>
             </SheetContent>

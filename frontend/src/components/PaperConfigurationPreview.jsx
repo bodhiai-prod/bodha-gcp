@@ -9,7 +9,7 @@ export default function PaperConfigurationPreview({ title, textbook, totalMarks,
         <div className="studio-panel-heading"><h2>Live preview</h2><span className="studio-live-indicator">Auto-updating</span></div>
         <div className="studio-mini-paper">
           <div className="studio-document-icon"><FileText size={23} /></div>
-          <p className="studio-eyebrow">QUESTION PAPER</p>
+          <p className="studio-eyebrow">Question paper</p>
           <h3>{title.trim() || "Your question paper"}</h3>
           <div className="studio-preview-facts">
             <div><span>Subject</span><strong>{textbook?.subject || "Select a textbook"}</strong></div>

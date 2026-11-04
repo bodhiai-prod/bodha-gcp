@@ -235,9 +235,9 @@ export default function MockTestExam() {
         <Header />
         <main className="max-w-2xl mx-auto p-6 md:p-12">
           <div className="qp-card hard-shadow-static" data-testid="mock-test-start-card">
-            <div className="overline text-neutral-500 mb-2">// READY TO START</div>
+            <div className="overline text-neutral-500 mb-2">// Ready to start</div>
             <h1 className="font-display text-4xl mb-2">
-              {test.paper?.title || "Mock Test"}
+              {test.paper?.title || "Mock test"}
             </h1>
             <p className="text-neutral-600 mb-6 text-sm">
               {test.paper?.subject} · Class {test.paper?.class_name}
@@ -312,7 +312,7 @@ export default function MockTestExam() {
               {formatTime(secondsLeft)}
             </div>
           </div>
-          <div className="text-xs uppercase tracking-wider font-bold text-neutral-600">
+          <div className="text-xs font-medium text-neutral-600">
             {answeredCount} / {allQs.length} answered
           </div>
           <button
@@ -352,7 +352,7 @@ export default function MockTestExam() {
                       }`}
                     >
                       <div
-                        className={`w-7 h-7 border-2 flex items-center justify-center font-bold text-sm shrink-0 ${
+                        className={`w-7 h-7 border-2 flex items-center justify-center font-medium text-sm shrink-0 ${
                           isSelected
                             ? "border-[#002FA7] bg-[#002FA7] text-white"
                             : "border-black"
@@ -398,7 +398,7 @@ export default function MockTestExam() {
             className="border-2 border-black bg-white p-4 h-fit hard-shadow-static"
             data-testid="mock-test-navigator"
           >
-            <div className="overline text-neutral-500 mb-3">// NAVIGATOR</div>
+            <div className="overline text-neutral-500 mb-3">// Navigator</div>
             <div className="grid grid-cols-4 min-[420px]:grid-cols-5 gap-2">
               {allQs.map((qq, idx) => {
                 const answered =
@@ -409,7 +409,7 @@ export default function MockTestExam() {
                     key={qq.id || idx}
                     onClick={() => setActiveIdx(idx)}
                     data-testid={`mock-test-nav-${idx}`}
-                    className={`aspect-square text-xs font-bold border-2 transition-colors ${
+                    className={`aspect-square text-xs font-medium border-2 transition-colors ${
                       isActive
                         ? "border-[#002FA7] bg-[#002FA7] text-white"
                         : answered

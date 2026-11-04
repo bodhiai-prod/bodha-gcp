@@ -22,7 +22,7 @@ const StatusPill = ({ status }) => {
   const s = map[status] || { label: status, bg: "bg-neutral-100", color: "text-neutral-700" };
   return (
     <span
-      className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${s.bg} ${s.color}`}
+      className={`px-2 py-0.5 text-[10px] font-medium ${s.bg} ${s.color}`}
       data-testid={`mock-status-${status}`}
     >
       {s.label}
@@ -70,7 +70,7 @@ export default function StudentDashboard() {
       >
         <div className="flex items-end justify-between flex-wrap gap-4 mb-10">
           <div>
-            <div className="overline text-neutral-500 mb-2">// STUDENT</div>
+            <div className="overline text-neutral-500 mb-2">// Student</div>
             <h1 className="font-display text-5xl">
               Welcome back, <span className="text-[#002FA7]">{user?.full_name?.split(" ")[0] || "learner"}.</span>
             </h1>
@@ -104,7 +104,7 @@ export default function StudentDashboard() {
           </div>
         </div>
 
-        <div className="overline text-neutral-500 mb-3">// YOUR TESTS</div>
+        <div className="overline text-neutral-500 mb-3">// Your tests</div>
         {loading ? (
           <div className="text-neutral-500 text-sm">Loading…</div>
         ) : tests.length === 0 ? (
@@ -141,7 +141,7 @@ export default function StudentDashboard() {
                       )}
                     </div>
                     <h3 className="font-display text-2xl leading-tight">
-                      {t.paper?.title || "Mock Test"}
+                      {t.paper?.title || "Mock test"}
                     </h3>
                     <div className="text-xs text-neutral-600 mt-1">
                       {t.paper?.subject} · Class {t.paper?.class_name} ·{" "}
@@ -164,12 +164,12 @@ export default function StudentDashboard() {
                     ) : t.status === "in_progress" ? (
                       <div className="flex items-center gap-2 text-blue-700">
                         <Clock size={16} weight="bold" />
-                        <span className="font-bold text-sm">Resume</span>
+                        <span className="font-medium text-sm">Resume</span>
                       </div>
                     ) : t.status === "not_started" ? (
                       <div className="flex items-center gap-2 text-green-700">
                         <CheckCircle size={16} weight="bold" />
-                        <span className="font-bold text-sm">Start</span>
+                        <span className="font-medium text-sm">Start</span>
                       </div>
                     ) : null}
                   </div>

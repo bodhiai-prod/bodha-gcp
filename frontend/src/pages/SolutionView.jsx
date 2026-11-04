@@ -282,7 +282,7 @@ export default function SolutionView() {
                 data-testid="generate-solution-button"
               >
                 <CheckCircle size={16} weight="bold" />
-                {regenerating ? "Generating..." : "Generate Solution"}
+                {regenerating ? "Generating..." : "Generate solution"}
               </button>
             ) : editing ? (
               <>
@@ -327,10 +327,10 @@ export default function SolutionView() {
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="z-50 min-w-36 rounded-none border-2 border-black bg-white p-1 shadow-none">
-                    <DropdownMenuItem onSelect={download} className="cursor-pointer rounded-none px-3 py-2 font-bold focus:bg-neutral-100" data-testid="download-solution-pdf-button">
+                    <DropdownMenuItem onSelect={download} className="cursor-pointer rounded-none px-3 py-2 font-medium focus:bg-neutral-100" data-testid="download-solution-pdf-button">
                       <Download size={16} weight="bold" /> PDF
                     </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={downloadDocx} disabled={docxDownloading} className="cursor-pointer rounded-none px-3 py-2 font-bold focus:bg-neutral-100" data-testid="download-solution-docx-button">
+                    <DropdownMenuItem onSelect={downloadDocx} disabled={docxDownloading} className="cursor-pointer rounded-none px-3 py-2 font-medium focus:bg-neutral-100" data-testid="download-solution-docx-button">
                       <Download size={16} weight="bold" /> {docxDownloading ? "Preparing..." : "DOCX"}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
@@ -346,7 +346,7 @@ export default function SolutionView() {
             className="bg-white border-2 border-black p-10 md:p-16 text-center hard-shadow-static"
             data-testid="solution-empty-state"
           >
-            <div className="overline text-neutral-500 mb-3">// ANSWER KEY</div>
+            <div className="overline text-neutral-500 mb-3">// Answer key</div>
             <h1 className="font-display text-4xl md:text-5xl mb-3">
               No solution yet.
             </h1>
@@ -363,7 +363,7 @@ export default function SolutionView() {
               data-testid="generate-solution-cta"
             >
               <CheckCircle size={16} weight="bold" />
-              {regenerating ? "Generating..." : "Generate Solution"}
+              {regenerating ? "Generating..." : "Generate solution"}
             </button>
           </div>
         )}
@@ -379,7 +379,7 @@ export default function SolutionView() {
               <BrandingLogo paperId={id} hasLogo={Boolean(paper.header_image_path)} className="mx-auto mb-3 max-h-24 max-w-32 object-contain" />
               {paper.school_name && <div className="font-bold text-lg uppercase tracking-wide mb-2">{paper.school_name}</div>}
               <div className="overline text-neutral-500 mb-2">
-                // ANSWER KEY
+                // Answer key
               </div>
               <h1 className="font-display text-3xl md:text-4xl">
                 {paper.title}
@@ -404,7 +404,7 @@ export default function SolutionView() {
                   className="shrink-0 animate-pulse"
                 />
                 <div className="flex-1">
-                  <div className="font-bold uppercase tracking-wider text-sm">
+                  <div className="font-medium text-sm">
                     Generating answers...
                   </div>
                   <div className="text-sm text-neutral-700 mt-1 font-mono">
@@ -426,7 +426,7 @@ export default function SolutionView() {
                   className="shrink-0"
                 />
                 <div className="flex-1">
-                  <div className="font-bold uppercase tracking-wider text-sm">
+                  <div className="font-medium text-sm">
                     {missingQids.length} answer
                     {missingQids.length === 1 ? "" : "s"} missing
                   </div>
@@ -464,7 +464,7 @@ export default function SolutionView() {
                 className="mb-6 border-2 border-[#E63946] bg-red-50 p-4"
                 data-testid="failed-banner"
               >
-                <div className="font-bold uppercase tracking-wider text-sm">
+                <div className="font-medium text-sm">
                   Generation failed
                 </div>
                 <div className="text-sm text-neutral-700 mt-1 font-mono">
@@ -485,7 +485,7 @@ export default function SolutionView() {
                   className="shrink-0"
                 />
                 <div className="flex-1">
-                  <div className="font-bold uppercase tracking-wider text-sm">
+                  <div className="font-medium text-sm">
                     Solution out of date
                   </div>
                   <div className="text-sm text-neutral-700 mt-1">

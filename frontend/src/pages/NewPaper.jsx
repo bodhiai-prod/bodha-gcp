@@ -31,10 +31,10 @@ const DIFFICULTY_LABELS = { easy: "Simple", medium: "Moderate", hard: "Challengi
 const isTopicExtractionActive = (textbook) => ["queued", "running"].includes(textbook?.topic_extraction?.status);
 const DEFAULT_FORMATS = [
   { key: "mcq", label: "MCQ", default: 0 },
-  { key: "short_answer", label: "Short Answer", default: 40 },
-  { key: "long_answer", label: "Long Answer", default: 40 },
-  { key: "fill_blank", label: "Fill in the Blanks", default: 10 },
-  { key: "true_false", label: "True / False", default: 10 },
+  { key: "short_answer", label: "Short answer", default: 40 },
+  { key: "long_answer", label: "Long answer", default: 40 },
+  { key: "fill_blank", label: "Fill in the blanks", default: 10 },
+  { key: "true_false", label: "True / false", default: 10 },
 ];
 
 export default function NewPaper() {
@@ -523,7 +523,7 @@ export default function NewPaper() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="new-paper-page">
-        <div className="overline text-neutral-500 mb-3">// NEW PAPER</div>
+        <div className="overline text-neutral-500 mb-3">// New paper</div>
         <h1 className="font-display text-5xl md:text-6xl mb-10">
           Tune the
           <br />
@@ -619,7 +619,7 @@ export default function NewPaper() {
                     }}
                     aria-invalid={Boolean(diagramCountError)} aria-describedby="diagram-count-help"
                     className="qp-input" data-testid="paper-diagram-count-input" />
-                  <p id="diagram-count-help" className={`text-xs mt-1 ${diagramCountError ? "text-red-700 font-semibold" : "text-neutral-500"}`} role={diagramCountError ? "alert" : undefined}>
+                  <p id="diagram-count-help" className={`text-xs mt-1 ${diagramCountError ? "text-red-700 font-medium" : "text-neutral-500"}`} role={diagramCountError ? "alert" : undefined}>
                     {diagramCountError || "Leave blank for automatic, or 0 for none. (Max 5 diagrams)"}
                   </p>
                 </div>
@@ -634,7 +634,7 @@ export default function NewPaper() {
                       type="button"
                       onClick={() => setDifficulty(d)}
                       data-testid={`difficulty-${d}-button`}
-                      className={`py-3 font-bold uppercase tracking-wider text-sm transition-colors ${
+                      className={`py-3 font-medium text-sm transition-colors ${
                         difficulty === d ? "bg-black text-white" : "bg-white hover:bg-neutral-100"
                       } ${i !== 2 ? "border-r-2 border-black" : ""}`}
                     >
@@ -648,7 +648,6 @@ export default function NewPaper() {
 
             <ExpandableCard id="distribution" title="Question distribution" summary={promptOverride ? "Controlled by paper blueprint" : `${info}% direct · ${concept}% concept · ${application}% application`} disabled={promptOverride}>
               <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                <div className="overline">// QUESTION DISTRIBUTION</div>
                 {promptOverride ? (
                   <span
                     className="qp-badge qp-badge-yellow"
@@ -671,7 +670,7 @@ export default function NewPaper() {
               </div>
 
               <SliderRow
-                label="Information / Direct"
+                label="Information / direct"
                 value={info}
                 onChange={(v) => setInfo(clamp(v, 0, 100 - concept))}
                 testid="dist-info"
@@ -702,7 +701,7 @@ export default function NewPaper() {
             <ExpandableCard id="format-mix" title="Question format mix" summary={promptOverride ? "Controlled by paper blueprint" : formatTopicStage === "mix" ? `${effectiveQuestionCount} questions · ${formats.filter(f => (formatQuestionCounts[f.key] || 0) > 0).length} active formats` : `${assignedFormatTopicCount}/${effectiveQuestionCount} topic slots filled · ${activeFormats.length} question types`} disabled={promptOverride}>
               {formatTopicStage === "mix" ? <>
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <div className="overline">// QUESTION FORMAT MIX</div>
+                <div className="overline">// Question format mix</div>
                 {promptOverride ? (
                   <span
                     className="qp-badge qp-badge-yellow"
@@ -735,7 +734,7 @@ export default function NewPaper() {
                   data-testid={`format-${f.key}`}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                    <div className="font-bold text-sm uppercase tracking-wider flex items-center gap-2">
+                    <div className="font-medium text-sm flex items-center gap-2">
                       {f.label}
                       {f.custom && (
                         <button
@@ -749,7 +748,7 @@ export default function NewPaper() {
                         </button>
                       )}
                     </div>
-                    <div className="font-mono text-sm font-bold">
+                    <div className="font-mono text-sm font-medium">
                       {f.value}% · {formatQuestionCounts[f.key] || 0} questions
                     </div>
                   </div>
@@ -801,7 +800,7 @@ export default function NewPaper() {
             <ExpandableCard id="blueprint" title="Paper blueprint" summary={sectionBlueprint.trim() ? "Custom blueprint applied" : "Optional · Choose a preset or define sections"}>
               <p className="text-xs text-neutral-500 font-mono mb-3">
                 Paste your board&rsquo;s exact section pattern. When set, this
-                <b> overrides </b> the Question Distribution and Question Format
+                <b> overrides </b> the question distribution and question format
                 Mix above &mdash; the AI follows the blueprint verbatim. Useful
                 for ICSE / CBSE / ISC / IGCSE / state-board templates. The
                 presets fill in the subject of the first selected textbook.
@@ -838,7 +837,7 @@ export default function NewPaper() {
                   <div className="grid gap-2 sm:grid-cols-2">
                     {current.map((item) => <button key={item.id} type="button" onClick={() => applyBlueprint(item)} className="border border-neutral-300 p-2 text-left hover:border-blue-700" data-testid={`blueprint-variant-${item.id}`}><strong className="block text-xs">{item.subject_variant}</strong><span className="block text-xs text-neutral-600">{item.total_marks} marks · {item.duration_minutes / 60}h · {item.academic_session}</span><span className="block text-[10px] text-blue-700 mt-1">Official current format</span></button>)}
                   </div>
-                  {legacy.length > 0 && <details className="mt-3 text-xs"><summary className="cursor-pointer font-semibold">Legacy templates</summary><div className="grid gap-2 sm:grid-cols-2 mt-2">{legacy.map((item) => <button key={item.id} type="button" onClick={() => applyBlueprint(item)} className="border border-amber-300 bg-amber-50 p-2 text-left"><strong>{item.subject_variant}</strong><span className="block text-neutral-600">Previous generic format · validation status shown before generation</span></button>)}</div></details>}
+                  {legacy.length > 0 && <details className="mt-3 text-xs"><summary className="cursor-pointer font-medium">Legacy templates</summary><div className="grid gap-2 sm:grid-cols-2 mt-2">{legacy.map((item) => <button key={item.id} type="button" onClick={() => applyBlueprint(item)} className="border border-amber-300 bg-amber-50 p-2 text-left"><strong>{item.subject_variant}</strong><span className="block text-neutral-600">Previous generic format · validation status shown before generation</span></button>)}</div></details>}
                 </div>;
               })()}
               <textarea
@@ -887,7 +886,7 @@ Make Q23 as hard as possible`}
             </>}
 
             {step === 2 && <section className="qp-card" data-testid="paper-review">
-              <h2 className="font-bold uppercase tracking-wide text-sm">Paper overview</h2>
+              <h2 className="font-medium text-sm">Paper overview</h2>
               <p className="text-xs text-neutral-500 mt-2 mb-4">Review the overall composition before generating the paper.</p>
               <dl className="blueprint-summary-facts">
                 <div><dt>Title</dt><dd>{title || "Untitled paper"}</dd></div>
@@ -906,9 +905,9 @@ Make Q23 as hard as possible`}
                   </dd>
                 </div>
               </dl>
-              <h3 className="text-xs font-bold uppercase mt-5 mb-2">Topic-wise composition</h3>
+              <h3 className="text-xs font-medium mt-5 mb-2">Topic-wise composition</h3>
               {Object.keys(topicOverview).length ? <div className="review-topic-list">{Object.entries(topicOverview).map(([topic, count]) => <div key={topic}><span>{topic}</span><strong>{count} {blueprint ? "questions" : "selected"}</strong></div>)}</div> : <p className="text-sm text-neutral-500">Choose topics in the persistent panel to see their composition here.</p>}
-              {blueprint && <><h3 className="text-xs font-bold uppercase mt-5 mb-2">Section-wise topic composition</h3><div className="review-section-list">{sectionTopicOverview.map(section => <section key={section.id} className="review-section-composition"><div className="review-section-heading"><strong>{section.title}</strong><span>{section.assigned}/{section.target} questions</span></div>{section.topics.length ? <div className="review-topic-list">{section.topics.map(([topic, count]) => <div key={topic}><span>{topic}</span><strong>{count} questions</strong></div>)}</div> : <p className="text-xs text-neutral-500 py-2">No topics assigned to this section.</p>}</section>)}</div></>}
+              {blueprint && <><h3 className="text-xs font-medium mt-5 mb-2">Section-wise topic composition</h3><div className="review-section-list">{sectionTopicOverview.map(section => <section key={section.id} className="review-section-composition"><div className="review-section-heading"><strong>{section.title}</strong><span>{section.assigned}/{section.target} questions</span></div>{section.topics.length ? <div className="review-topic-list">{section.topics.map(([topic, count]) => <div key={topic}><span>{topic}</span><strong>{count} questions</strong></div>)}</div> : <p className="text-xs text-neutral-500 py-2">No topics assigned to this section.</p>}</section>)}</div></>}
             </section>}
           </div>
 
@@ -961,7 +960,7 @@ Make Q23 as hard as possible`}
                           type="button"
                           onClick={() => extractTopicsFor(bookId)}
                           disabled={isTopicExtractionActive(detail)}
-                          className="qp-btn-ghost text-xs uppercase tracking-wider"
+                          className="qp-btn-ghost text-xs "
                           data-testid={`extract-topics-${bookId}`}
                         >
                           {detail?.topic_extraction?.status === "queued"
@@ -1019,7 +1018,7 @@ Make Q23 as hard as possible`}
                             ) : (
                               <Square size={18} weight="bold" />
                             )}
-                            <span className="text-sm font-bold">Select all</span>
+                            <span className="text-sm font-medium">Select all</span>
                             <span className="ml-auto font-mono text-xs text-neutral-500">
                               {selectedBookTopicCount}/{bookTopicNames.length}
                             </span>
@@ -1081,7 +1080,7 @@ Make Q23 as hard as possible`}
                                         )}
                                         <span
                                           className={`text-sm ${
-                                            it.isTopic ? "font-bold" : ""
+                                            it.isTopic ? "font-medium" : ""
                                           }`}
                                         >
                                           {it.name}
@@ -1114,7 +1113,7 @@ Make Q23 as hard as possible`}
                                     aria-expanded={expanded}
                                     aria-label={`${expanded ? "Collapse" : "Expand"} subtopics for ${t.name}`}
                                     onClick={() => setExpandedTopics((curr) => ({ ...curr, [expansionKey]: !curr[expansionKey] }))}
-                                    className="flex w-full items-center justify-between gap-2 border-t border-neutral-200 px-3 py-2 text-xs font-bold text-[#002FA7] hover:bg-blue-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#002FA7]"
+                                    className="flex w-full items-center justify-between gap-2 border-t border-neutral-200 px-3 py-2 text-xs font-medium text-[#002FA7] hover:bg-blue-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#002FA7]"
                                     data-testid={`topic-expand-${bookId}-${i}`}
                                   >
                                     <span>{expanded ? "Show less" : "Expand more"} · {items.length - 1} subtopics ({selectedSubtopics} selected)</span>
@@ -1155,10 +1154,10 @@ function ExpandableCard({ id, title, summary, defaultOpen = false, disabled = fa
         data-testid={`${id}-expand`}
       >
         <span className="min-w-0">
-          <span className="block font-bold text-sm uppercase tracking-wider">{title}</span>
+          <span className="block font-medium text-sm ">{title}</span>
           <span className="mt-2 block text-xs text-neutral-500 break-words line-clamp-2">{summary}</span>
         </span>
-        <span className="flex shrink-0 items-center gap-1 text-xs font-bold text-[#002FA7]">
+        <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-[#002FA7]">
           <span>{open ? "Show less" : "Expand more"}</span>
           <CaretDown size={16} className={`transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
         </span>
@@ -1206,8 +1205,8 @@ const distributeFormatValues = (formats, targetTotal) => {
 const SliderRow = ({ label, value, count, onChange, readOnly, color, testid }) => (
   <div className="mb-4 last:mb-0" data-testid={testid}>
     <div className="flex items-center justify-between mb-2">
-      <div className="font-bold text-sm uppercase tracking-wider">{label}</div>
-      <div className="font-mono text-sm font-bold">{value}% · {count} questions</div>
+      <div className="font-medium text-sm ">{label}</div>
+      <div className="font-mono text-sm font-medium">{value}% · {count} questions</div>
     </div>
     {readOnly ? (
       <div className="relative h-2 bg-neutral-200" aria-label={`${label} progress`}>
