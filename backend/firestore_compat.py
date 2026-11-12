@@ -255,7 +255,7 @@ class FirestoreCursor:
         return self
 
     async def _documents(self) -> list[dict[str, Any]]:
-        documents = [doc for doc in await self._collection._all_documents() if _matches(doc, self._query)]
+        documents = [doc for doc in await self._collection._candidate_documents(self._query) if _matches(doc, self._query)]
 
         def compare(left: dict[str, Any], right: dict[str, Any]) -> int:
             for key, direction in self._sort:
@@ -296,6 +296,46 @@ class FirestoreCollection:
             data = _decode_generation_requirements(snapshot.to_dict() or {})
             docs.append(data)
         return docs
+
+    async def _candidate_documents(self, query: dict[str, Any] | None) -> list[dict[str, Any]]:
+        """Push a selective equality filter down before local matching/sorting.
+
+        List routes use Mongo-shaped filters and local sorting. Reading the
+        whole Firestore collection for each list request gets slower as other
+        users add records. A single-field query needs no composite index; the
+        complete predicate is still checked by the cursor afterwards.
+        """
+        if not query or "$and" in query:
+            return await self._all_documents()
+
+        branches = query.get("$or")
+        if branches is None:
+            branches = [query]
+        if not isinstance(branches, list) or not branches:
+            return await self._all_documents()
+
+        sources = []
+        for branch in branches:
+            if not isinstance(branch, dict):
+                return await self._all_documents()
+            combined = {**query, **branch}
+            for key in ("id", "owner_id", "user_id", "student_id", "is_shared"):
+                value = combined.get(key)
+                if value is not None and not isinstance(value, dict):
+                    sources.append(self._collection.where(key, "==", value))
+                    break
+            else:
+                return await self._all_documents()
+
+        documents: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for source in sources:
+            async for snapshot in source.stream():
+                if snapshot.id in seen:
+                    continue
+                seen.add(snapshot.id)
+                documents.append(_decode_generation_requirements(snapshot.to_dict() or {}))
+        return documents
 
     def _native_query(self, query: dict[str, Any] | None):
         """Return a Firestore query for safe simple filters, else ``None``.
