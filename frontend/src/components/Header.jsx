@@ -18,9 +18,9 @@ const NavItem = ({ to, label, testid, onClick, drawer = false }) => (
     data-testid={testid}
     onClick={onClick}
     className={({ isActive }) =>
-      `${drawer ? "block w-full border-2 border-black px-4 py-3 text-left text-sm" : "whitespace-nowrap px-3 py-2 text-sm "} font-medium   transition-colors ${
+      `${drawer ? "block w-full border px-4 py-3 text-left text-base" : "whitespace-nowrap rounded-[4px] px-4 py-2.5 text-base"} font-medium transition-colors ${
         isActive
-          ? "bg-black text-white"
+          ? "bg-[#2148B8] text-white"
           : "text-black hover:bg-neutral-100"
       }`
     }
@@ -55,7 +55,7 @@ export default function Header() {
       ];
 
   return (
-    <header className="border-b-2 border-black bg-white sticky top-0 z-40">
+    <header className="border-b border-[#D6DDE8] bg-white sticky top-0 z-40">
       <div className="mx-auto flex w-full min-w-0 items-center gap-2 px-3 py-3 sm:gap-4 sm:px-8 2xl:px-16">
         <Link
           to={user?.role === "student" ? "/student" : "/"}
@@ -65,7 +65,7 @@ export default function Header() {
           <img
             src="/assets/bodhaai-app-icon-512.png"
             alt="Bodha AI"
-            className="w-10 h-10 rounded-[0.55rem] transition-transform group-hover:scale-105"
+            className="w-10 h-10 rounded-[4px] transition-transform group-hover:scale-105"
           />
           <div className="min-w-0 leading-none">
             <div className="brand-mark whitespace-nowrap text-lg sm:text-xl">
@@ -106,7 +106,7 @@ export default function Header() {
                 <span className="sr-only">Menu</span>
               </button>
             </SheetTrigger>
-            <SheetContent side="right" className="w-[min(22rem,calc(100vw-1rem))] border-l-2 border-black bg-[#FAFAFA] p-5">
+            <SheetContent side="right" className="w-[min(22rem,calc(100vw-1rem))] border-l border-[#D6DDE8] bg-[#F9F8F5] p-5">
               <SheetTitle className="font-display text-2xl">Menu</SheetTitle>
               <SheetDescription className="sr-only">Application navigation and account actions</SheetDescription>
               <nav className="mt-7 space-y-2" aria-label="Mobile navigation">

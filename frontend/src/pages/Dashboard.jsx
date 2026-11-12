@@ -112,7 +112,7 @@ export default function Dashboard() {
                 View all
               </Link>
             </div>
-            <div className="border-2 border-black bg-white">
+            <div className="border-2 border-black bg-white overflow-hidden">
               {loading ? (
                 <div className="p-8 text-neutral-500">Loading...</div>
               ) : papers.length === 0 ? (
@@ -193,12 +193,12 @@ export default function Dashboard() {
                 </div>
               </Link>
 
-              <div className="border-2 border-black bg-black text-white p-5">
-                <Clock size={22} weight="bold" color="#FFC300" />
+              <div className="border border-[#F3DEBD] bg-[#FFF0D8] p-5">
+                <Clock size={22} weight="bold" color="#B77900" />
                 <div className="font-display text-2xl mt-2 leading-tight">
                   Papers, built in minutes.
                 </div>
-                <div className="text-xs text-neutral-300 mt-2 font-mono">
+                <div className="text-xs text-neutral-600 mt-2 font-mono">
                   Upload a textbook · Select topics · Tune distribution ·
                   Download PDF.
                 </div>

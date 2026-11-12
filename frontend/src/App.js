@@ -41,10 +41,10 @@ function App() {
               position="top-right"
               toastOptions={{
                 style: {
-                  border: "2px solid #0A0A0A",
-                  borderRadius: 0,
+                  border: "1px solid #C7D1E0",
+                  borderRadius: 4,
                   background: "#FFFFFF",
-                  color: "#0A0A0A",
+                  color: "#14203B",
                   fontFamily: "Inter, sans-serif",
                 },
               }}

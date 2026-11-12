@@ -164,7 +164,7 @@ export default function Textbooks() {
     <div className="min-h-screen bg-[#FAFAFA]">
       <Header />
       <main className="max-w-7xl mx-auto p-6 md:p-12" data-testid="textbooks-page">
-        <h1 className="font-display text-5xl md:text-6xl mb-10">
+        <h1 className="font-display text-5xl md:text-6xl mb-8">
           Textbooks &<br />
           <span className="text-[#002FA7]">Topic extraction.</span>
         </h1>
@@ -173,7 +173,7 @@ export default function Textbooks() {
           {/* Upload */}
           <form
             onSubmit={upload}
-            className="lg:col-span-2 qp-card hard-shadow-static"
+            className="lg:col-span-2 qp-card hard-shadow-static textbook-upload-card"
             data-testid="textbook-upload-form"
           >
             <h2 className="font-display text-3xl mb-6">Upload PDF</h2>
@@ -242,12 +242,12 @@ export default function Textbooks() {
           </form>
 
           {/* List */}
-          <div className="lg:col-span-3 min-w-0">
-            <h2 className="font-display text-2xl mb-3">
+          <div className="lg:col-span-3 min-w-0 textbook-library-card">
+            <h2 className="font-display text-2xl textbook-library-heading">
               Indexed textbooks <span className="text-base text-neutral-600">({textbooks.length})</span>
             </h2>
             {textbooks.length === 0 ? (
-              <div className="border-2 border-black bg-white p-10 text-center">
+              <div className="bg-white p-10 text-center">
                 <FolderOpen size={40} weight="duotone" className="mx-auto" />
                 <div className="mt-3 font-display text-2xl">
                   No textbooks yet
@@ -264,7 +264,7 @@ export default function Textbooks() {
                     className="border-b-2 border-black bg-white last:border-b-0"
                     data-testid={`textbook-${tb.id}`}
                   >
-                    <div className="grid min-h-[84px] gap-x-4 gap-y-3 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center xl:grid-cols-[auto_minmax(0,1fr)_auto]">
+                    <div className="grid min-h-[84px] gap-x-4 gap-y-3 px-4 py-2.5 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center xl:grid-cols-[auto_minmax(0,1fr)_auto]">
                       <button
                         onClick={() => toggleExpand(tb)}
                         className="self-start pt-0.5 text-left sm:self-center"

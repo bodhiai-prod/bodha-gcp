@@ -156,7 +156,7 @@ export default function GeneratedPapers() {
           </select>
         </div>
 
-        <div className="border-2 border-black bg-white">
+        <div className="border-2 border-black bg-white overflow-hidden">
           {loading ? (
             <div className="p-8 text-neutral-500">Loading...</div>
           ) : papers.length === 0 ? (
